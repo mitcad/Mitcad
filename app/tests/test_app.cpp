@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -1509,8 +1510,16 @@ void renderDeviceChoiceTests() {
 // A renderer that only records what it is given (the fallback's tests).
 class FakeRenderer : public mitcad::render::Renderer {
 public:
-  FakeRenderer(mitcad::render::FrameSink& sink, mitcad::render::DeviceInfo device, std::string startError)
-      : m_sink(sink), m_device(std::move(device)), m_error(std::move(startError)) {}
+  FakeRenderer(mitcad::render::FrameSink& sink, mitcad::render::DeviceInfo device, std::string startError,
+               std::atomic<int>* live = nullptr)
+      : m_sink(sink), m_device(std::move(device)), m_error(std::move(startError)), m_live(live) {
+    if (m_live) ++*m_live;
+  }
+  ~FakeRenderer() override {
+    if (m_live) --*m_live;
+  }
+  FakeRenderer(const FakeRenderer&) = delete;
+  FakeRenderer& operator=(const FakeRenderer&) = delete;
   std::string description() const override { return "fake on " + m_device.type; }
   mitcad::render::SceneChanges updateScene(const mitcad::render::SceneUpdate& update) override {
     scene = update;
@@ -1578,6 +1587,7 @@ private:
   mitcad::render::DeviceInfo m_device;
   mutable std::mutex m_mutex;
   std::string m_error;
+  std::atomic<int>* m_live; // the renderers not yet ended, when counted
 };
 
 class CountingSink : public mitcad::render::FrameSink {
@@ -1686,6 +1696,10 @@ void renderFallbackTests() {
     std::vector<std::string> reports;
     std::vector<DeviceInfo> reportedDevices;
     std::mutex mutex;
+    // The renderers not yet ended, and how many there were as each one
+    // started (mitcad#2613: none when the same GPU starts again).
+    std::atomic<int> live{0};
+    std::vector<int> liveAtStart;
   };
   const auto factoryFor = [](Made& made, std::string gpuStartError, bool cpuStarts) {
     return [&made, gpuStartError, cpuStarts](mitcad::render::FrameSink& sink, const DeviceInfo& device, bool cpuDenoising,
@@ -1702,7 +1716,8 @@ void renderFallbackTests() {
       if (cpuDenoising) {
         on.denoiser.type = "CPU";
       }
-      auto renderer = std::make_unique<FakeRenderer>(sink, on, onCpu ? std::string() : gpuStartError);
+      made.liveAtStart.push_back(made.live.load());
+      auto renderer = std::make_unique<FakeRenderer>(sink, on, onCpu ? std::string() : gpuStartError, &made.live);
       made.renderers.push_back(renderer.get());
       made.cpuDenoising.push_back(cpuDenoising);
       return renderer;
@@ -1852,6 +1867,9 @@ void renderFallbackTests() {
     renderer->wait();
     CHECK(renderer->device().type == "CUDA" && renderer->device().denoiser.type == "CPU");
     CHECK(made.renderers.size() == 2 && made.cpuDenoising == std::vector<bool>({false, true}));
+    // The failed renderer ended before the same GPU started again
+    // (mitcad#2613): it no longer holds the GPU's memory and CUDA context.
+    CHECK(made.liveAtStart == std::vector<int>({0, 0}) && made.live.load() == 1);
     checkState(*made.renderers.back());
     {
       const std::lock_guard<std::mutex> lock(made.mutex);
@@ -1865,15 +1883,22 @@ void renderFallbackTests() {
     renderer->wait();
     CHECK(renderer->device().type == "CPU" && renderer->device().denoiser.type == "CPU");
     CHECK(made.cpuDenoising == std::vector<bool>({false, true, true}));
+    // The CPU starts next to the failed GPU, which ends after it.
+    CHECK(made.liveAtStart == std::vector<int>({0, 0, 1}));
     checkState(*made.renderers.back());
     renderer.reset();
+    CHECK(made.live.load() == 0);
     const std::lock_guard<std::mutex> lock(made.mutex);
-    CHECK(made.reports.size() == 2 && made.reports[1] == "Rendering on the CPU: A GPU (CUDA) failed (out of memory)");
+    // Both failures, the first one first: the retry's error may only be a
+    // consequence of it.
+    CHECK(made.reports.size() == 2 &&
+          made.reports[1] == "Rendering on the CPU: A GPU (CUDA) failed (Failed to create OIDN device), "
+                             "and again with denoising on the CPU (out of memory)");
     CHECK(made.reportedDevices.size() == 2 && made.reportedDevices[1].type == "CPU");
   }
   {
     // The same GPU with CPU denoising cannot start: the CPU, saying why
-    // the first one failed.
+    // the first one failed and why the retry did not start.
     Made made;
     const auto inner = factoryFor(made, {}, true);
     const auto factory = [&inner](mitcad::render::FrameSink& target, const DeviceInfo& device, bool cpuDenoising,
@@ -1891,11 +1916,39 @@ void renderFallbackTests() {
     made.renderers.front()->fail("Failed to create OIDN device");
     renderer->wait();
     CHECK(renderer->device().type == "CPU" && made.renderers.size() == 2);
+    CHECK(made.liveAtStart == std::vector<int>({0, 0}));
     checkState(*made.renderers.back());
     renderer.reset();
     const std::lock_guard<std::mutex> lock(made.mutex);
     CHECK(made.reports.size() == 1 &&
-          made.reports[0] == "Rendering on the CPU: A GPU (CUDA) failed (Failed to create OIDN device)");
+          made.reports[0] == "Rendering on the CPU: A GPU (CUDA) failed (Failed to create OIDN device), "
+                             "and again with denoising on the CPU (no kernel)");
+  }
+  {
+    // Neither the same GPU with CPU denoising nor the CPU starts: a
+    // stand-in keeps the GPU's error, and wait() does not wait for ever.
+    Made made;
+    const auto inner = factoryFor(made, {}, true);
+    const auto factory = [&inner](mitcad::render::FrameSink& target, const DeviceInfo& device, bool cpuDenoising,
+                                  std::string& why) -> std::unique_ptr<mitcad::render::Renderer> {
+      if (cpuDenoising) {
+        why = device.id.empty() ? "no CPU" : "no kernel";
+        return nullptr;
+      }
+      return inner(target, device, cpuDenoising, why);
+    };
+    auto renderer = mitcad::render::makeDeviceRenderer(sink, denoisingGpu, factory, reportTo(made), {}, error);
+    settings(*renderer);
+    renderer->setView(view);
+    made.renderers.front()->fail("Illegal address");
+    renderer->wait();
+    CHECK(renderer->deviceError() == "Illegal address" && renderer->device().type == "CUDA");
+    CHECK(made.live.load() == 0 && renderer->isPaused());
+    renderer->setView(view);
+    renderer.reset();
+    const std::lock_guard<std::mutex> lock(made.mutex);
+    CHECK(made.reports.size() == 1 &&
+          made.reports[0] == "The render device failed (Illegal address) and the CPU could not take over (no CPU)");
   }
   {
     // A GPU that already denoises on the CPU fails in its path tracer: the

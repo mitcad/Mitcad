@@ -526,6 +526,13 @@
             <numerusform>The block has %n instances: explode or delete them first</numerusform>
         </translation>
     </message>
+    <message numerus="yes">
+        <source>%n reference(s) on %1 found no match on the replacement: their features are marked broken until they are given new geometry.</source>
+        <translation>
+            <numerusform>%n reference on %1 found no match on the replacement: its feature is marked broken until it is given new geometry.</numerusform>
+            <numerusform>%n references on %1 found no match on the replacement: their features are marked broken until they are given new geometry.</numerusform>
+        </translation>
+    </message>
 </context>
 <context>
     <name>mitcad::BrowserPanel</name>
@@ -1126,6 +1133,23 @@ What is not sent within %n seconds is sent the next time the project opens.</num
         <translation>
             <numerusform>%1 and %n more</numerusform>
             <numerusform>%1 and %n more</numerusform>
+        </translation>
+    </message>
+</context>
+<context>
+    <name>mitcad::ReplaceComponentDialog</name>
+    <message numerus="yes">
+        <source>%1 is in its place in %n occurrence(s).</source>
+        <translation>
+            <numerusform>%1 is in its place in %n occurrence.</numerusform>
+            <numerusform>%1 is in its place in %n occurrences.</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%n reference(s) found no match: their features stay, marked as broken, until they are given new geometry.</source>
+        <translation>
+            <numerusform>%n reference found no match: its feature stays, marked as broken, until it is given new geometry.</numerusform>
+            <numerusform>%n references found no match: their features stay, marked as broken, until they are given new geometry.</numerusform>
         </translation>
     </message>
 </context>

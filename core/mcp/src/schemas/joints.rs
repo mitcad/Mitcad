@@ -8,7 +8,7 @@
 
 use serde_json::{Value, json};
 
-use super::{choice, feature_uid, flag, id, ids, text, value_input};
+use super::{choice, feature_uid, flag, id, ids, object, text, value_input};
 
 /// The commands with a schema here, in the reference's order.
 pub(super) const COMMANDS: &[&str] = &[
@@ -31,7 +31,15 @@ pub(super) const COMMANDS: &[&str] = &[
     "add_contact_set",
     "edit_contact_set",
     "delete_contact_set",
+    // Gear Drive (mitcad#2608).
+    "add_gear_drive",
+    "edit_gear_drive",
 ];
+
+/// A Gear Drive's definition (`gear_drives.rs`).
+fn gear_drive() -> Value {
+    json!({"type": "object", "description": "The drive: type (planetary, gear_train, rack_pinion, bevel_pair), module (mm), face_width (mm), optional pressure_angle and helix_angle (radians) and backlash (mm), contact_set; a planetary set's sun_teeth, planet_teeth, planets, fixed (ring, sun or carrier), sun_bore, planet_bore, rim, carrier_thickness; a gear train's teeth (in order) with compound, stage_gap and bore; a rack and pinion's pinion_teeth, rack_teeth, rack_height and bore; a bevel pair's teeth (two) and shaft_angle. model_reference {\"section\": \"Gear Drive\"}"})
+}
 
 /// A joint's kinds (`JointKind`).
 const KINDS: &[&str] = &[
@@ -377,6 +385,30 @@ pub(super) fn spec(name: &str) -> Option<Value> {
             "properties": {"name": id("The contact set by its name")},
             "required": ["name"],
             "examples": [{"cmd": "delete_contact_set", "name": "Stops"}]
+        }),
+        // Gear Drive (mitcad#2608).
+        "add_gear_drive" => json!({
+            "description": "Adds a gear drive in one undo step: a component of its own holding each moving member (gears, a planetary set's carrier) as a component on a revolute joint (a rack on a slider, the fixed member on a rigid joint), with motion links that keep the teeth in mesh. Result: component, occurrence, name, members, joints, links, input (the joint to drive), contact_set, made, values.",
+            "properties": {
+                "drive": gear_drive(),
+                "name": text("The drive's component; default after its type"),
+                "transform": object("Where the drive goes in the active component, as create_component takes it")
+            },
+            "required": ["drive"],
+            "examples": [{"cmd": "add_gear_drive",
+                          "drive": {"type": "planetary", "module": 1, "face_width": 8, "sun_teeth": 18,
+                                    "planet_teeth": 30, "planets": 3}}]
+        }),
+        "edit_gear_drive" => json!({
+            "description": "Makes a gear drive again from a changed definition, in one undo step; its component and occurrence stay. Refused while other features use its members. Result: as add_gear_drive.",
+            "properties": {
+                "component": id("The drive's component, or one of its members, by uid or name"),
+                "drive": gear_drive()
+            },
+            "required": ["component", "drive"],
+            "examples": [{"cmd": "edit_gear_drive", "component": "Planetary Drive",
+                          "drive": {"type": "planetary", "module": 1, "face_width": 8, "sun_teeth": 24,
+                                    "planet_teeth": 30, "planets": 3}}]
         }),
         _ => return None,
     };

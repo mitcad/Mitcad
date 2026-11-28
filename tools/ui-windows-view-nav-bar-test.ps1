@@ -32,7 +32,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{ 'sketch.create' = 'F7'; 'view.snap_grid' = 'F8'; 'view.grid' = 'F9';
+Ui-Init $App $Out $QtBin @{ 'sketch.create' = 'F7'; 'view.snap_grid' = 'F8'; 'view.grid' = 'F3';
   'view.style.wireframe' = 'Shift+F5'; 'view.style.visible_edges' = 'Shift+F6'; 'view.iso' = 'F12';
   'view.style.wireframe_visible' = 'Shift+F7';
   'tools.preferences.display' = 'Shift+F8' } -StepPause 0
@@ -84,7 +84,7 @@ function Round([string]$Layout, [string]$Chrome, [string]$Place) {
   Ui-ExpectNew 'Layout grid off' "${Layout}: the grid off"
   Expect-States 'off' 'on' 'Shaded with Visible Edges Only' "${Layout}: the View menu's Layout Grid off with the bar's"
   Ui-Mark
-  Ui-Step 'Layout Grid (View menu command, F9)' { Ui-Key 'F9' }
+  Ui-Step 'Layout Grid (View menu command, F3)' { Ui-Key 'F3' }
   Ui-ExpectNew 'Layout grid on' "${Layout}: the grid on from the View menu's command"
   Expect-States 'on' 'on' 'Shaded with Visible Edges Only' "${Layout}: the bar's Layout Grid on with the View menu's"
   Ui-Mark

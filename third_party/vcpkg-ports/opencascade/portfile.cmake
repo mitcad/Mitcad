@@ -388,6 +388,9 @@ vcpkg_from_github(
         2494-brepoffset-rounding-of-chained-sides-vanishing-beside-a-removed-face.patch
         2535-brepoffset-arc-join-wall-across-vanishing-faces-to-a-chain-of-cap-edges.patch
         2542-brepoffset-crease-split-at-a-sphere-pole-cut-there.patch
+        2623-shapeupgrade-unifysamedomain-trim-on-the-periodic-bspline-made.patch
+        2582-chfi3d-whole-rims-rounded-closing-a-cap-to-a-pole-or-taking-every-face-away.patch
+        2539-hlr-polygonal-hiding-by-faces-seen-edge-on.patch
 )
 
 # The compiler cache (docs/development.md, "The compiler cache of the vcpkg

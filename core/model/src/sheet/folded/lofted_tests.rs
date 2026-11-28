@@ -424,7 +424,7 @@ fn press_brake_folds_bend_with_the_rules_radius() {
     let theta = fold.angle;
     let (r, th, k) = (2.0, 2.0, 0.5);
     let planes = [([0.0; 3], Z), ([0.0, 0.0, 60.0], Z)];
-    let (bent_t, bends) = bent(&t, r, th, k, planes).expect("bent");
+    let (bent_t, bends) = bent(&t, r, th, k, planes, 2.0).expect("bent");
     assert_eq!(bends.len(), 1);
     assert_eq!(bends[0].strip, 1);
     assert_eq!(bent_t.strips.len(), 3);
@@ -474,7 +474,7 @@ fn bends_with_their_insides_on_the_front_keep_the_neutral_depth() {
         exact += -2.0 * r * (theta / 2.0).tan() * ell + (r + k * th) * theta * ell;
     }
     let planes = [([0.0; 3], Z), ([0.0, 0.0, 80.0], Z)];
-    let (bent_t, bends) = bent(&t, r, th, k, planes).expect("bent");
+    let (bent_t, bends) = bent(&t, r, th, k, planes, 2.0).expect("bent");
     assert_eq!(bends.len(), 3);
     assert!(bent_t.shift.iter().all(|s| *s == 0.0));
     let flat = developed(&bent_t, k * th).expect("developed");
@@ -485,24 +485,115 @@ fn bends_with_their_insides_on_the_front_keep_the_neutral_depth() {
     // their insides, (1 - 2 K) t deeper than the facets' neutral surface.
     let strips = matched(&a, &b).expect("matched");
     let inwards = transition(strips, true, true).expect("a transition");
-    let (bent_in, _) = bent(&inwards, r, th, k, planes).expect("bent");
+    let (bent_in, _) = bent(&inwards, r, th, k, planes, 2.0).expect("bent");
     for (s, shift) in bent_in.strips.iter().zip(&bent_in.shift) {
         let want = if s.bend() { (1.0 - 2.0 * k) * th } else { 0.0 };
         assert!((shift - want).abs() < 1e-12);
     }
 }
 
-#[test]
-fn bends_cannot_meet_where_facets_fan_into_a_point() {
-    // A rectangle to a circle: the facets fan from the rectangle's corners
-    // and the side triangles' tips lie on the circle.
+/// The press brake rectangle 120 x 80 to a circle of radius 30 70 up of
+/// the CLI tests, 4 facets a corner, opened at its shortest line with a
+/// gap of 2 as the feature opens it with bends.
+fn rectangle_to_circle_with_a_seam() -> Transition {
     let a = rectangle(0.0, 0.0, 0.0, 120.0, 80.0);
     let b = aligned(&a, circle(0.0, 0.0, 70.0, 30.0, 0.0)).expect("aligned");
-    let strips = faceted(&matched(&a, &b).expect("matched"), Some(4), None);
-    let t = transition(strips, true, false).expect("a transition");
+    let smooth = matched(&a, &b).expect("matched");
+    let (strip, s) = seam_place(&smooth, None);
+    let opened = opened_at(&smooth, strip, s);
+    let open = trimmed_end_with(
+        &trimmed_start_with(&opened, 1.0, 1.0, false).expect("trimmed"),
+        1.0,
+        1.0,
+        false,
+    )
+    .expect("trimmed");
+    transition(faceted(&open, Some(4), None), true, false).expect("a transition")
+}
+
+#[test]
+fn bends_meeting_in_a_point_open_a_corner_relief() {
+    // mitcad#2576: the facets fan from the rectangle's corners and the
+    // side triangles' tips lie on the circle; bends of radius 2 would run
+    // into each other there. Each such point gets a corner relief: the
+    // facets meeting it cut straight across, the bends ending on the cuts.
+    let t = rectangle_to_circle_with_a_seam();
     let planes = [([0.0; 3], Z), ([0.0, 0.0, 70.0], Z)];
-    let err = bent(&t, 2.0, 2.0, 0.5, planes).expect_err("refused");
-    assert!(err.message.contains("three-sided facet"), "{}", err.message);
+    let (r, th, k) = (2.0, 2.0, 0.5);
+    // The rules' 2 mm is too small for the corners' fans: the least size
+    // (6.37 mm at the corners beside the seam, worked out apart from the
+    // model) is said in words.
+    let err = bent(&t, r, th, k, planes, 2.0).expect_err("too small");
+    assert!(
+        err.message.contains("too small") && err.message.contains("at least 6.4 mm"),
+        "{}",
+        err.message
+    );
+    // Larger than the chords beside the circle's points: too large.
+    let err = bent(&t, r, th, k, planes, 30.0).expect_err("too large");
+    assert!(err.message.contains("too large"), "{}", err.message);
+    let relief = 8.0;
+    let (bent_t, bends) = bent(&t, r, th, k, planes, relief).expect("bent");
+    // Every fold bent, the facets' pieces meeting flat or on bends.
+    assert_eq!(
+        bends.len(),
+        t.joins.iter().filter(|j| j.angle != 0.0).count()
+    );
+    assert_eq!(bends.len(), 20);
+    assert!(bent_t.joins.iter().all(|j| j.angle == 0.0));
+    // No material within half the relief of the points where the folds met.
+    let tips = [
+        [60.0, -40.0, 0.0],
+        [60.0, 40.0, 0.0],
+        [-60.0, 40.0, 0.0],
+        [-60.0, -40.0, 0.0],
+        [30.0, 0.0, 70.0],
+        [0.0, 30.0, 70.0],
+        [-30.0, 0.0, 70.0],
+    ];
+    for s in &bent_t.strips {
+        for p in s.points() {
+            for tip in tips {
+                assert!(distance(p, tip) > relief / 2.0, "{p:?} by {tip:?}");
+            }
+        }
+    }
+    assert!(bent_t.check_depth(th).is_ok());
+    // Laid flat at the middle: the facets' areas (each moved whole) and
+    // each bend's lines' lengths along its arc there, (r + K t) times the
+    // angle; the expected blank worked out apart from the model.
+    let flat = developed(&bent_t, k * th).expect("developed");
+    let points = outline_points(&flat);
+    assert!(!overlaps(&points));
+    let area = shoelace(&points);
+    let mut exact = flat_area(&bent_t, 0.0);
+    for bend in &bends {
+        let s = bent_t.strips[bend.strip];
+        let Side::Section(c) = s.a else {
+            panic!("a bend's side");
+        };
+        // Simpson's rule over its lines' lengths.
+        let n = 64;
+        let length = |i: usize| {
+            let (p, q) = s.ruling(i as f64 / n as f64);
+            distance(p, q)
+        };
+        let sum: f64 = (0..=n)
+            .map(|i| {
+                let w = if i == 0 || i == n {
+                    1.0
+                } else if i % 2 == 1 {
+                    4.0
+                } else {
+                    2.0
+                };
+                w * length(i)
+            })
+            .sum();
+        exact += (r + k * th) * (c.to - c.from).abs() * sum / (3.0 * n as f64);
+    }
+    assert!(close(area, exact, 1e-7), "{area} against {exact}");
+    assert!(close(area, 21_616.688_249_737_94, 1e-7), "{area}");
 }
 
 #[test]
@@ -577,12 +668,9 @@ fn a_point_of_the_body_is_located_in_the_chart() {
     }
 }
 
-#[test]
-fn a_ruled_transition_between_angled_profiles_lies_flat_by_triangles() {
-    // mitcad#2560: a square 60 x 60 on XY to a circle of radius 20 on a
-    // plane turned 30 degrees about X (no developable surface between
-    // them): the ruled surface between the points at the same share of
-    // both lengths, from the shortest line less 1 each side of it.
+/// A square 60 x 60 on XY and a circle of radius 20 on a plane turned 30
+/// degrees about X, aligned; the circle's centre and its plane's normal.
+fn square_to_angled_circle() -> (Chain, Chain, V3, V3) {
     let a = rectangle(0.0, 86.602_540_378_443_86, 0.0, 60.0, 60.0);
     let (s, c) = (PI / 6.0).sin_cos();
     let (y, n) = ([0.0, c, s], [0.0, -s, c]);
@@ -600,6 +688,179 @@ fn a_ruled_transition_between_angled_profiles_lies_flat_by_triangles() {
     )
     .expect("a chain");
     let b = aligned(&a, b).expect("aligned");
+    (a, b, scale(y, 100.0), n)
+}
+
+/// The point at `t` of a B-spline curve of `degree` through `poles`, its
+/// knots `knots` repeated `mults` times, by de Boor's algorithm.
+fn curve_point(knots: &[f64], mults: &[u32], degree: u32, poles: &[V3], t: f64) -> V3 {
+    let p = degree as usize;
+    let knots: Vec<f64> = knots
+        .iter()
+        .zip(mults)
+        .flat_map(|(k, m)| std::iter::repeat_n(*k, *m as usize))
+        .collect();
+    assert_eq!(knots.len(), poles.len() + p + 1, "knots and poles agree");
+    let span = (p..poles.len())
+        .rev()
+        .find(|&k| knots[k] <= t)
+        .expect("t in the knots' range");
+    let mut d: Vec<V3> = poles[span - p..=span].to_vec();
+    for r in 1..=p {
+        for j in (r..=p).rev() {
+            let i = span - p + j;
+            let alpha = (t - knots[i]) / (knots[i + p + 1 - r] - knots[i]);
+            d[j] = add(scale(d[j - 1], 1.0 - alpha), scale(d[j], alpha));
+        }
+    }
+    d[p]
+}
+
+/// The point of a patch at the fractions `fu` and `fv` of its knots'
+/// ranges.
+fn patch_at(patch: &SurfacePatch, fu: f64, fv: f64) -> V3 {
+    assert_eq!(
+        patch.poles.len(),
+        patch.nu * patch.nv,
+        "poles and counts agree"
+    );
+    let range = |k: &[f64], f: f64| k[0] + (k[k.len() - 1] - k[0]) * f;
+    let (u, v) = (range(&patch.u_knots, fu), range(&patch.v_knots, fv));
+    let across: Vec<V3> = (0..patch.nv)
+        .map(|j| {
+            let column: Vec<V3> = (0..patch.nu)
+                .map(|i| patch.poles[i * patch.nv + j])
+                .collect();
+            curve_point(&patch.u_knots, &patch.u_mults, patch.u_degree, &column, u)
+        })
+        .collect();
+    curve_point(&patch.v_knots, &patch.v_mults, patch.v_degree, &across, v)
+}
+
+/// The point of a patch's B-spline at `u` (its knots' parameter) and `v`
+/// (0 to 1, straight across).
+fn patch_point(patch: &SurfacePatch, u: f64, v: f64) -> V3 {
+    let last = patch.u_knots[patch.u_knots.len() - 1];
+    patch_at(patch, u / last, v)
+}
+
+#[test]
+fn a_ruled_transition_made_solid_closes_where_its_backs_meet() {
+    // mitcad#2560: the square to the circle on angled planes made solid 2
+    // behind its front, both ways (one way its creases from the square's
+    // corners turn away from the material and the backs are stretched to
+    // where they meet, the other way they cross and are cut back to it),
+    // every crease fading out to a smooth join at the circle. Its faces
+    // close: each edge of a face, sampled, is an edge of another face, or
+    // has no length. The backs are the bands' offsets, the patches within
+    // a micrometre of them.
+    let (a, b, ..) = square_to_angled_circle();
+    let bands = ruled_transition(&a, &b, None, 2.0).expect("ruled");
+    for depth in [2.0, -2.0] {
+        let patches = ruled_body(&bands, depth, FeatureUid(22)).expect("a body");
+        let samples = 9;
+        let edges: Vec<(usize, Vec<V3>)> = patches
+            .iter()
+            .enumerate()
+            .flat_map(|(n, patch)| {
+                let side = |at: &dyn Fn(f64) -> V3| -> Vec<V3> {
+                    (0..samples)
+                        .map(|k| at(k as f64 / (samples - 1) as f64))
+                        .collect()
+                };
+                [
+                    side(&|f| patch_at(patch, 0.0, f)),
+                    side(&|f| patch_at(patch, 1.0, f)),
+                    side(&|f| patch_at(patch, f, 0.0)),
+                    side(&|f| patch_at(patch, f, 1.0)),
+                ]
+                .into_iter()
+                .map(move |points| (n, points))
+            })
+            .collect();
+        let same = |p: &[V3], q: &[V3]| {
+            p.iter().zip(q).all(|(x, y)| distance(*x, *y) <= 1e-5)
+                || p.iter()
+                    .zip(q.iter().rev())
+                    .all(|(x, y)| distance(*x, *y) <= 1e-5)
+        };
+        for (n, points) in &edges {
+            if points.iter().all(|p| distance(*p, points[0]) <= 1e-9) {
+                continue;
+            }
+            assert!(
+                edges.iter().any(|(m, other)| m != n && same(points, other)),
+                "depth {depth}: an edge of {} is open: {:?}",
+                patches[*n].face,
+                points[0]
+            );
+        }
+        let back = RuledBack::new(&bands, depth).expect("the backs meet");
+        for (i, band) in bands.iter().enumerate() {
+            let patch = patches
+                .iter()
+                .find(|p| {
+                    p.face.role == "lofted_back" && p.face.key == Some(RoleKey::Index(i as u32))
+                })
+                .expect("a back");
+            for s in [0.0, 0.25, 0.5, 0.75, 1.0] {
+                for w in [0.0, 0.3, 0.5, 1.0] {
+                    let (exact, [f, v]) = back.place(i, s, w).expect("on the back");
+                    let off = distance(patch_at(patch, s, w), exact);
+                    assert!(off < 1e-6, "depth {depth}: {off} mm off band {i}'s back");
+                    let front = band.point(f, v);
+                    assert!((distance(exact, front) - depth.abs()).abs() < 1e-9);
+                }
+            }
+        }
+        // Where two bands' backs meet, both are there.
+        for i in 1..bands.len() {
+            for w in [0.0, 0.2, 0.7, 0.99, 1.0] {
+                let (end, start) = (back.point(i - 1, 1.0, w), back.point(i, 0.0, w));
+                let gap = distance(end.expect("an end"), start.expect("a start"));
+                assert!(gap < 1e-8, "depth {depth}: the backs {gap} mm apart at {w}");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_ruled_transition_is_smooth_by_its_knots() {
+    // mitcad#2560: the ruled front of a die formed transition laid flat by
+    // triangulation is made solid by the kernel's offset, which refuses a
+    // surface continuous only in its points by its knots (a cubic's inner
+    // knots three times): its inner knots are twice, and it still runs
+    // through the bands' points, at the stations and between them.
+    let (a, b, ..) = square_to_angled_circle();
+    let bands = ruled_transition(&a, &b, None, 2.0).expect("ruled");
+    let patches = ruled_patches(&bands, FeatureUid(22));
+    assert_eq!(patches.len(), bands.len());
+    for (band, patch) in bands.iter().zip(&patches) {
+        assert!(patch.u_mults.len() >= 2);
+        let inner = &patch.u_mults[1..patch.u_mults.len() - 1];
+        assert!(
+            inner.iter().all(|&m| m < patch.u_degree),
+            "inner knots {inner:?} of degree {}",
+            patch.u_degree
+        );
+        let last = *patch.u_knots.last().expect("knots");
+        for k in 0..=64 {
+            let f = k as f64 / 64.0;
+            for v in [0.0, 0.5, 1.0] {
+                let off = distance(patch_point(patch, f * last, v), band.point(f, v));
+                assert!(off < 1e-6, "{off} mm off the band at {f}, {v}");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_ruled_transition_between_angled_profiles_lies_flat_by_triangles() {
+    // mitcad#2560: a square 60 x 60 on XY to a circle of radius 20 on a
+    // plane turned 30 degrees about X (no developable surface between
+    // them): the ruled surface between the points at the same share of
+    // both lengths, from the shortest line less 1 each side of it.
+    let (a, b, centre, n) = square_to_angled_circle();
     assert!(matched(&a, &b).is_err());
     let gap = 2.0;
     let bands = ruled_transition(&a, &b, None, gap).expect("ruled");
@@ -611,7 +872,6 @@ fn a_ruled_transition_between_angled_profiles_lies_flat_by_triangles() {
             assert!(distance(w[0].point(1.0, v), w[1].point(0.0, v)) < 1e-9);
         }
     }
-    let centre = scale(y, 100.0);
     for band in &bands {
         for f in [0.0, 0.5, 1.0] {
             assert!(band.point(f, 0.0)[2].abs() < 1e-9);

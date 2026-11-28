@@ -85,6 +85,64 @@ int importItemProgressTests() {
   CHECK(progress.read(QStringLiteral("import: [1.00] memory: 1 GiB")) == Line::Other);
   CHECK(progress.done() == 6);
 
+  // A package of several designs (mitcad#2635): the count is the sum of
+  // the items the import replays, the documents' first (each its own
+  // timeline from position 1, in a thread of its own, so their lines mix),
+  // then the design's. The number shown reaches the sum, does not stick at
+  // one design's count and never goes back; an item of a document names
+  // its design.
+  ImportItemProgress package;
+  CHECK(package.read(QStringLiteral("import-items 7")) == Line::Items);
+  const QStringList packageLines{
+      QStringLiteral("import: [0.10] item 1: Sketch1"),
+      QStringLiteral("import: [0.10] item document: Gear"),
+      QStringLiteral("import: [0.10] item 1: Sketch1"),
+      QStringLiteral("import: [0.10] item document: Shaft"),
+      QStringLiteral("import: [0.20] Sketch1: parametric in 0.10 s"),
+      QStringLiteral("import: [0.20] Sketch1: parametric in 0.10 s"),
+      QStringLiteral("import: [0.20] item 2: Extrude1"),
+      QStringLiteral("import: [0.20] item document: Gear"),
+      QStringLiteral("import: [0.20] item component: Teeth"),
+      QStringLiteral("import: [0.30] Extrude1: parametric in 0.10 s"),
+      QStringLiteral("import: [0.30] item 2: Extrude1"),
+      QStringLiteral("import: [0.30] item document: Shaft"),
+      QStringLiteral("import: [0.40] Extrude1: fallback in 0.10 s"),
+      // The design's own items: no design named.
+      QStringLiteral("import: [0.40] item 1: Joint1"),
+      QStringLiteral("import: [0.50] Joint1: parametric in 0.10 s"),
+      QStringLiteral("import: [0.50] item 2: Joint2"),
+      QStringLiteral("import: [0.60] Joint2: parametric in 0.10 s"),
+      QStringLiteral("import: [0.60] item 3: Sketch2"),
+      QStringLiteral("import: [0.60] item component: Base"),
+      QStringLiteral("import: [0.70] Sketch2: parametric in 0.10 s"),
+  };
+  last = 0;
+  QStringList packageTexts;
+  for (const QString& line : packageLines) {
+    package.read(line);
+    CHECK(package.shown() >= last);
+    last = package.shown();
+    packageTexts << package.text();
+  }
+  CHECK(packageTexts.at(1) == QStringLiteral("Timeline item 1 of 7: Sketch1, design Gear"));
+  CHECK(packageTexts.at(3) == QStringLiteral("Timeline item 1 of 7: Sketch1, design Shaft"));
+  CHECK(packageTexts.at(8) == QStringLiteral("Timeline item 3 of 7: Extrude1, component Teeth, design Gear"));
+  CHECK(packageTexts.at(11) == QStringLiteral("Timeline item 4 of 7: Extrude1, design Shaft"));
+  // Past the largest design's three items, the count goes on.
+  CHECK(packageTexts.at(13) == QStringLiteral("Timeline item 5 of 7: Joint1"));
+  CHECK(packageTexts.at(18) == QStringLiteral("Timeline item 7 of 7: Sketch2, component Base"));
+  CHECK(package.design().isEmpty());
+  CHECK(package.done() == 7);
+  CHECK(package.shown() == 7);
+  // A corrected count is taken where it is larger, never a smaller one:
+  // the number shown does not go back.
+  CHECK(package.read(QStringLiteral("import-items 9")) == Line::Items);
+  CHECK(package.items() == 9);
+  CHECK(package.read(QStringLiteral("import-items 3")) == Line::Items);
+  CHECK(package.items() == 9);
+  CHECK(package.shown() == 8);
+  CHECK(package.read(QStringLiteral("import: [0.80] item document: Gear")) == Line::Document);
+
   // An .iam assembly's part: its component count, the part's own item in
   // words once its timeline starts.
   ImportItemProgress part;

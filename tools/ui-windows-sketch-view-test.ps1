@@ -46,7 +46,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{ 'sketch.create' = 'F7'; 'view.environment.dark' = 'F8'; 'view.environment.light' = 'F9';
+Ui-Init $App $Out $QtBin @{ 'sketch.create' = 'F7'; 'view.environment.dark' = 'F8'; 'view.environment.light' = 'F5';
   'view.front' = 'F11'; 'view.iso' = 'F12' } -StepPause 0
 # Parts built over the origin, beside which an origin plane or axis is
 # clicked: the origin as 100 mm Centered squares (mitcad#1748).
@@ -126,7 +126,7 @@ function Expect-Pointer([double]$X, [double]$Y) {
 
 Write-Host '--- A sketch on XY, its origin the design origin (mitcad#254)'
 Ui-StartApp 'sketch-view'
-Ui-Step 'light background (F9)'          { Ui-Key 'F9' }
+Ui-Step 'light background (F5)'          { Ui-Key 'F5' }
 Ui-Step 'create sketch on XY (F7)'       { Ui-CreateSketch 'F7' 'xy' }
 Ui-ExpectLog 'Create Sketch: origin planes shown' 'a new design: the origin planes shown (mitcad#844)'
 Ui-ExpectLog 'Sketch view' 'the sketch view is logged'
@@ -147,7 +147,7 @@ Ui-Mark
 Ui-Step 'dark background (F8)'           { Ui-Key 'F8' }
 Expect-Recoloured 'dark'
 Ui-Mark
-Ui-Step 'light background (F9)'          { Ui-Key 'F9' }
+Ui-Step 'light background (F5)'          { Ui-Key 'F5' }
 Expect-Recoloured 'light'
 
 Write-Host "--- The pointer's place in sketch coordinates (mitcad#254)"
@@ -172,7 +172,7 @@ Ui-Mark
 Ui-Step 'dark background (F8)'           { Ui-Key 'F8' }
 Expect-Recoloured 'dark'
 Ui-Mark
-Ui-Step 'light background (F9)'          { Ui-Key 'F9' }
+Ui-Step 'light background (F5)'          { Ui-Key 'F5' }
 Expect-Recoloured 'light'
 Ui-ExpectLog 'Timeline Sketch1 at' 'the timeline is laid out'
 Ui-Mark
@@ -219,7 +219,7 @@ Ui-Mark
 Ui-Step 'dark background (F8)'           { Ui-Key 'F8' }
 Expect-Recoloured 'dark'
 Ui-Mark
-Ui-Step 'light background (F9)'          { Ui-Key 'F9' }
+Ui-Step 'light background (F5)'          { Ui-Key 'F5' }
 Expect-Recoloured 'light'
 Ui-ExpectLog 'Timeline Sketch1 at' 'the timeline is laid out'
 Ui-Mark
@@ -304,7 +304,7 @@ function Expect-Halos([string]$Expected) {
 Ui-Step 'dark background (F8)'           { Ui-Key 'F8' }
 Expect-DimensionHalos 'dark'
 Expect-Halos '2 dark'
-Ui-Step 'light background (F9)'          { Ui-Key 'F9' }
+Ui-Step 'light background (F5)'          { Ui-Key 'F5' }
 Expect-DimensionHalos 'light'
 Expect-Halos '0 light'
 

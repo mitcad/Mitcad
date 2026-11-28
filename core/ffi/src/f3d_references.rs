@@ -337,6 +337,195 @@ impl References {
     }
 }
 
+/// The documents a design refers to as its import plans them
+/// ([`plan_references`]).
+struct Plan {
+    /// Each document's entry as it stands, or its import, in the design's
+    /// order.
+    planned: Vec<Planned>,
+    /// What looking for the files said.
+    warnings: Vec<String>,
+    /// The files being imported with the design on top.
+    stack: Vec<String>,
+}
+
+/// Where each document the design (decoded in `dump`, the design `label` of
+/// the file `path`) refers to is, and the import that brings it in with its
+/// options (`cache`, the import's documents imported so far): first where
+/// each is (the resolver learns as it goes, so in the design's order).
+/// [`crate::Document::load_references`] imports them;
+/// [`replayed_items`] counts what those imports replay (mitcad#2635), so
+/// both follow the same documents.
+fn plan_references(
+    path: &str,
+    label: &str,
+    options: &TimelineOptions,
+    dump: &Dump,
+    cache: &ReferenceCache,
+) -> Plan {
+    let mut plan = Plan {
+        planned: Vec::new(),
+        warnings: Vec::new(),
+        stack: options.stack.clone(),
+    };
+    let documents = external_documents(dump);
+    if documents.is_empty() {
+        return plan;
+    }
+    let mut resolver = Resolver::new(
+        Path::new(path),
+        &options.references,
+        &options.reference_files,
+    );
+    plan.warnings.extend(resolver.warnings().iter().cloned());
+    let here = std::fs::canonicalize(path)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path.to_owned());
+    // A design is known by its file and, in an `.f3z` package, its
+    // label (the label `Found::design` names it by).
+    let key = |file: &str, label: Option<&str>| format!("{file}!{}", label.unwrap_or(""));
+    let is_package = Path::new(path)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("f3z"));
+    let stack = &mut plan.stack;
+    stack.push(key(&here, is_package.then_some(label)));
+    let avoid = avoided(path, label, stack);
+    let planned = &mut plan.planned;
+    for external in documents {
+        let urn = external.urn;
+        let found = if urn.is_empty() {
+            Found::default()
+        } else {
+            resolver.resolve_avoiding(&urn, external.guid.as_deref(), &avoid)
+        };
+        let mut entry = ReferenceReport {
+            document: urn.clone(),
+            name: found.name.clone(),
+            version: found.version,
+            file: found
+                .file
+                .as_ref()
+                .map(|f| f.to_string_lossy().into_owned()),
+            found: found.how.map(str::to_owned),
+            status: "missing".to_owned(),
+            note: found.note.clone(),
+            ..ReferenceReport::default()
+        };
+        let Some(file) = found.file.clone() else {
+            if options.skipped_references.contains(&urn) {
+                entry.status = "skipped".to_owned();
+            }
+            planned.push(Planned::Done(Box::new(entry)));
+            continue;
+        };
+        let file = file.to_string_lossy().into_owned();
+        if entry.name.is_none() {
+            entry.name = Some(stem_name(&file));
+        }
+        let canonical = std::fs::canonicalize(&file)
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| file.clone());
+        let this = key(&canonical, found.design.as_deref());
+        if stack.contains(&this) {
+            entry.status = "failed".to_owned();
+            entry.note = Some("it refers back to a design being imported".to_owned());
+            planned.push(Planned::Done(Box::new(entry)));
+            continue;
+        }
+        if stack.len() >= MAX_DEPTH {
+            entry.status = "failed".to_owned();
+            entry.note = Some(format!(
+                "references of references are followed {MAX_DEPTH} levels deep"
+            ));
+            planned.push(Planned::Done(Box::new(entry)));
+            continue;
+        }
+        let options = TimelineOptions {
+            design: found.design.clone(),
+            dump: None,
+            text: false,
+            report_path: None,
+            list: false,
+            list_references: false,
+            count_items: false,
+            learn: None,
+            references: resolver.folders(),
+            reference_files: resolver.files(),
+            stack: [stack.clone(), vec![this.clone()]].concat(),
+            reference_cache: Some(cache.clone()),
+            // (The items of the design opened only, mitcad#379.)
+            accept_deviations: None,
+            // Its items' traces name it (mitcad#2635).
+            document_name: entry.name.clone(),
+            ..options.clone()
+        };
+        planned.push(Planned::Import(Box::new(ToImport {
+            entry,
+            urn,
+            file,
+            design: found.design,
+            key: this,
+            options,
+            result: Mutex::new(None),
+        })));
+    }
+    plan
+}
+
+/// The timeline items an import of `path` with `options` replays
+/// (mitcad#2635), read from the files, importing nothing: its design's
+/// ([`crate::f3d_import::design_to_replay`]) and those of the documents it
+/// refers to that the import imports ([`plan_references`], their own
+/// references in turn), each document once however often and on whatever
+/// level it is referred to, as the import's [`ReferenceCache`] imports it
+/// once. `{"items": <sum>, "designs": [{"file", "design", "items"}]}`, the
+/// design opened first, then the documents in the order they are planned.
+/// The application's progress dialog counts the items against this sum.
+pub(crate) fn replayed_items(
+    path: &str,
+    options: &TimelineOptions,
+) -> Result<serde_json::Value, mitcad_model_api::ApiError> {
+    let mut designs = Vec::new();
+    let mut seen = HashSet::new();
+    count_design(path, options, &mut seen, &mut designs)?;
+    let items: u64 = designs
+        .iter()
+        .map(|d| d["items"].as_u64().unwrap_or(0))
+        .sum();
+    Ok(serde_json::json!({"items": items, "designs": designs}))
+}
+
+/// [`replayed_items`] of one design and, depth first, the documents it
+/// refers to that `seen` (their keys) does not hold yet.
+fn count_design(
+    path: &str,
+    options: &TimelineOptions,
+    seen: &mut HashSet<String>,
+    designs: &mut Vec<serde_json::Value>,
+) -> Result<(), mitcad_model_api::ApiError> {
+    let (label, dump) = crate::f3d_import::design_to_replay(path, options)?;
+    let items = dump.as_ref().map_or(0, |d| d.timeline_items().len());
+    designs.push(serde_json::json!({"file": path, "design": label, "items": items}));
+    // (Without a design, or without references, the import imports no
+    // document either.)
+    let Some(dump) = dump.filter(|_| !options.no_references) else {
+        return Ok(());
+    };
+    let plan = plan_references(path, &label, options, &dump, &ReferenceCache::default());
+    // (Its design let go before the documents are read, mitcad#923.)
+    drop(dump);
+    for planned in plan.planned {
+        if let Planned::Import(task) = planned
+            && seen.insert(task.key.clone())
+        {
+            // A document whose file does not read is not imported either:
+            // it replays nothing.
+            let _ = count_design(&task.file, &task.options, seen, designs);
+        }
+    }
+    Ok(())
+}
+
 impl crate::Document {
     /// Imports the documents the design (decoded in `dump`, the design
     /// `label` of the file) refers to, each from its file with its own
@@ -354,111 +543,21 @@ impl crate::Document {
         dump: &Dump,
     ) -> References {
         let mut out = References::default();
-        let documents = external_documents(dump);
-        if documents.is_empty() {
+        let cache = options.reference_cache.clone().unwrap_or_default();
+        let Plan {
+            planned,
+            warnings,
+            stack,
+        } = plan_references(path, label, options, dump, &cache);
+        if planned.is_empty() {
             return out;
         }
-        let mut resolver = Resolver::new(
-            Path::new(path),
-            &options.references,
-            &options.reference_files,
-        );
-        out.warnings.extend(resolver.warnings().iter().cloned());
-        let here = std::fs::canonicalize(path)
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|_| path.to_owned());
-        // A design is known by its file and, in an `.f3z` package, its
-        // label (the label `Found::design` names it by).
-        let key = |file: &str, label: Option<&str>| format!("{file}!{}", label.unwrap_or(""));
-        let is_package = Path::new(path)
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("f3z"));
-        let mut stack = options.stack.clone();
-        stack.push(key(&here, is_package.then_some(label)));
-        let avoid = avoided(path, label, &stack);
-        let cache = options.reference_cache.clone().unwrap_or_default();
+        out.warnings.extend(warnings);
         let trace = std::env::var_os("MITCAD_IMPORT_TRACE").is_some();
-        // First where each document is (the resolver learns as it goes, so
-        // in the design's order), then their imports, side by side with
-        // more than one thread (mitcad#2449), then the entries, again in
-        // the design's order: the outcome does not depend on which import
-        // ends first.
-        let mut planned: Vec<Planned> = Vec::new();
-        for external in documents {
-            let urn = external.urn;
-            let found = if urn.is_empty() {
-                Found::default()
-            } else {
-                resolver.resolve_avoiding(&urn, external.guid.as_deref(), &avoid)
-            };
-            let mut entry = ReferenceReport {
-                document: urn.clone(),
-                name: found.name.clone(),
-                version: found.version,
-                file: found
-                    .file
-                    .as_ref()
-                    .map(|f| f.to_string_lossy().into_owned()),
-                found: found.how.map(str::to_owned),
-                status: "missing".to_owned(),
-                note: found.note.clone(),
-                ..ReferenceReport::default()
-            };
-            let Some(file) = found.file.clone() else {
-                if options.skipped_references.contains(&urn) {
-                    entry.status = "skipped".to_owned();
-                }
-                planned.push(Planned::Done(Box::new(entry)));
-                continue;
-            };
-            let file = file.to_string_lossy().into_owned();
-            if entry.name.is_none() {
-                entry.name = Some(stem_name(&file));
-            }
-            let canonical = std::fs::canonicalize(&file)
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_else(|_| file.clone());
-            let this = key(&canonical, found.design.as_deref());
-            if stack.contains(&this) {
-                entry.status = "failed".to_owned();
-                entry.note = Some("it refers back to a design being imported".to_owned());
-                planned.push(Planned::Done(Box::new(entry)));
-                continue;
-            }
-            if stack.len() >= MAX_DEPTH {
-                entry.status = "failed".to_owned();
-                entry.note = Some(format!(
-                    "references of references are followed {MAX_DEPTH} levels deep"
-                ));
-                planned.push(Planned::Done(Box::new(entry)));
-                continue;
-            }
-            let options = TimelineOptions {
-                design: found.design.clone(),
-                dump: None,
-                text: false,
-                report_path: None,
-                list: false,
-                list_references: false,
-                learn: None,
-                references: resolver.folders(),
-                reference_files: resolver.files(),
-                stack: [stack.clone(), vec![this.clone()]].concat(),
-                reference_cache: Some(cache.clone()),
-                // (The items of the design opened only, mitcad#379.)
-                accept_deviations: None,
-                ..options.clone()
-            };
-            planned.push(Planned::Import(Box::new(ToImport {
-                entry,
-                urn,
-                file,
-                design: found.design,
-                key: this,
-                options,
-                result: Mutex::new(None),
-            })));
-        }
+        // First where each document is (plan_references), then their
+        // imports, side by side with more than one thread (mitcad#2449),
+        // then the entries, again in the design's order: the outcome does
+        // not depend on which import ends first.
         let waiter = stack.last().cloned().unwrap_or_default();
         let monitor = self.0.monitor().cloned();
         let import = |task: &ToImport| {

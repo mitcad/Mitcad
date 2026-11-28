@@ -27,6 +27,11 @@
 //! `mesh_with` too the gear stays where `at` puts it and the mesh only
 //! turns it to engage. `mesh_with.toward` picks the direction from the
 //! mate's centre instead of typing `mesh_with.angle`.
+//!
+//! `tooth_form: cycloid` (mitcad#2607, `gear_profile/cycloid.rs`) gives
+//! spur, helical, herringbone, ring gears and racks cycloidal teeth from
+//! two rolling circles instead of involute ones; cycloid gears mesh with
+//! cycloid gears whose addendum circle is their dedendum circle.
 
 use std::f64::consts::{PI, TAU};
 
@@ -35,6 +40,7 @@ use serde::{Deserialize, Serialize};
 use mitcad_vec3::{add_scaled, combine};
 
 use super::extrude::{Operation, apply_operation, check_participants, participant_bodies};
+use super::gear_profile::cycloid::{self, Cycloid};
 use super::gear_profile::{
     self, Bevel, NamedSegment, Rack, Tooth, bore_outline, circle, mesh_distance,
 };
@@ -81,6 +87,22 @@ impl GearKind {
     /// An external gear on a parallel axis.
     fn external(self) -> bool {
         matches!(self, Self::Spur | Self::Helical | Self::Herringbone)
+    }
+}
+
+/// The teeth's form (mitcad#2607): involute, or cycloidal (the epicycloid
+/// and the hypocycloid of two rolling circles, `gear_profile/cycloid.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToothForm {
+    #[default]
+    Involute,
+    Cycloid,
+}
+
+impl ToothForm {
+    pub fn is_involute(&self) -> bool {
+        *self == Self::Involute
     }
 }
 
@@ -216,6 +238,23 @@ pub struct GearDef<P = ParamId> {
     /// (mitcad#656, `place_at.rs`); with `mesh_with` the mesh only turns it.
     #[serde(default = "none", skip_serializing_if = "Option::is_none")]
     pub at: Option<PlaceAt<P>>,
+    /// Involute teeth without it (mitcad#2607).
+    #[serde(default, skip_serializing_if = "ToothForm::is_involute")]
+    pub tooth_form: ToothForm,
+    /// A cycloid gear's rolling circles (mitcad#2607): the diameter of the
+    /// circle whose cycloid makes the addendum flanks, and of the one that
+    /// makes the dedendum flanks; [`cycloid::ROLLING_DIAMETER`] modules
+    /// without them.
+    #[serde(default = "none", skip_serializing_if = "Option::is_none")]
+    pub addendum_rolling_diameter: Option<P>,
+    #[serde(default = "none", skip_serializing_if = "Option::is_none")]
+    pub dedendum_rolling_diameter: Option<P>,
+    /// What a Gear Drive made (mitcad#2608, the api's `gear_drives.rs`):
+    /// on the first gear of a drive, the drive's definition, the features
+    /// it made and its contact set, so that it can be edited again. Opaque
+    /// here: the gear is made as without it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drive: Option<serde_json::Value>,
 }
 
 fn is_origin(center: &[f64; 2]) -> bool {
@@ -244,6 +283,10 @@ impl<P> GearDef<P> {
         let profile_shift = option("profile_shift", &self.profile_shift)?;
         let angle = option("angle", &self.angle)?;
         let bore_clearance = option("bore_clearance", &self.bore_clearance)?;
+        let addendum_rolling_diameter =
+            option("addendum_rolling_diameter", &self.addendum_rolling_diameter)?;
+        let dedendum_rolling_diameter =
+            option("dedendum_rolling_diameter", &self.dedendum_rolling_diameter)?;
         let seat = match &self.seat {
             None => None,
             Some(seat) => Some(seat.map_params("seat.", &mut *f)?),
@@ -311,6 +354,10 @@ impl<P> GearDef<P> {
             operation: self.operation,
             participants: self.participants.clone(),
             at: map_at(&self.at, &mut *f)?,
+            tooth_form: self.tooth_form,
+            addendum_rolling_diameter,
+            dedendum_rolling_diameter,
+            drive: self.drive.clone(),
         })
     }
 }
@@ -360,6 +407,49 @@ impl GearDef<f64> {
             tooth,
             height: self.height.unwrap_or(f64::NAN),
             length: self.length.unwrap_or(pitch_length),
+        }
+    }
+
+    /// Whether the teeth are cycloidal (mitcad#2607).
+    pub fn is_cycloid(&self) -> bool {
+        self.tooth_form == ToothForm::Cycloid
+    }
+
+    /// A cycloid gear's values (mitcad#2607): its rolling circles given, or
+    /// [`cycloid::ROLLING_DIAMETER`] modules each.
+    pub fn cycloid(&self) -> Cycloid {
+        let default = cycloid::ROLLING_DIAMETER * self.module;
+        Cycloid {
+            tooth: self.tooth(),
+            addendum: self.addendum_rolling_diameter.unwrap_or(default),
+            dedendum: self.dedendum_rolling_diameter.unwrap_or(default),
+        }
+    }
+
+    /// An external gear's outline in its form, tooth 1 centred at `phase`.
+    fn external_teeth(&self, phase: f64) -> Result<Vec<NamedSegment>, String> {
+        if self.is_cycloid() {
+            cycloid::external_outline(&self.cycloid(), phase)
+        } else {
+            gear_profile::external_outline(&self.tooth(), phase)
+        }
+    }
+
+    /// A ring gear's toothed loop in its form.
+    fn internal_teeth(&self, phase: f64) -> Result<Vec<NamedSegment>, String> {
+        if self.is_cycloid() {
+            cycloid::internal_outline(&self.cycloid(), phase)
+        } else {
+            gear_profile::internal_outline(&self.tooth(), phase)
+        }
+    }
+
+    /// A rack's outline in its form.
+    fn rack_teeth(&self) -> Result<Vec<NamedSegment>, String> {
+        if self.is_cycloid() {
+            cycloid::rack_outline(&self.cycloid(), &self.rack())
+        } else {
+            gear_profile::rack_outline(&self.rack())
         }
     }
 
@@ -525,12 +615,39 @@ impl GearDef<f64> {
         if self.bore_clearance.is_some_and(|c| !c.is_finite()) {
             return Err(format!("the {name}'s bore clearance must be a number"));
         }
+        // Cycloidal teeth (mitcad#2607): shaped by their rolling circles.
+        let cycloidal = self.is_cycloid();
+        if cycloidal {
+            if kind == GearKind::Bevel {
+                return Err(
+                    "a bevel gear has involute teeth: cycloidal teeth are for spur, helical, herringbone and ring gears and racks"
+                        .to_owned(),
+                );
+            }
+            if self.pressure_angle.is_some() {
+                return Err(format!(
+                    "a cycloid {name} has no pressure angle: its rolling circles shape its teeth"
+                ));
+            }
+            if self.profile_shift.is_some_and(|x| x != 0.0) {
+                return Err(format!("a cycloid {name} has no profile shift"));
+            }
+        } else if self.addendum_rolling_diameter.is_some()
+            || self.dedendum_rolling_diameter.is_some()
+        {
+            return Err(format!(
+                "a {name} with involute teeth has no rolling circles (cycloidal teeth have)"
+            ));
+        }
         // The teeth.
         match kind {
             GearKind::Rack => {
                 let rack = self.rack();
                 rack.tooth.check_rack()?;
                 rack.check()?;
+                if cycloidal {
+                    self.cycloid().check_rack()?;
+                }
             }
             GearKind::Bevel => {
                 let (bevel, mate, shaft) = self.bevel();
@@ -551,6 +668,8 @@ impl GearDef<f64> {
                 }
                 bevel.check()?;
             }
+            GearKind::Ring if cycloidal => self.cycloid().check_internal()?,
+            _ if cycloidal => self.cycloid().check_external()?,
             _ => self.tooth().check()?,
         }
         // Bores and hubs.
@@ -612,14 +731,39 @@ pub struct Placement {
 /// couples (the pitch radii; a rack's none).
 pub fn mesh_values(new: &GearDef<f64>, mate: &GearDef<f64>) -> Result<(f64, f64, f64), String> {
     let (a, b) = (new.tooth(), mate.tooth());
+    // Cycloidal teeth mesh only with cycloidal teeth (mitcad#2607).
+    let cycloidal = match (new.is_cycloid(), mate.is_cycloid()) {
+        (true, true) => true,
+        (false, false) => false,
+        _ => {
+            return Err(
+                "a gear with cycloidal teeth meshes only with a gear with cycloidal teeth"
+                    .to_owned(),
+            );
+        }
+    };
     if (a.module - b.module).abs() > 1.0e-9 * a.module {
         return Err(format!(
             "gears of different modules do not mesh ({} and {} mm)",
             a.module, b.module
         ));
     }
-    if (a.pressure_angle - b.pressure_angle).abs() > 1.0e-9 {
+    if !cycloidal && (a.pressure_angle - b.pressure_angle).abs() > 1.0e-9 {
         return Err("gears of different pressure angles do not mesh".to_owned());
+    }
+    if cycloidal {
+        // The circle that rolls on both pitch circles traces both flanks.
+        let (ca, cb) = (new.cycloid(), mate.cycloid());
+        let same = |x: f64, y: f64| (x - y).abs() <= 1.0e-9 * x.abs().max(y.abs()).max(1.0);
+        if !same(ca.addendum, cb.dedendum) || !same(ca.dedendum, cb.addendum) {
+            return Err(format!(
+                "cycloidal gears mesh when each one's addendum rolling circle is the other's dedendum rolling circle: this gear's circles are {} and {} mm across, its mate's {} and {} mm",
+                mm(ca.addendum),
+                mm(ca.dedendum),
+                mm(cb.addendum),
+                mm(cb.dedendum)
+            ));
+        }
     }
     if (a.helix_angle.abs() - b.helix_angle.abs()).abs() > 1.0e-9 {
         return Err("gears of different helix angles do not mesh".to_owned());
@@ -632,19 +776,31 @@ pub fn mesh_values(new: &GearDef<f64>, mate: &GearDef<f64>) -> Result<(f64, f64,
             if a.helix_angle != 0.0 && !opposite {
                 return Err("helical gears in an external mesh need opposite hands".to_owned());
             }
-            mesh_distance(&a, &b, false).1
+            if cycloidal {
+                a.pitch_radius() + b.pitch_radius()
+            } else {
+                mesh_distance(&a, &b, false).1
+            }
         }
         (Ring, m) if m.external() => {
             if !same {
                 return Err("a ring gear and its pinion need the same hand".to_owned());
             }
-            mesh_distance(&b, &a, true).1
+            if cycloidal {
+                cycloid_ring_distance(new, mate)?
+            } else {
+                mesh_distance(&b, &a, true).1
+            }
         }
         (n, Ring) if n.external() => {
             if !same {
                 return Err("a ring gear and its pinion need the same hand".to_owned());
             }
-            mesh_distance(&a, &b, true).1
+            if cycloidal {
+                cycloid_ring_distance(mate, new)?
+            } else {
+                mesh_distance(&a, &b, true).1
+            }
         }
         (Rack, m) if m.external() => {
             if !same {
@@ -666,6 +822,24 @@ pub fn mesh_values(new: &GearDef<f64>, mate: &GearDef<f64>) -> Result<(f64, f64,
         }
     };
     Ok((distance, a.pitch_radius(), b.pitch_radius()))
+}
+
+/// The centre distance of a cycloidal pinion in a cycloidal ring gear
+/// (mitcad#2607): the pitch radii's difference, which must leave room for
+/// both rolling circles (their diameters together at most the pitch
+/// diameters' difference), or the pinion's tips foul the ring's.
+fn cycloid_ring_distance(ring: &GearDef<f64>, pinion: &GearDef<f64>) -> Result<f64, String> {
+    let apart = ring.tooth().pitch_radius() - pinion.tooth().pitch_radius();
+    let circles = pinion.cycloid();
+    let need = circles.addendum + circles.dedendum;
+    if 2.0 * apart < need - 1.0e-9 {
+        return Err(format!(
+            "a cycloidal ring gear's pitch diameter must be larger than its pinion's by at least the two rolling circles' diameters together ({} mm), got {} mm",
+            mm(need),
+            mm(2.0 * apart)
+        ));
+    }
+    Ok(apart)
 }
 
 /// The gear's placement: its plane, or its mate's mesh.
@@ -1088,13 +1262,13 @@ fn gear_solid<K: Kernel>(
     // The teeth, and the extent of the body along the axis (for the bore).
     let (mut solid, low, high): (K::Shape, f64, f64) = match gear.kind {
         GearKind::Spur | GearKind::Helical => {
-            let outline = gear_profile::external_outline(&tooth, at.phase)?;
+            let outline = gear.external_teeth(at.phase)?;
             let step = helix_steps(gear, b);
             let solid = sweep(ctx, frame, &[outline], 0.0, 0.0, &[step], ("start", "end"))?;
             (solid, 0.0, b)
         }
         GearKind::Herringbone => {
-            let outline = gear_profile::external_outline(&tooth, at.phase)?;
+            let outline = gear.external_teeth(at.phase)?;
             let gap = gear.gap.unwrap_or(0.0);
             let half = (b - gap) / 2.0;
             let first = helix_steps(gear, half);
@@ -1144,7 +1318,7 @@ fn gear_solid<K: Kernel>(
             (solid, 0.0, b)
         }
         GearKind::Ring => {
-            let toothed = gear_profile::internal_outline(&tooth, at.phase)?;
+            let toothed = gear.internal_teeth(at.phase)?;
             let rim = circle(
                 "rim",
                 tooth.internal_root_radius() + gear.rim.unwrap_or(0.0),
@@ -1162,7 +1336,7 @@ fn gear_solid<K: Kernel>(
             (solid, 0.0, b)
         }
         GearKind::Rack => {
-            let outline = gear_profile::rack_outline(&gear.rack())?;
+            let outline = gear.rack_teeth()?;
             let step = helix_steps(gear, b);
             let solid = sweep(ctx, frame, &[outline], 0.0, 0.0, &[step], ("start", "end"))?;
             (solid, 0.0, b)
@@ -1506,11 +1680,31 @@ pub fn derived_values(gear: &GearDef<f64>) -> serde_json::Value {
         map.insert("bore_diameter".into(), json!(d));
     }
     // The hub: given, or worked out (mitcad#656; `computed` lists it).
+    let mut computed = Vec::new();
     if let Some(hub) = &gear.hub {
         map.insert("hub_diameter".into(), json!(gear.hub_diameter()));
         if hub.diameter.is_none() {
-            map.insert("computed".into(), json!(["hub_diameter"]));
+            computed.push("hub_diameter");
         }
+    }
+    // Cycloidal teeth (mitcad#2607): their rolling circles, given or the
+    // default (`computed` lists those), and no pressure angle.
+    let cycloidal = gear.is_cycloid();
+    let circles = gear.cycloid();
+    if cycloidal {
+        map.remove("pressure_angle");
+        map.insert("tooth_form".into(), json!(gear.tooth_form));
+        map.insert("addendum_rolling_diameter".into(), json!(circles.addendum));
+        map.insert("dedendum_rolling_diameter".into(), json!(circles.dedendum));
+        if gear.addendum_rolling_diameter.is_none() {
+            computed.push("addendum_rolling_diameter");
+        }
+        if gear.dedendum_rolling_diameter.is_none() {
+            computed.push("dedendum_rolling_diameter");
+        }
+    }
+    if !computed.is_empty() {
+        map.insert("computed".into(), json!(computed));
     }
     match gear.kind {
         GearKind::Rack => {
@@ -1522,7 +1716,7 @@ pub fn derived_values(gear: &GearDef<f64>) -> serde_json::Value {
                 json!(tooth.pitch() / 2.0 - tooth.backlash / 2.0),
             );
         }
-        GearKind::Ring => {
+        GearKind::Ring if !cycloidal => {
             map.insert("pitch_diameter".into(), json!(2.0 * tooth.pitch_radius()));
             map.insert("base_diameter".into(), json!(2.0 * tooth.base_radius()));
             map.insert(
@@ -1539,6 +1733,25 @@ pub fn derived_values(gear: &GearDef<f64>) -> serde_json::Value {
             );
             map.insert("space_width".into(), json!(tooth.space_width()));
         }
+        GearKind::Ring => {
+            map.insert("pitch_diameter".into(), json!(2.0 * tooth.pitch_radius()));
+            map.insert(
+                "inside_diameter".into(),
+                json!(2.0 * circles.internal_tip_radius()),
+            );
+            map.insert(
+                "root_diameter".into(),
+                json!(2.0 * circles.internal_root_radius()),
+            );
+            map.insert(
+                "outside_diameter".into(),
+                json!(2.0 * (circles.internal_root_radius() + gear.rim.unwrap_or(0.0))),
+            );
+            map.insert(
+                "space_width".into(),
+                json!(tooth.pitch() / 2.0 + tooth.backlash / 2.0),
+            );
+        }
         GearKind::Bevel => {
             let (bevel, mate, shaft) = gear.bevel();
             let t = bevel.tooth;
@@ -1554,6 +1767,19 @@ pub fn derived_values(gear: &GearDef<f64>) -> serde_json::Value {
             map.insert("mate_teeth".into(), json!(mate));
             map.insert("mate_pitch_angle".into(), json!(shaft - delta));
             map.insert("shaft_angle".into(), json!(shaft));
+        }
+        _ if cycloidal => {
+            map.insert("pitch_diameter".into(), json!(2.0 * tooth.pitch_radius()));
+            map.insert("outside_diameter".into(), json!(2.0 * circles.tip_radius()));
+            map.insert("root_diameter".into(), json!(2.0 * circles.root_radius()));
+            map.insert(
+                "tooth_thickness".into(),
+                json!(tooth.pitch() / 2.0 - tooth.backlash / 2.0),
+            );
+            if tooth.helix_angle != 0.0 {
+                map.insert("helix_angle".into(), json!(tooth.helix_angle.abs()));
+                map.insert("lead".into(), json!(tooth.lead()));
+            }
         }
         _ => {
             map.insert("pitch_diameter".into(), json!(2.0 * tooth.pitch_radius()));
@@ -1574,15 +1800,14 @@ pub fn derived_values(gear: &GearDef<f64>) -> serde_json::Value {
     // The transverse section's area (the teeth's, without bore and hub):
     // the volume per length of a straight or twisted gear.
     let area = match gear.kind {
-        GearKind::Rack => gear_profile::rack_outline(&gear.rack())
-            .ok()
-            .map(|o| gear_profile::loop_area(&o)),
-        GearKind::Ring => gear_profile::internal_outline(&tooth, 0.0).ok().map(|o| {
+        GearKind::Rack => gear.rack_teeth().ok().map(|o| gear_profile::loop_area(&o)),
+        GearKind::Ring => gear.internal_teeth(0.0).ok().map(|o| {
             let outside = tooth.internal_root_radius() + gear.rim.unwrap_or(0.0);
             PI * outside * outside - gear_profile::loop_area(&o)
         }),
         GearKind::Bevel => None,
-        _ => gear_profile::external_outline(&tooth, 0.0)
+        _ => gear
+            .external_teeth(0.0)
             .ok()
             .map(|o| gear_profile::loop_area(&o)),
     };

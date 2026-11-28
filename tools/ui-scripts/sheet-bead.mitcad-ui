@@ -1,0 +1,81 @@
+# SPDX-License-Identifier: MIT
+# The Bead command (mitcad#2645; app/COMMANDS.md "Bead"), on sheet-bead.json
+# (the 60 x 40 plate F3.b0, 1 thick, its top face on XY; Sketch2 F4 with the
+# line c1 from (10, 20) to (50, 20) on that face; the volumes those the CLI
+# test cli.sheet_bead computes the same way: the band between the bead's
+# surfaces swept along the line and turned about its ends, less the flat
+# strip it replaces):
+#   1. Bead with its defaults on the top face along c1: a round bead 10
+#      wide and 3 deep standing out, round ends (2497.0105774380 mm3); OK
+#      adds F5 (SheetBead1).
+#   2. SheetBead1 opens in Bead; Profile Trapezoid (flanks at 60 degrees):
+#      2524.4237210727 mm3.
+#   3. Direction Into the Face: the trapezoid pressed in, a rib on the
+#      bottom face (2528.7570176649 mm3).
+# Run by tools/ui-sheet-bead-test.sh (Linux),
+# tools/ui-windows-sheet-bead-test.ps1 (Windows) and
+# tools/ui-macos-sheet-bead-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+command view.top
+wait-idle
+command view.fit
+wait-idle
+
+# 1. A new Bead: the top face, then the sketch line.
+mark
+command sheet.bead
+wait-log '^Command Bead started' 30
+wait-log '^Pick places:' 30
+wait-idle
+expect-choice-text profile '^Round$'
+expect-choice-text direction '^Out of the Face$'
+click-pick 'face F3[.]b0/[^ ]*sheet_(front|back)[(]0[)]'
+wait-log '^Sketch entity F4/c1 at ' 30
+wait-idle
+mark
+click-logged '^Sketch entity F4/c1 at '
+wait-log '^Preview Bead: ok' 60
+wait-idle
+mark
+button '^OK$'
+wait-log '^Added round bead, width 10 mm, depth 3 mm, out, round ends$' 60
+wait-log '^Added Bead as F5$' 60
+wait-idle
+expect-never 'Failed features: [^n]'
+expect-model-bodies 1 2497.0105774380
+
+# 2. Opened in Bead; a trapezoid.
+mark
+dblclick-logged '^Timeline SheetBead1 at '
+wait-log '^Editing F5 with Bead$' 30
+wait-idle
+expect-choice-text profile '^Round$'
+mark
+qt-choice input_profile 'Trapezoid'
+wait-log '^Preview Bead: ok' 60
+wait-idle
+expect-ever '^Panel Bead input angle at '
+mark
+button '^OK$'
+wait-log '^Edited F5' 60
+wait-idle
+expect-never 'Failed features: [^n]'
+expect-model-bodies 1 2524.4237210727
+
+# 3. Pressed into the face.
+mark
+dblclick-logged '^Timeline SheetBead1 at '
+wait-log '^Editing F5 with Bead$' 30
+wait-idle
+expect-choice-text profile '^Trapezoid$'
+mark
+qt-choice input_direction 'Into the Face'
+wait-log '^Preview Bead: ok' 60
+wait-idle
+mark
+button '^OK$'
+wait-log '^Edited F5' 60
+wait-idle
+expect-never 'Failed features: [^n]'
+expect-model-bodies 1 2528.7570176649

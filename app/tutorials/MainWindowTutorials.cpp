@@ -9,33 +9,43 @@
 // input demonstrations over a step's target and the learner's keys and
 // gestures (mitcad#2366), the package's starting design opened, the
 // application's state read, read-only queries of the window's design
-// (mitcad#2371), Leave Tutorial, and the guide's events back. No file access
-// and no model edits through it.
+// (mitcad#2371), Leave Tutorial or back to the tutorials list (mitcad#2610),
+// and the guide's events back. No file access and no model edits through
+// it. A tutorial in progress continues in the design it was left in while a
+// window still shows it (mitcad#2610).
 #include "../MainWindow.hpp"
+#include "../WindowManager.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <exception>
 #include <functional>
+#include <optional>
 #include <utility>
 
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QDesktopServices>
 #include <QDir>
 #include <QDockWidget>
+#include <QDynamicPropertyChangeEvent>
+#include <QEvent>
 #include <QFile>
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QLabel>
+#include <QMessageBox>
 #include <QPropertyAnimation>
 #include <QPushButton>
 #include <QStandardPaths>
 #include <QTimer>
+#include <QUrl>
 #include <QVBoxLayout>
 #include <QtLogging>
 
+#include "../WindowManager.hpp"
 #include "../files/Libraries.hpp"
 #include "../framework/CommandRegistry.hpp"
 #include "../framework/Dialogs.hpp"
@@ -43,10 +53,12 @@
 #include "../framework/GlassCard.hpp"
 #include "../framework/Json.hpp"
 #include "../framework/PaneMotion.hpp"
+#include "../framework/Theme.hpp"
 #include "../sketch/SketchController.hpp"
 #include "../webbrowser/BrowserComponent.hpp"
 #include "../webbrowser/BrowserModuleLoad.hpp"
 #include "../webbrowser/ComponentBrowserHost.hpp"
+#include "../webbrowser/TutorialPageRules.hpp"
 #include "../files/StartPage.hpp"
 #include "../framework/Ribbon.hpp"
 #include "GuideBindings.hpp"
@@ -60,21 +72,46 @@ namespace mitcad {
 namespace {
 
 // What the tutorial's page asks of MitCad: the bridge's calls, the
-// component's and the profile's folders. A child of the page's widget.
+// component's and the profile's folders, and (watching the page widget's
+// property, TutorialPageRules.hpp, mitcad#2615) a link to the web the user
+// clicked. A child of the page's widget.
 class TutorialHost final : public QObject, public TutorialPageHost {
 public:
   using Call = std::function<bool(const QString& request, QString* answer, QString* error)>;
-  TutorialHost(Call call, QString folder) : m_call(std::move(call)), m_folder(std::move(folder)) {}
+  using Link = std::function<void(const QUrl& url)>;
+  TutorialHost(Call call, Link link, QString folder)
+      : m_call(std::move(call)), m_link(std::move(link)), m_folder(std::move(folder)) {}
   bool bridgeCall(const QString& request, QString* answer, QString* error) override {
     return m_call(request, answer, error);
   }
   QString componentFolder() override { return m_folder; }
   QString profileFolder() override { return browserProfileFolder(); }
 
+  bool eventFilter(QObject* watched, QEvent* event) override {
+    if (event->type() == QEvent::DynamicPropertyChange &&
+        static_cast<QDynamicPropertyChangeEvent*>(event)->propertyName() == tutorialrules::kWebLinkProperty) {
+      const QUrl url = watched->property(tutorialrules::kWebLinkProperty).toUrl();
+      if (url.isValid()) {
+        // After the module's call: the question is a dialog.
+        QTimer::singleShot(0, this, [this, url] { m_link(url); });
+      }
+    }
+    return QObject::eventFilter(watched, event);
+  }
+
 private:
   Call m_call;
+  Link m_link;
   QString m_folder;
 };
+
+// The text of a page's call for one line of the log (mitcad#2615).
+QString loggedCall(const QString& call) { return tutorialrules::logSafeText(call, tutorialrules::kLoggedCallName); }
+
+// open_design's limits (mitcad#2615): how often one tutorial pane opens a
+// starting design, and the largest one (a whole tutorial is at most 100 MB).
+constexpr int kTutorialDesignOpens = 20;
+constexpr qint64 kTutorialDesignBytes = 100LL * 1024 * 1024;
 
 // Whether `path` is inside `folder` (both as they are on the disk).
 bool inside(const QString& folder, const QString& path) {
@@ -143,17 +180,66 @@ void MainWindow::openListedTutorial(const QString& url, const QJsonObject& tutor
                            .arg(id, tutorial.value(QStringLiteral("version")).toString())
                            .arg(answer.value(QStringLiteral("files")).toInt())
                            .arg(QDir::toNativeSeparators(folder));
-  openTutorialInDesign(folder, answer.value(QStringLiteral("start")).toString(), title);
+  const QString start = answer.value(QStringLiteral("start")).toString();
+  // Continue (mitcad#2610): in the design the tutorial is open in, or was
+  // left in, while a window still shows it, so that what the learner made
+  // is there; its page goes on from what that design has.
+  if (loadTutorialProgress(id).state == TutorialProgress::State::InProgress) {
+    if (MainWindow* target = tutorialDesignWindow(id); target != nullptr) {
+      target->continueTutorial(folder, start, title);
+      return;
+    }
+  }
+  openTutorialInDesign(folder, start, title);
+}
+
+MainWindow* MainWindow::tutorialDesignWindow(const QString& id) {
+  QList<MainWindow*> windows;
+  if (m_windowManager != nullptr) {
+    windows = m_windowManager->windows();
+  } else {
+    windows << this;
+  }
+  // Open there still (the Start page shown over it, or another window).
+  for (MainWindow* window : std::as_const(windows)) {
+    if (window != nullptr && window->tutorialOpen() && QFileInfo(window->m_tutorialFolder).fileName() == id) {
+      return window;
+    }
+  }
+  // Left there, and the window shows the same design (a design opened,
+  // made new or closed since has another m_mcpDocumentId).
+  for (MainWindow* window : std::as_const(windows)) {
+    if (window != nullptr && !window->tutorialOpen() && !window->m_noDesign && !window->m_tutorialLeftId.isEmpty() &&
+        window->m_tutorialLeftId == id && window->m_tutorialLeftDesign == window->m_mcpDocumentId) {
+      return window;
+    }
+  }
+  return nullptr;
+}
+
+void MainWindow::continueTutorial(const QString& folder, const QString& page, const QString& title) {
+  if (m_windowManager != nullptr) {
+    m_windowManager->present(this);
+  }
+  if (tutorialOpen()) {
+    // Its page is where the learner is.
+    qInfo().noquote() << QStringLiteral("Tutorial: continues where it is open");
+    leaveStartPage();
+    return;
+  }
+  qInfo().noquote() << QStringLiteral("Tutorial: continues in the design it was left in");
+  // The web browser component first, as for a start over the Start page
+  // (mitcad#2311): a declined download leaves the page as it was.
+  withTutorialComponent([this, folder, page, title](const BrowserComponentInfo& component) {
+    leaveStartPage();
+    return showTutorialPane(component, folder, page, title);
+  });
 }
 
 void MainWindow::openTutorialInDesign(const QString& folder, const QString& page, const QString& title) {
-  if (!startPageShown()) {
-    openTutorialPane(folder, page, title);
-    return;
-  }
-  // Over the Start page the web browser component comes first (mitcad#2311):
-  // a declined or failed download leaves the page, the design under it and
-  // the windows as they were, with no empty new design left open.
+  // The web browser component comes first (mitcad#2311): a declined or
+  // failed download leaves the page, the design under it and the windows as
+  // they were, with no empty new design left open.
   withTutorialComponent([this, folder, page, title](const BrowserComponentInfo& component) {
     return showTutorialInDesign(component, folder, page, title);
   });
@@ -161,23 +247,24 @@ void MainWindow::openTutorialInDesign(const QString& folder, const QString& page
 
 bool MainWindow::showTutorialInDesign(const BrowserComponentInfo& component, const QString& folder,
                                       const QString& page, const QString& title) {
-  if (!startPageShown()) {
-    // The page was left while the component was downloaded.
-    return showTutorialPane(component, folder, page, title);
-  }
-  // Over the Start page (mitcad#2168) the tutorial starts in an empty
-  // design of its own, never in the design under the page: its first
-  // step's target is on the design's toolbar, and the page's own controls
-  // are no part of any step.
+  // The tutorial starts in an empty design of its own (mitcad#2168), never
+  // in the user's design (mitcad#2615: its page reads the design it runs
+  // in), whether the Start page is shown or was left meanwhile (the
+  // component downloaded): its first step's target is on the design's
+  // toolbar, and the page's own controls are no part of any step.
   if (modelBusy()) {
     whenIdle(this, [this, component, folder, page, title] { showTutorialInDesign(component, folder, page, title); });
     return true;
   }
   if (m_noDesign || emptyUntitledDesign()) {
-    // The empty untitled design that waits under the page (the launch's,
-    // or the one a close to the page installed): the page is left for it.
-    qInfo().noquote() << QStringLiteral("Tutorial: starts in the empty design under the Start page");
-    leaveStartPage();
+    if (startPageShown()) {
+      // The empty untitled design that waits under the page (the launch's,
+      // or the one a close to the page installed): the page is left for it.
+      qInfo().noquote() << QStringLiteral("Tutorial: starts in the empty design under the Start page");
+      leaveStartPage();
+    } else {
+      qInfo().noquote() << QStringLiteral("Tutorial: starts in the empty design of this window");
+    }
     return showTutorialPane(component, folder, page, title);
   }
   // The user's design: New Design, in a new window or (Open in current
@@ -192,12 +279,6 @@ bool MainWindow::showTutorialInDesign(const BrowserComponentInfo& component, con
 }
 
 bool MainWindow::tutorialOpen() const { return !m_tutorialPageWidget.isNull(); }
-
-void MainWindow::openTutorialPane(const QString& folder, const QString& page, const QString& title) {
-  withTutorialComponent([this, folder, page, title](const BrowserComponentInfo& component) {
-    return showTutorialPane(component, folder, page, title);
-  });
-}
 
 void MainWindow::withTutorialComponent(const std::function<bool(const BrowserComponentInfo&)>& then) {
   withBrowserComponent(tr("Tutorials"),
@@ -231,7 +312,7 @@ bool MainWindow::showTutorialPane(const BrowserComponentInfo& component, const Q
       [this](const QString& request, QString* answer, QString* reason) {
         return tutorialBridgeCall(request, answer, reason);
       },
-      componentFolder);
+      [this](const QUrl& url) { openTutorialWebLink(url); }, componentFolder);
   TutorialPage* tutorialPage = create(host, folder, m_tutorialPane);
   if (tutorialPage == nullptr) {
     delete host;
@@ -240,10 +321,28 @@ bool MainWindow::showTutorialPane(const BrowserComponentInfo& component, const Q
   }
   QWidget* widget = tutorialPage->widget();
   host->setParent(widget);
+  widget->installEventFilter(host);
   m_tutorialPage = tutorialPage;
   m_tutorialPageWidget = widget;
   m_tutorialFolder = folder;
+  // The design it reads: this one, until it opens a starting design
+  // (mitcad#2615).
+  m_tutorialDocumentId = m_mcpDocumentId;
+  m_tutorialOpening.clear();
+  m_tutorialDesignsOpened = 0;
+  // A tutorial left in this design earlier is not continued here any more:
+  // this one works in it now (mitcad#2610).
+  m_tutorialLeftId.clear();
+  m_tutorialLeftDesign.clear();
   m_tutorialTitle->setText(title);
+  // Where it comes from, so that the user knows whose page it is
+  // (mitcad#2615).
+  const QString id = QFileInfo(folder).fileName();
+  const std::optional<InstalledTutorial> installed = installedTutorial(QFileInfo(folder).absolutePath(), id);
+  const QString source = installed ? tutorialSourceName(installed->url) : QString();
+  m_tutorialTrusted = installed && tutorialFromPublicSource(installed->url);
+  m_tutorialSource->setText(source.isEmpty() ? QString() : tr("From %1").arg(source));
+  m_tutorialSource->setVisible(!source.isEmpty());
   static_cast<QVBoxLayout*>(m_tutorialPane->layout())->addWidget(widget, 1);
   // The guide's events to the page while it lives.
   connect(guide(), &TutorialGuide::guideEvent, widget, [this](const QJsonObject& event) {
@@ -284,6 +383,13 @@ void MainWindow::ensureTutorialPane() {
   connect(leave, &QPushButton::clicked, this, [this] { trigger(QString::fromLatin1(kLeaveTutorialCommand)); });
   header->addWidget(leave);
   layout->addLayout(header);
+  // The tutorial's source (mitcad#2615): its pages are someone else's.
+  m_tutorialSource = new QLabel(m_tutorialPane);
+  m_tutorialSource->setObjectName(QStringLiteral("tutorialSource"));
+  m_tutorialSource->setTextFormat(Qt::PlainText);
+  m_tutorialSource->setWordWrap(true);
+  setRoleStyleSheet(m_tutorialSource, ColorRole::TextSecondary);
+  layout->addWidget(m_tutorialSource);
   if (m_floating != nullptr) {
     auto* card = new GlassCard;
     card->setObjectName(QStringLiteral("tutorialDock"));
@@ -483,7 +589,15 @@ void MainWindow::closeTutorialPane() {
   m_tutorialPage = nullptr;
   m_tutorialPageWidget->deleteLater();
   m_tutorialPageWidget = nullptr;
+  // Where it was left (mitcad#2610): its Continue goes on in this design
+  // while this window still shows it (tutorialDesignWindow); never in a
+  // design that is not the tutorial's own, which closed it (mitcad#2615).
+  const bool ownDesign = !m_tutorialDocumentId.isEmpty() && m_tutorialDocumentId == m_mcpDocumentId;
+  m_tutorialLeftId = ownDesign ? QFileInfo(m_tutorialFolder).fileName() : QString();
+  m_tutorialLeftDesign = ownDesign ? m_mcpDocumentId : QString();
   m_tutorialFolder.clear();
+  m_tutorialDocumentId.clear();
+  m_tutorialOpening.clear();
   if (auto* card = qobject_cast<GlassCard*>(m_tutorialContainer.data())) {
     card->setVisible(false);
     m_floating->requestLayout();
@@ -503,10 +617,30 @@ bool MainWindow::tutorialBridgeCall(const QString& request, QString* answer, QSt
   const QJsonObject parsed = QJsonDocument::fromJson(request.toUtf8()).object();
   const QString call = parsed.value(QStringLiteral("call")).toString();
   const QJsonObject args = parsed.value(QStringLiteral("args")).toObject();
-  qInfo().noquote() << QStringLiteral("Tutorial bridge: %1").arg(call);
+  qInfo().noquote() << QStringLiteral("Tutorial bridge: %1").arg(loggedCall(call));
+  // The design the page may read (mitcad#2615): the tutorial's own, not one
+  // opened in its window since.
+  const bool ownDesign = !m_tutorialDocumentId.isEmpty() && m_tutorialDocumentId == m_mcpDocumentId;
   QJsonObject result;
   if (call == QLatin1String("start_step")) {
-    if (!startGuideStep(args.value(QStringLiteral("step")).toObject(), error)) {
+    const QJsonObject stepJson = args.value(QStringLiteral("step")).toObject();
+    // A tutorial of another source than MitCad's public repository shows or
+    // allows no command that sends the design or data out, changes MitCad's
+    // settings or account, or runs code (mitcad#2615).
+    if (!m_tutorialTrusted) {
+      QString ignored;
+      const GuideStep step = GuideStep::parse(stepJson, &ignored);
+      for (const QString& id : step.commands() + step.allowed) {
+        if (guideCommandOutward(id)) {
+          *error = QStringLiteral("A tutorial of this source cannot show or allow %1: it sends the design or data out "
+                                  "of MitCad, changes its settings or runs code")
+                       .arg(loggedCall(id));
+          qInfo().noquote() << QStringLiteral("Tutorial bridge: the step was refused: %1").arg(*error);
+          return false;
+        }
+      }
+    }
+    if (!startGuideStep(stepJson, error)) {
       qInfo().noquote() << QStringLiteral("Tutorial bridge: the step was refused: %1").arg(*error);
       return false;
     }
@@ -531,7 +665,8 @@ bool MainWindow::tutorialBridgeCall(const QString& request, QString* answer, QSt
               {QStringLiteral("mode"), QLatin1String(modes[static_cast<int>(m_mode)])},
               {QStringLiteral("command"), m_session ? QJsonValue(m_session->def().id) : QJsonValue()},
               {QStringLiteral("picked"), picked},
-              {QStringLiteral("design"), QFileInfo(m_filePath).completeBaseName()},
+              {QStringLiteral("design"),
+               ownDesign ? QJsonValue(QFileInfo(m_filePath).completeBaseName()) : QJsonValue()},
               {QStringLiteral("modified"), isWindowModified()},
               {QStringLiteral("version"), QCoreApplication::applicationVersion()},
               // Where the tutorial was left (mitcad#2346): a page continues
@@ -567,6 +702,32 @@ bool MainWindow::tutorialBridgeCall(const QString& request, QString* answer, QSt
       *error = QStringLiteral("open_design takes a .mitcad file of the tutorial's own folder, by its relative path");
       return false;
     }
+    // Only a starting design its manifest lists, one at a time, a few times
+    // a tutorial, and into this window (mitcad#2615): a page cannot open
+    // window after window or fill the disk with copies.
+    QFile manifestFile(QDir(m_tutorialFolder).filePath(QStringLiteral("tutorial.json")));
+    const QJsonObject manifest = manifestFile.open(QIODevice::ReadOnly)
+                                     ? QJsonDocument::fromJson(manifestFile.readAll()).object()
+                                     : QJsonObject();
+    if (!tutorialListsDesign(manifest, relative)) {
+      *error = QStringLiteral("open_design opens only the starting designs that the tutorial's manifest lists in "
+                              "\"designs\"");
+      return false;
+    }
+    if (!m_tutorialOpening.isEmpty()) {
+      *error = QStringLiteral("A starting design is being opened already");
+      return false;
+    }
+    if (m_tutorialDesignsOpened >= kTutorialDesignOpens) {
+      *error = QStringLiteral("The tutorial opened its starting designs %1 times; leave it and start it again to "
+                              "open more")
+                   .arg(kTutorialDesignOpens);
+      return false;
+    }
+    if (QFileInfo(source).size() > kTutorialDesignBytes) {
+      *error = QStringLiteral("The starting design is larger than %1 MB").arg(kTutorialDesignBytes / (1024 * 1024));
+      return false;
+    }
     const QString work = tutorialWorkFolder(QFileInfo(m_tutorialFolder).fileName());
     QDir().mkpath(work);
     QString target = QDir(work).filePath(QFileInfo(source).fileName());
@@ -582,14 +743,22 @@ bool MainWindow::tutorialBridgeCall(const QString& request, QString* answer, QSt
     }
     QFile(target).setPermissions(QFile(target).permissions() | QFileDevice::WriteOwner);
     qInfo().noquote() << QStringLiteral("Tutorial: opens %1 as %2")
-                             .arg(relative, QDir::toNativeSeparators(target));
+                             .arg(loggedCall(relative), QDir::toNativeSeparators(target));
+    ++m_tutorialDesignsOpened;
+    m_tutorialOpening = target;
     // After the answer: the open may ask about unsaved changes.
-    QTimer::singleShot(0, this, [this, target] { openPath(target); });
+    QTimer::singleShot(0, this, [this, target] { openTutorialDesign(target); });
     result = {{QStringLiteral("opened"), QFileInfo(target).fileName()}};
   } else if (call == QLatin1String("query")) {
     // What the page reads of this window's design (mitcad#2371): the model's
     // allow-list of read-only queries (core/model-api tutorial_bridge.rs),
-    // refused in words for a command, another query or another design.
+    // refused in words for a command, another query or another design; and
+    // only while the window holds the tutorial's own design (mitcad#2615).
+    if (!ownDesign) {
+      *error = QStringLiteral("The tutorial's design is not open in its window any more");
+      qInfo().noquote() << QStringLiteral("Tutorial bridge: query refused: %1").arg(*error);
+      return false;
+    }
     if (modelBusy() || !m_import.isNull()) {
       *error = QStringLiteral("The design is computing; ask again in a moment");
       qInfo().noquote() << QStringLiteral("Tutorial bridge: query refused: %1").arg(*error);
@@ -607,7 +776,7 @@ bool MainWindow::tutorialBridgeCall(const QString& request, QString* answer, QSt
       return false;
     }
     qInfo().noquote() << QStringLiteral("Tutorial bridge: query %1 answered")
-                             .arg(args.value(QStringLiteral("query")).toString());
+                             .arg(loggedCall(args.value(QStringLiteral("query")).toString()));
   } else if (call == QLatin1String("place")) {
     // Where the pane goes (mitcad#2367): left, right or centre, moved there
     // after the answer; the page goes on meanwhile.
@@ -690,12 +859,97 @@ bool MainWindow::tutorialBridgeCall(const QString& request, QString* answer, QSt
     // After the answer: the pane and its page go.
     QTimer::singleShot(0, this, [this] { trigger(QString::fromLatin1(kLeaveTutorialCommand)); });
     result = {{QStringLiteral("left"), true}};
+  } else if (call == QLatin1String("show_tutorials")) {
+    // Back to the tutorials (mitcad#2610, a lesson's end): the tutorial left
+    // as Leave Tutorial leaves it, then the Start page's tutorials, where its
+    // card shows its progress; after the answer, as the pane and its page go.
+    QTimer::singleShot(0, this, [this] {
+      trigger(QString::fromLatin1(kLeaveTutorialCommand));
+      showTutorials();
+    });
+    result = {{QStringLiteral("shown"), true}};
   } else {
-    *error = QStringLiteral("window.mitcad has no call %1").arg(call);
+    *error = QStringLiteral("window.mitcad has no call %1").arg(loggedCall(call));
     return false;
   }
   *answer = QString::fromUtf8(QJsonDocument(result).toJson(QJsonDocument::Compact));
   return true;
+}
+
+void MainWindow::openTutorialDesign(const QString& target) {
+  if (!tutorialOpen() || m_tutorialOpening != target) {
+    return;
+  }
+  if (modelBusy()) {
+    whenIdle(this, [this, target] { openTutorialDesign(target); });
+    return;
+  }
+  // The tutorial's design replaced in this window, as File › Open in the
+  // current window does: its unsaved changes asked about first.
+  const auto notOpened = [this](const QString& why) {
+    m_tutorialOpening.clear();
+    qInfo().noquote() << QStringLiteral("Tutorial: the starting design was not opened (%1)").arg(why);
+  };
+  if (!maybeSave()) {
+    notOpened(QStringLiteral("the design's changes were kept"));
+    return;
+  }
+  QString failure;
+  m_askImportChoices = true;
+  const bool opened = m_windowManager != nullptr ? m_windowManager->openFile(this, target, failure, true) == this
+                                                 : openFile(target, failure);
+  m_askImportChoices = false;
+  if (!opened) {
+    notOpened(failure.isEmpty() ? QStringLiteral("cancelled") : failure);
+    if (!failure.isEmpty()) {
+      sheetWarning(this, tr("Tutorials"), tr("The tutorial's starting design could not be opened:\n%1").arg(failure));
+    }
+  }
+}
+
+void MainWindow::tutorialDesignInstalled(const QString& path) {
+  if (!tutorialOpen()) {
+    return;
+  }
+  if (!m_tutorialOpening.isEmpty() && !path.isEmpty() &&
+      QFileInfo(path).absoluteFilePath() == QFileInfo(m_tutorialOpening).absoluteFilePath()) {
+    // Its starting design: the design the page reads from now on.
+    m_tutorialOpening.clear();
+    m_tutorialDocumentId = m_mcpDocumentId;
+    qInfo().noquote() << QStringLiteral("Tutorial: works in its starting design %1").arg(QFileInfo(path).fileName());
+    return;
+  }
+  // Another design in the tutorial's window (mitcad#2615): the page reads
+  // nothing of it, and the tutorial ends once the design is in.
+  m_tutorialDocumentId.clear();
+  qInfo().noquote() << QStringLiteral("Tutorial: another design was opened in its window; the tutorial closes");
+  QTimer::singleShot(0, this, [this] {
+    if (tutorialOpen() && m_tutorialDocumentId.isEmpty()) {
+      closeTutorialPane();
+    }
+  });
+}
+
+void MainWindow::openTutorialWebLink(const QUrl& url) {
+  if (!tutorialOpen() || m_tutorialLinkAsked || !tutorialrules::webLinkAddress(url)) {
+    return;
+  }
+  // The site in its plain (ASCII) form: a look-alike name shows as what it
+  // is.
+  const QString site = url.host(QUrl::FullyEncoded);
+  qInfo().noquote() << QStringLiteral("Tutorial: asks to open a page of %1 in the web browser").arg(site);
+  m_tutorialLinkAsked = true;
+  const bool open =
+      sheetQuestion(this, tr("Tutorials"),
+                    tr("The tutorial links to a page on %1, outside MitCad. Open it in your web browser?").arg(site),
+                    QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes;
+  m_tutorialLinkAsked = false;
+  if (!open) {
+    qInfo().noquote() << QStringLiteral("Tutorial: the page of %1 was not opened").arg(site);
+    return;
+  }
+  QDesktopServices::openUrl(url);
+  qInfo().noquote() << QStringLiteral("Tutorial: opened a page of %1 in the web browser").arg(site);
 }
 
 } // namespace mitcad

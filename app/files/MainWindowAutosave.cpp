@@ -11,6 +11,7 @@
 #include "../WindowManager.hpp"
 
 #include <cstddef>
+#include <exception>
 #include <functional>
 #include <memory>
 #include <utility>
@@ -219,6 +220,18 @@ bool MainWindow::restoreRecovered(RecoverableSession& session) {
     job.setStage(tr("Reading the recovered %1").arg(name));
     rust::Box<Document> document = load_document(rustStr(json));
     if (!path.isEmpty()) {
+      // What its file has that this MitCad did not read (fields a newer
+      // MitCad wrote, mitcad#1132; a CAM section it could not read,
+      // mitcad#2581) is not in the autosaved text: kept from the file, so
+      // that Save over it asks first and an agent's save is refused, as
+      // for the design opened from it (mitcad#2587). A file that cannot be
+      // read for it does not keep the work from being recovered.
+      try {
+        document->command(rustStr(compactJson(
+            {{QStringLiteral("cmd"), QStringLiteral("keep_fields_not_read")}, {QStringLiteral("path"), path}})));
+      } catch (const std::exception& e) {
+        qWarning().noquote() << QStringLiteral("Unknown fields not read: %1").arg(errorText(e));
+      }
       const QByteArray links = compactJson({{QStringLiteral("cmd"), QStringLiteral("update_links")},
                                             {QStringLiteral("base"), QFileInfo(path).absolutePath()}});
       const AttachedJob attached(*document, job);
@@ -260,6 +273,11 @@ bool MainWindow::restoreRecovered(RecoverableSession& session) {
   showHint(tr("Recovered %1. Its changes are not saved yet.").arg(name));
   // The linked files read again (mitcad#1416), after the hint.
   showLinkMessages(messages);
+  // What its file has that this MitCad did not read, as on opening it
+  // (mitcad#2587).
+  if (!path.isEmpty()) {
+    warnUnknownFields();
+  }
   return true;
 }
 

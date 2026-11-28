@@ -34,7 +34,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{ 'file.export' = 'F9'; 'solid.offset_face' = 'F7' } -StepPause 0
+Ui-Init $App $Out $QtBin @{ 'file.export' = 'F12'; 'solid.offset_face' = 'F7' } -StepPause 0
 if (-not $Cli) {
   $Cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
     ForEach-Object { Join-Path (Split-Path $script:UiApp) $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
@@ -206,7 +206,7 @@ Ui-Mark
 Ui-Step 'click Plate''s row'             { Ui-ClickLogged 'Browser Root/Bodies/Plate' }
 Ui-ExpectNew 'Browser selected: Root/Bodies/Plate' 'Plate selected'
 Ui-Mark
-Ui-Step 'export (F9)'                    { Ui-Key 'F9' }
+Ui-Step 'export (F12)'                    { Ui-Key 'F12' }
 Ui-ExpectNew ", type step-ap214, refinement medium, file $workLogged/meshes/Plate.step" 'STEP at first, the selected body''s name in the last folder'
 Ui-Mark
 Ui-Step '3MF (Alt+T, Down x7), High (Alt+R, Down), OK' {
@@ -224,7 +224,7 @@ Ui-Mark
 Ui-Step 'click Lid''s row'               { Ui-ClickLogged 'Browser Root/Lid:1/Bodies/Lid' }
 Ui-ExpectNew 'Browser selected: Root/Lid:1/Bodies/Lid' 'Lid selected'
 Ui-Mark
-Ui-Step 'export again (F9)'              { Ui-Key 'F9' }
+Ui-Step 'export again (F12)'              { Ui-Key 'F12' }
 Ui-ExpectNew ", type 3mf, refinement high, file $workLogged/meshes/Lid.3mf" 'the next export starts with 3MF, High and the selected body''s name'
 Ui-Mark
 Ui-Step 'OK (Enter)'                     { Ui-FocusDialog '^Export$'; Ui-Key 'Return'; Ui-FocusMain }

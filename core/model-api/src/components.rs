@@ -295,7 +295,58 @@ named_enum! {
             #[serde(default)]
             base: Option<String>,
         },
+        // Replace Component (mitcad#2640): a component swapped for a
+        // design file, a library part or another component, its joints
+        // re-pointed; one undo step.
+        "replace_component" => ReplaceComponent {
+            /// The occurrence picked (uid or path); or `component`.
+            #[serde(default)]
+            occurrence: Option<String>,
+            /// The component (uid or name): its first occurrence.
+            #[serde(default)]
+            component: Option<String>,
+            /// A design file; or `library`, or `with`.
+            #[serde(default)]
+            path: Option<String>,
+            #[serde(default)]
+            library: Option<Box<super::libraries::LibraryInput>>,
+            /// Another component of the design (uid or name).
+            #[serde(default)]
+            with: Option<String>,
+            /// A file or library part linked (default) or copied.
+            #[serde(default = "yes")]
+            link: bool,
+            /// Every occurrence of the component (All Instances, the
+            /// default); false: the one picked (This One).
+            #[serde(default = "yes")]
+            all: bool,
+            /// The folder of relative paths; left out: the design file's.
+            #[serde(default)]
+            base: Option<String>,
+            /// The replacement's name when it is inserted.
+            #[serde(default)]
+            name: Option<String>,
+        },
     }
+}
+
+/// What `replace_component` did (mitcad#2640): the replacement, the
+/// component replaced, the occurrences, and each reference to the replaced
+/// component's geometry with how it matched (`name`, `geometry`, or null:
+/// unmatched, the feature stays and is marked broken).
+fn replaced_json(done: &mitcad_model::ReplacedComponent) -> Value {
+    let references: Vec<Value> = done
+        .references
+        .iter()
+        .map(|r| {
+            json!({"feature": r.feature, "feature_name": r.feature_name, "slot": r.slot,
+                   "matched": r.matched.map(mitcad_model::ReplaceMatch::as_str),
+                   "message": r.message})
+        })
+        .collect();
+    json!({"component": done.component, "name": done.name, "replaced": done.replaced,
+           "removed": done.removed, "occurrences": done.occurrences,
+           "references": references, "unmatched": done.unmatched()})
 }
 
 /// A link's chosen parts as the API shows them (mitcad#2130): occurrence
@@ -971,6 +1022,64 @@ impl<K: Kernel> ComponentsCrateOps<K> for Document<K> {
                        "parts": link_parts_value(set.parts.as_deref()),
                        "messages": set.messages,
                        "bodies": bodies})
+            }
+            ComponentCommand::ReplaceComponent {
+                occurrence,
+                component,
+                path,
+                library,
+                with,
+                link,
+                all,
+                base,
+                name,
+            } => {
+                let occurrence = match (occurrence, component) {
+                    (Some(occurrence), None) => self.occurrence_ref(&occurrence)?,
+                    (None, Some(component)) => {
+                        let uid = self.component_ref(&component)?;
+                        self.assembly()
+                            .occurrences_of(uid)
+                            .next()
+                            .map(|o| o.uid)
+                            .ok_or_else(|| {
+                                ApiError(format!("{component} is not placed anywhere"))
+                            })?
+                    }
+                    _ => {
+                        return Err(ApiError(
+                            "replace_component needs the occurrence or the component to \
+                             replace, not both"
+                                .to_owned(),
+                        ));
+                    }
+                };
+                let with = match (path, library, with) {
+                    (Some(path), None, None) => mitcad_model::ReplaceWith::File { path, link },
+                    (None, Some(library), None) => mitcad_model::ReplaceWith::Library {
+                        part: library.part(),
+                        link,
+                    },
+                    (None, None, Some(with)) => {
+                        mitcad_model::ReplaceWith::Component(self.component_ref(&with)?)
+                    }
+                    _ => {
+                        return Err(ApiError(
+                            "replace_component needs one replacement: a path, a library part \
+                             or another component (with)"
+                                .to_owned(),
+                        ));
+                    }
+                };
+                let options = mitcad_model::ReplaceOptions {
+                    occurrence,
+                    all,
+                    with,
+                    base: base.map(PathBuf::from),
+                    name,
+                };
+                let done = self.replace_component(&options)?;
+                replaced_json(&done)
             }
         })
     }

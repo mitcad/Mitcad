@@ -169,3 +169,6 @@ mod sketch_tangent_far_2451_tests;
 // Placed dimension values move with geometry a selection drag or
 // Move/Copy translates together (mitcad#2580).
 mod sketch_dimension_text_move_2580_tests;
+// Placed dimension values turn with geometry Move/Copy's Rotate turns
+// (mitcad#2586).
+mod sketch_dimension_text_rotate_2586_tests;

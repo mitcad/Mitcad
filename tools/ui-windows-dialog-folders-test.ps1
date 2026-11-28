@@ -22,7 +22,7 @@ param(
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
 # Popups such as the File menu close at once in session 0: shortcuts.
-Ui-Init $App $Out $QtBin @{ 'file.export' = 'F9'; 'file.import' = 'F11' } -StepPause 0
+Ui-Init $App $Out $QtBin @{ 'file.export' = 'F12'; 'file.import' = 'F11' } -StepPause 0
 $work = Join-Path $script:UiOut 'files'
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 $designs = Join-Path $work 'designs'
@@ -60,7 +60,7 @@ Ui-ExpectNew "Dialog folder open remembered: $(Logged $designs)" "the Open group
 
 $step = Join-Path $exports 'block.step'
 Ui-Mark
-Ui-Step 'export (F9)'                    { Ui-Key 'F9' }
+Ui-Step 'export (F12)'                    { Ui-Key 'F12' }
 Ui-ExpectNew "Dialog folder export: $(Logged $designs)" "Export starts in the design's folder at first"
 Ui-Step 'type the path'                  { Type-Into-Dialog '^Export$' $step }
 Ui-ExpectNew "Exported ${step}: step, 1 body" 'exported'
@@ -86,7 +86,7 @@ Ui-Step 'import again (F11)'             { Ui-Key 'F11' }
 Ui-ExpectNew "Dialog folder import: $(Logged $imports)" 'Import starts in the import folder'
 Ui-Step 'cancel it (Escape)'             { Cancel-Dialog '^Import$' }
 Ui-Mark
-Ui-Step 'export again (F9)'              { Ui-Key 'F9' }
+Ui-Step 'export again (F12)'              { Ui-Key 'F12' }
 Ui-ExpectNew "Dialog folder export: $(Logged $exports)" 'Export starts in the export folder, with a design open'
 Ui-Step 'cancel it (Escape)'             { Cancel-Dialog '^Export$' }
 Ui-Mark
@@ -107,7 +107,7 @@ Ui-Step 'import (F11)'                   { Ui-Key 'F11' }
 Ui-ExpectNew "Dialog folder import: $(Logged $imports)" 'Import still starts in the import folder'
 Ui-Step 'cancel it (Escape)'             { Cancel-Dialog '^Import$' }
 Ui-Mark
-Ui-Step 'export (F9)'                    { Ui-Key 'F9' }
+Ui-Step 'export (F12)'                    { Ui-Key 'F12' }
 Ui-ExpectNew "Dialog folder export: $(Logged $exports)" 'Export still starts in the export folder'
 Ui-Step 'cancel it (Escape)'             { Cancel-Dialog '^Export$' }
 Ui-Mark

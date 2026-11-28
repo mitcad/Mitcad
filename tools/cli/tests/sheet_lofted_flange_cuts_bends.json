@@ -62,11 +62,24 @@
   {"expect": {"query": {"query": "flat_pattern", "body": "F17.b0"}, "tolerance": 1e-5, "result": {"status": "valid", "area": 21314.687172819675,
     "bends": [{"radius": 2}, {"radius": 2}, {"radius": 2}, {"radius": 2}], "facet_lines": []}}},
 
-  {"comment": "The rectangle to the circle with bends (F18): its facets fan from the rectangle's corners and meet in the circle's points, where bends of a radius would run into each other: refused in words."},
+  {"comment": "The rectangle to the circle with bends (F18, mitcad#2576): its facets fan from the rectangle's corners and meet in the circle's points, where bends of a radius would run into each other, so each such point gets a corner relief: every facet meeting it cut straight across between the points the relief's size from it along its two edges there, every bend through it ending on the plane through where its neighbours' cuts meet its tangent lines, as square to it as such a plane can be. The rules' corner relief (2 mm) is too small for the corners' fans: refused in words with the least size, 6.37 mm at the corners beside the seam."},
   {"cmd": "add_feature", "def": {"type": "sheet_lofted_flange", "rules": "F9", "bends": true, "profiles": [
     {"sketch": "F2", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"},
     {"sketch": "F4", "region": "r{c1}"}]}},
-  {"expect": {"feature": "F18", "status": "error", "error_contains": "three-sided facet"}},
+  {"expect": {"feature": "F18", "status": "error", "error_contains": "at least 6.4 mm"}},
+  {"comment": "With a corner relief of 8 on the feature it builds one valid sheet of 21 facets and 20 bends, 9 reliefs (the rectangle's 4 corners, 3 of the circle's points and the 2 points beside the seam where the gap's triangles meet the circle). Its blank at K 0.5 is the middle surface: the facets cut back by their setbacks and the reliefs (each facet moved whole), 20226.707759402707, and the bends, each (r + t/2) times the integral of its lines' lengths over its angle (the lines between the profiles' planes or the reliefs' planes, analytic), 1389.980490335235, worked out apart from the model; the body is t times it."},
+  {"cmd": "edit_feature", "uid": "F18", "def": {"type": "sheet_lofted_flange", "rules": "F9", "bends": true, "relief": 8, "profiles": [
+    {"sketch": "F2", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"},
+    {"sketch": "F4", "region": "r{c1}"}]}},
+  {"expect": {"feature": "F18", "status": "ok", "body": "F18.b0", "volume": 43233.37649947588, "tolerance": 1e-5}},
+  {"expect": {"query": {"query": "sheet_state", "body": "F18.b0"}, "result": {"status": "valid"}}},
+  {"cmd": "set_flat_pattern", "body": "F18.b0"},
+  {"expect": {"query": {"query": "flat_pattern", "body": "F18.b0"}, "tolerance": 1e-5, "result": {"status": "valid", "area": 21616.68824973794,
+    "regions": [{"loops": [{}]}],
+    "bends": [{"radius": 2}, {"radius": 2}, {"radius": 2}, {"radius": 2}, {"radius": 2}, {"radius": 2}, {"radius": 2}, {"radius": 2}, {"radius": 2}, {"radius": 2},
+      {"radius": 2}, {"radius": 2}, {"radius": 2}, {"radius": 2}, {"radius": 2}, {"radius": 2}, {"radius": 2}, {"radius": 2}, {"radius": 2}, {"radius": 2}],
+    "facet_lines": []}}},
+  {"cmd": "export_flat_pattern_dxf", "body": "F18.b0", "path": "sheet_lofted_flange_reliefs.dxf"},
 
   {"comment": "A square 60 x 60 on XY (Sketch F19) to a circle of radius 20 on a plane turned 30 degrees about X (Plane F20, Sketch F21): die formed (F22) they have no developable surface and are refused in words, pointing to the Approximate development (triangulated); with it the smooth surface joining them is made solid and laid flat by triangles, the pattern saying how far its lengths are off."},
   {"cmd": "sketch.create"},

@@ -14,7 +14,9 @@ Loft2 with Keep), saves the design and checks each loft on it:
   two bodies' surfaces (sampled both ways, exact distances; the volume
   booleans of the two coincident bodies, which took minutes each, are
   left out with `booleans_above`: until mitcad#2534 the kernel dropped
-  that option and ran them anyway, most of the test's time);
+  that option and ran them anyway, most of the test's time; until
+  mitcad#2595 the sampling set up each lofted side's projection, a grid
+  over its hundreds of spans, again for every point: two minutes a body);
 - both rails lie on it: six points along each of the rails' curves are
   within 1e-4 mm of the body and not inside it (`measure`: `inside` is
   false for a point within 1e-3 mm of the boundary). A construction point

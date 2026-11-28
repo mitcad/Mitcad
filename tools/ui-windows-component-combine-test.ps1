@@ -47,7 +47,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{ 'solid.combine' = 'F8'; 'view.top' = 'F7'; 'solid.move' = 'F9' } -StepPause 0
+Ui-Init $App $Out $QtBin @{ 'solid.combine' = 'F8'; 'view.top' = 'F7'; 'solid.move' = 'F12' } -StepPause 0
 
 $cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
   ForEach-Object { Join-Path (Split-Path $script:UiApp) $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
@@ -190,7 +190,7 @@ Ui-ExpectLog 'Body F2.b0 in O2 at ' "Part:2's block shown"
 Ui-Mark
 Ui-Step 'select Part:2 in the browser'   { Ui-ClickLogged 'Browser Root/Part:2' }
 Ui-ExpectNew 'Browser selected: Root/Part:2' 'Part:2 selected'
-Ui-Step 'move (F9)'                      { Ui-Key 'F9' }
+Ui-Step 'move (F12)'                      { Ui-Key 'F12' }
 Ui-ExpectNew 'Command Move/Copy started' 'Move/Copy started'
 Ui-ExpectNew 'Panel Move/Copy choices: move_type=components' 'Part:2 moves as a component'
 # One wheel step towards the user at a time: Translate, Rotate, Point to Point.

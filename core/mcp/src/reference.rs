@@ -1611,6 +1611,12 @@ fn item(
     };
     let (text, next) = cut(whole, offset, LIMIT)?;
     let mut answer = json!({kind: name, "text": text, "sections": sections, "brief": brief});
+    // What a query is for, in a sentence or two (mitcad#2636).
+    if kind == "query"
+        && let Some(purpose) = crate::query_purposes::query_purpose(name)
+    {
+        answer["purpose"] = json!(purpose);
+    }
     if let Some((title, path)) = &entry.section {
         answer["section"] = json!(title);
         answer["path"] = json!(path);
@@ -1838,4 +1844,174 @@ pub(crate) fn explain_refusal(arguments: &Value, value: &mut Value, vocabulary: 
     entry["truncated"] = json!(next.is_some());
     value["error"] = json!(format!("{error}; {hint}"));
     value["reference"] = entry;
+}
+
+// What the generated API reference (mitcad#2606, `crate::api_reference`)
+// reads of the reference as a vocabulary's agents see it.
+
+/// A section: its level, its heading as shown and in full (with its issue
+/// numbers, which the reference's own links use), the path of the
+/// sections it is in (`Commands > Timeline and parameters`) and its own
+/// text, up to its first subsection.
+pub(crate) struct SectionSource {
+    pub(crate) level: usize,
+    pub(crate) title: String,
+    pub(crate) full: String,
+    pub(crate) path: String,
+    pub(crate) own: String,
+}
+
+/// The sections in order, without the document's title.
+pub(crate) fn section_sources(vocabulary: &Vocabulary) -> Vec<SectionSource> {
+    let reference = view(vocabulary);
+    reference
+        .headings
+        .iter()
+        .enumerate()
+        .filter(|(_, heading)| heading.level >= 2)
+        .map(|(i, heading)| SectionSource {
+            level: heading.level,
+            title: heading.title.clone(),
+            full: heading.full.clone(),
+            path: reference.path(heading.line),
+            own: reference.lines[heading.line + 1..reference.own_end(i)].join("\n"),
+        })
+        .collect()
+}
+
+/// What the reference says of a query or a command.
+pub(crate) struct ItemSource {
+    /// The path of the section that describes it.
+    pub(crate) path: Option<String>,
+    /// Its table rows: each one's table header line and its own line.
+    pub(crate) rows: Vec<(String, String)>,
+    /// Without rows: the section that describes it in prose (from its
+    /// heading line), or the paragraphs, lists and examples of it that do.
+    pub(crate) prose: Option<String>,
+    /// With rows: the paragraphs, lists and examples of the rows' own
+    /// sections that name it.
+    pub(crate) nearby: String,
+    /// The paths of the other sections that name it.
+    pub(crate) also_in: Vec<String>,
+}
+
+/// A query's (`kind` `query`) or a command's (`command`) source; None when
+/// the reference names it nowhere.
+pub(crate) fn item_source(vocabulary: &Vocabulary, kind: &str, name: &str) -> Option<ItemSource> {
+    let reference = view(vocabulary);
+    let entry = reference.item_entry(kind, name)?;
+    let tables = reference.row_lines(kind, name);
+    let rows = tables
+        .iter()
+        .flat_map(|(header, rows)| {
+            rows.iter().map(|&row| {
+                (
+                    reference.lines[*header].clone(),
+                    reference.lines[row].clone(),
+                )
+            })
+        })
+        .collect();
+    let nearby = if entry.rows {
+        let homes: Vec<Option<usize>> = tables
+            .iter()
+            .map(|(header, _)| {
+                reference
+                    .headings
+                    .partition_point(|heading| heading.line <= *header)
+                    .checked_sub(1)
+            })
+            .collect();
+        let row_lines: std::collections::BTreeSet<usize> = tables
+            .iter()
+            .flat_map(|(_, rows)| rows.iter().copied())
+            .collect();
+        let near: Vec<usize> = reference
+            .naming(kind, name)
+            .into_iter()
+            .filter(|&block| {
+                homes.contains(&reference.owner(block))
+                    && !reference.blocks[block]
+                        .lines
+                        .clone()
+                        .any(|line| row_lines.contains(&line))
+            })
+            .collect();
+        reference
+            .entry_blocks(&near)
+            .into_iter()
+            .filter(|&block| reference.blocks[block].kind != BlockKind::Table)
+            .map(|block| reference.lines[reference.blocks[block].lines.clone()].join("\n"))
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    } else {
+        String::new()
+    };
+    Some(ItemSource {
+        path: entry.section.map(|(_, path)| path),
+        rows,
+        prose: (!entry.rows).then_some(entry.text),
+        nearby,
+        also_in: entry.also_in,
+    })
+}
+
+/// The examples that name a query or a command: its code blocks (without
+/// their fences) and inline code that starts as its object
+/// (`{"query": "bodies", …}`), in the reference's order.
+pub(crate) fn item_examples(vocabulary: &Vocabulary, kind: &str, name: &str) -> Vec<String> {
+    let reference = view(vocabulary);
+    let key = Reference::key(kind);
+    let spaced = format!("{{\"{key}\": \"{name}\"");
+    let tight = format!("{{\"{key}\":\"{name}\"");
+    // The name in quotes, which every example of it has.
+    let quoted = format!("\"{name}\"");
+    let mut examples = Vec::new();
+    for block in &reference.blocks {
+        let lines = &reference.lines[block.lines.clone()];
+        if block.kind == BlockKind::Code {
+            if reference.block_names(block, kind, name) {
+                let inner: Vec<&str> = lines
+                    .iter()
+                    .filter(|line| !line.trim_start().starts_with("```"))
+                    .map(String::as_str)
+                    .collect();
+                examples.push(inner.join("\n"));
+            }
+            continue;
+        }
+        if !lines.iter().any(|line| line.contains(&quoted)) {
+            continue;
+        }
+        let joined = lines
+            .iter()
+            .map(|line| line.trim())
+            .collect::<Vec<_>>()
+            .join(" ");
+        for (i, span) in joined.split('`').enumerate() {
+            if i % 2 == 1 && (span.starts_with(&spaced) || span.starts_with(&tight)) {
+                examples.push(span.to_owned());
+            }
+        }
+    }
+    examples
+}
+
+/// A feature type's section: its path, its whole text (from its heading
+/// line, subsections included) and its example definition of the type.
+pub(crate) struct FeatureSource {
+    pub(crate) path: String,
+    pub(crate) text: String,
+    pub(crate) example: Option<String>,
+}
+
+/// A feature type's source; None when the reference has no section of it.
+pub(crate) fn feature_source(vocabulary: &Vocabulary, name: &str) -> Option<FeatureSource> {
+    let reference = view(vocabulary);
+    let heading = reference.feature_section(name)?;
+    Some(FeatureSource {
+        path: reference.path(heading.line),
+        text: reference.text(heading),
+        example: reference.example(heading, name),
+    })
 }

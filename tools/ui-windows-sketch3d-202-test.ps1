@@ -19,7 +19,7 @@
 #   3. The Home view (F11, the test's key) and Fit.
 #   4. Line (L) from a corner A of the rectangle by typed offsets 10, 0, 15
 #      (one key per step); Esc until the tool ends.
-#   5. Tangent Arc (F9, the test's key) continuing it at B, its end clicked
+#   5. Tangent Arc (F12, the test's key) continuing it at B, its end clicked
 #      on a top corner V of Post's box: the Linked Point snap names the
 #      vertex in Post, the end attached through O1; Esc until the tool
 #      ends; Finish.
@@ -40,7 +40,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{ 'sketch.arc_tangent' = 'F9'; 'view.home' = 'F11'; 'solid.pipe' = 'F8' } -StepPause 0
+Ui-Init $App $Out $QtBin @{ 'sketch.arc_tangent' = 'F12'; 'view.home' = 'F11'; 'solid.pipe' = 'F8' } -StepPause 0
 if (-not $Cli) {
   $Cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
     ForEach-Object { Join-Path (Split-Path $script:UiApp) $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
@@ -180,7 +180,7 @@ Ui-EscTool 'Line'
 
 Write-Host '--- A tangent arc from B onto a top corner of Post''s box'
 Ui-Mark
-Ui-Step 'Tangent Arc (F9)'               { Ui-Key 'F9' }
+Ui-Step 'Tangent Arc (F12)'               { Ui-Key 'F12' }
 Ui-ExpectNew '3D sketch tool Tangent Arc: started' 'Tangent Arc draws in the 3D sketch'
 Ui-ExpectNew 'Pick vertex F2.b0/V{' 'Post''s vertices logged where a click meets them'
 Ui-SyncOr 500

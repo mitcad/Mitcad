@@ -350,9 +350,13 @@ pub fn roughing(op: &Roughing3dOp, surface: &Surface, tool: &Tool) -> Result<Too
                 entry: op.entry,
                 adaptive: op.adaptive,
             };
+            // The loops are spaced for the tool's diameter: the levels are
+            // rough, the tool taken as its cylinder (a bull nose's floor
+            // ridges are left for the finishing, mitcad#2591).
             let room = Room {
                 region: &region,
                 clear: margin,
+                width: tool.diameter,
             };
             path.moves.extend(pocket_in(&level, tool, room)?.moves);
         }
@@ -672,5 +676,31 @@ mod tests {
         }
         // The inward corner is cleared up to the tolerance and a half.
         assert!(nearest < 0.1, "the center keeps {nearest} off the corner");
+    }
+
+    /// 3D roughing shares the pocket's loops but takes the tool as its
+    /// cylinder (mitcad#2591): a bull nose roughs as the flat end mill of
+    /// its diameter, a stepover wider than its flat and one whose corner
+    /// radius is its whole radius too.
+    #[test]
+    fn roughing_spaces_a_bull_nose_for_its_diameter() {
+        // The stepped block of roughing_a_stepped_block_keeps_the_stock_to_leave.
+        let mut mesh = TriMesh::default();
+        cuboid(&mut mesh, [0.0, 0.0, -20.0], [40.0, 30.0, -12.0]);
+        cuboid(&mut mesh, [0.0, 0.0, -12.0], [20.0, 30.0, -4.0]);
+        let surface = Surface::new(&mesh).unwrap();
+        let boundary = Region::new(Contour::rectangle([-10.0, -10.0], [50.0, 40.0]), Vec::new());
+        let flat = Tool::flat_end_mill(1, 6.0);
+        for stepover in [None, Some(5.0)] {
+            let mut op = rough_in(boundary.clone(), -20.0);
+            op.stepover = stepover;
+            let want = roughing(&op, &surface, &flat).unwrap();
+            for corner_radius in [1.0, 3.0] {
+                let mut bull = flat.clone();
+                bull.shape = crate::tool::ToolShape::BullNose { corner_radius };
+                let got = roughing(&op, &surface, &bull).unwrap();
+                assert_eq!(got, want, "{stepover:?}, corner radius {corner_radius}");
+            }
+        }
     }
 }

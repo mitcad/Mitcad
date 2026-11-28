@@ -614,16 +614,118 @@ pub(crate) fn broken_line(g: &mut Group, a: P2, b: P2, c: P2, half: P2) {
 /// Where a horizontal text (`half` its half extents) of a dimension line
 /// from `fa` to `fb` (`length` long, along the unit `towards`) has its
 /// middle under ASME (mitcad#2047): in the line's middle when it fits
-/// between the arrows with the text gap on each side, else beyond `fb`,
-/// past an arrow outside.
+/// between the feet with the text gap on each side (the arrows outside
+/// when it leaves them no room, [`arrows_outside`], mitcad#2621), else
+/// beyond `fb`, past an arrow outside.
 pub(crate) fn unidirectional_middle(fa: P2, fb: P2, towards: P2, half: P2) -> P2 {
-    let length = len2(sub2(fb, fa));
-    let reach = reach_along(towards, half) + TEXT_GAP;
-    if length >= 2.0 * ARROW_LENGTH + 1.0 && 2.0 * reach <= length - 2.0 * ARROW_LENGTH {
+    if fits_in_line(fa, fb, towards, half) {
         mul2(add2(fa, fb), 0.5)
     } else {
+        let reach = reach_along(towards, half) + TEXT_GAP;
         add2(fb, mul2(towards, ARROW_LENGTH + 2.0 + reach))
     }
+}
+
+/// Whether a horizontal text (`half` its half extents) fits on a dimension
+/// line from `fa` to `fb` (along the unit `towards`) between its feet, the
+/// text gap on each side (ASME, mitcad#2621): with the arrows outside when
+/// they have no room beside it.
+pub(crate) fn fits_in_line(fa: P2, fb: P2, towards: P2, half: P2) -> bool {
+    2.0 * (reach_along(towards, half) + TEXT_GAP) <= len2(sub2(fb, fa)) + 1e-9
+}
+
+/// Whether a dimension line from `fa` to `fb` has its arrows outside,
+/// pointing in: when it is too short for two arrows, and under ASME when
+/// its value, a horizontal text whose box is `c ± half`, sits on the line
+/// so near an end that the arrow there would run into it (mitcad#2621):
+/// the value stays in line and the line stays clear of both.
+pub(crate) fn arrows_outside(fa: P2, fb: P2, text: Option<(P2, P2)>) -> bool {
+    let length = len2(sub2(fb, fa));
+    if length < 2.0 * ARROW_LENGTH + 1.0 {
+        return true;
+    }
+    let Some((c, half)) = text else {
+        return false;
+    };
+    let clear = [half[0] + TEXT_GAP, half[1] + TEXT_GAP];
+    match box_crossing(fa, fb, c, clear) {
+        Some((t0, t1)) => {
+            t0 * length < ARROW_LENGTH - 1e-9 || (1.0 - t1) * length < ARROW_LENGTH - 1e-9
+        }
+        None => false,
+    }
+}
+
+/// A dimension line's arrows at its feet `fa` and `fb` (the line along
+/// the unit `towards` from `fa`): inside pointing out, or `outside`
+/// pointing in, each with a short line on beyond its foot.
+pub(crate) fn dimension_arrows(g: &mut Group, fa: P2, fb: P2, towards: P2, outside: bool) {
+    if outside {
+        g.line(Pen::Thin, fa, sub2(fa, mul2(towards, ARROW_LENGTH + 2.0)));
+        g.line(Pen::Thin, fb, add2(fb, mul2(towards, ARROW_LENGTH + 2.0)));
+        arrow(g, fa, towards);
+        arrow(g, fb, mul2(towards, -1.0));
+    } else {
+        arrow(g, fa, mul2(towards, -1.0));
+        arrow(g, fb, towards);
+    }
+}
+
+/// ASME's horizontal shoulder from a leader's bend to beside its text
+/// (mitcad#2621): a radius's or a diameter's callout and a short vertical
+/// dimension's value outside, paper mm.
+pub(crate) const ASME_SHOULDER: f64 = 3.0;
+
+/// How far from upright a dimension line may lean and still take its value
+/// outside on a shoulder (ASME, mitcad#2621): the sine of 15 degrees.
+const ELBOW_LEAN: f64 = 0.2588;
+
+/// Whether an ASME dimension line from `fa` to `fb` (along the unit
+/// `towards`) takes its value (a horizontal text, `half` its half
+/// extents) outside on an elbow (mitcad#2621): an upright line (within
+/// [`ELBOW_LEAN`]) too short for the value between its feet.
+pub(crate) fn elbowed(fa: P2, fb: P2, towards: P2, half: P2) -> bool {
+    towards[0].abs() <= ELBOW_LEAN && !fits_in_line(fa, fb, towards, half)
+}
+
+/// A short upright ASME dimension line from `fa` to `fb` with its value
+/// outside on an elbow (mitcad#2621): the line between the feet (its
+/// arrows outside, drawn by the caller), run on beyond the end ahead along
+/// `along` (the way the text offset runs: up the sheet) to a bend at
+/// `along_offset` from the line's middle, or beyond the other end when that
+/// is below minus the reach the bend has, then a horizontal shoulder to
+/// the `side` (+1 right, -1 left) whose end is `beside` from the bend, at
+/// least [`ASME_SHOULDER`]. Returns where the text's box has its middle:
+/// beside the shoulder's end, the text gap between, `half` its half
+/// extents.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn elbow_line(
+    g: &mut Group,
+    fa: P2,
+    fb: P2,
+    along: P2,
+    along_offset: Option<f64>,
+    side: f64,
+    beside: f64,
+    half: P2,
+) -> P2 {
+    let length = len2(sub2(fb, fa));
+    let middle = mul2(add2(fa, fb), 0.5);
+    g.line(Pen::Thin, fa, fb);
+    // The bend at least past the arrow's short line beyond its foot.
+    let reach = length / 2.0 + ARROW_LENGTH + 2.0;
+    let u = along_offset.unwrap_or(reach);
+    let u = if u < -reach { u } else { u.max(reach) };
+    let out = if u >= 0.0 { along } else { mul2(along, -1.0) };
+    let knee = add2(middle, mul2(along, u));
+    let tail = add2(middle, mul2(out, reach));
+    if len2(sub2(knee, tail)) > 1e-9 {
+        g.line(Pen::Thin, tail, knee);
+    }
+    let shoulder = beside.max(ASME_SHOULDER);
+    let end = add2(knee, [side * shoulder, 0.0]);
+    g.line(Pen::Thin, knee, end);
+    add2(end, [side * (TEXT_GAP + half[0]), 0.0])
 }
 
 /// A linear dimension between `a` and `b` (sheet points) measured along
@@ -657,40 +759,51 @@ fn linear_dimension(
             );
         }
     }
-    let length = along.abs();
     let towards = unit2(sub2(fb, fa));
     if standard.unidirectional() {
-        // ASME: the value horizontal in a break of the line, or beyond its
-        // end with the line run on to it.
+        // ASME: the value horizontal in a break of the line (the arrows
+        // outside when they have no room beside it), beyond its end with
+        // the line run on to it, or on an upright line too short for it on
+        // a shoulder outside, away from the picks (mitcad#2621).
         let half = [text_width(text, DIMENSION_TEXT) / 2.0, DIMENSION_TEXT / 2.0];
-        let c = unidirectional_middle(fa, fb, towards, half);
-        broken_line(&mut g, fa, fb, c, half);
-        if len2(sub2(c, mul2(add2(fa, fb), 0.5))) > 1e-9 {
-            broken_line(&mut g, fb, c, c, half);
-        }
-        g.text(
-            [c[0], c[1] - DIMENSION_TEXT / 2.0],
-            DIMENSION_TEXT,
-            0.0,
-            Anchor::Middle,
-            text,
-        );
-    } else {
-        g.line(Pen::Thin, fa, fb);
-    }
-    if length >= 2.0 * ARROW_LENGTH + 1.0 {
-        arrow(&mut g, fa, mul2(towards, -1.0));
-        arrow(&mut g, fb, towards);
-    } else {
-        // Too short: the arrows outside, pointing in.
-        g.line(Pen::Thin, fa, sub2(fa, mul2(towards, ARROW_LENGTH + 2.0)));
-        g.line(Pen::Thin, fb, add2(fb, mul2(towards, ARROW_LENGTH + 2.0)));
-        arrow(&mut g, fa, towards);
-        arrow(&mut g, fb, mul2(towards, -1.0));
-    }
-    if standard.unidirectional() {
+        let outside = if elbowed(fa, fb, towards, half) {
+            let up = upright(towards);
+            let ahead = [up.cos(), up.sin()];
+            let away = n[0] * side;
+            let to = if away.abs() > 1e-9 {
+                away.signum()
+            } else {
+                1.0
+            };
+            let c = elbow_line(&mut g, fa, fb, ahead, None, to, 0.0, half);
+            g.text(
+                [c[0], c[1] - DIMENSION_TEXT / 2.0],
+                DIMENSION_TEXT,
+                0.0,
+                Anchor::Middle,
+                text,
+            );
+            true
+        } else {
+            let c = unidirectional_middle(fa, fb, towards, half);
+            broken_line(&mut g, fa, fb, c, half);
+            if len2(sub2(c, mul2(add2(fa, fb), 0.5))) > 1e-9 {
+                broken_line(&mut g, fb, c, c, half);
+            }
+            g.text(
+                [c[0], c[1] - DIMENSION_TEXT / 2.0],
+                DIMENSION_TEXT,
+                0.0,
+                Anchor::Middle,
+                text,
+            );
+            arrows_outside(fa, fb, Some((c, half)))
+        };
+        dimension_arrows(&mut g, fa, fb, towards, outside);
         return g;
     }
+    g.line(Pen::Thin, fa, fb);
+    dimension_arrows(&mut g, fa, fb, towards, arrows_outside(fa, fb, None));
     let angle = upright(towards);
     let up = [-angle.sin(), angle.cos()];
     let middle = mul2(add2(fa, fb), 0.5);

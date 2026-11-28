@@ -860,7 +860,8 @@ detail::FaceNamer run_operation(BooleanOp op, const std::vector<std::pair<const 
       // continued surface) approximates a surface that closes on itself and
       // is not periodic by a periodic B-spline, then trims the surface it
       // started from to that period, past its bounds ("V parameters out of
-      // range"). The result then keeps the faces as the operation left
+      // range"; port patch 2623 trims the periodic B-spline instead,
+      // mitcad#2623). The result then keeps the faces as the operation left
       // them, as where the merge breaks it; boolean() joins those on one
       // plane, cylinder, cone, sphere or torus afterwards.
       trace.note("the merge failed");

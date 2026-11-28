@@ -65,6 +65,11 @@ struct GuideDemonstration {
   Pose poseAt(qint64 elapsed, const QRectF& target) const;
   // Where frame `index` is drawn with its anchor at `point`.
   QRectF frameRect(int index, const QPointF& point) const;
+  // Where a demonstration over `target` may draw (mitcad#2615): the target
+  // and kMargin logical pixels around it, so that a page's picture cannot
+  // cover or relabel another control of the window.
+  static constexpr double kMargin = 64;
+  static QRectF allowedArea(const QRectF& target);
   // The place of frame `index` itself (its at and offset) over `target`.
   QPointF framePoint(int index, const QRectF& target) const;
 };

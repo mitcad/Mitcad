@@ -2,10 +2,12 @@
 #include "SpaceMouseController.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <utility>
 
 #include <QDebug>
 #include <QGuiApplication>
+#include <QTimer>
 
 namespace mitcad {
 
@@ -66,6 +68,7 @@ void SpaceMouseConnection::remove(SpaceMouseController* client) {
     // The last design that had the 3D mouse on closed: the device goes
     // with it, as a design's own backend went with its window before.
     m_backend.reset();
+    m_device.clear();
     return;
   }
   if (wasCurrent && m_backend) {
@@ -86,9 +89,13 @@ void SpaceMouseConnection::activate(SpaceMouseController* client) {
 }
 
 void SpaceMouseConnection::currentChanged(SpaceMouseController* previous) {
-  // A cap held while the design changes moves the one left no further.
+  // A cap held while the design changes moves the one left no further,
+  // and a QuickView key held then runs no view there (mitcad#2642).
   if (previous != nullptr && previous->m_axes != SpaceMouseAxes{}) {
     previous->motion(SpaceMouseAxes{}, previous->m_fromDevice);
+  }
+  if (previous != nullptr) {
+    previous->cancelKeys();
   }
   if (m_backend) {
     m_backend->windowPlaced();
@@ -114,9 +121,11 @@ void SpaceMouseConnection::setWanted(SpaceMouseController* client, bool wanted) 
     if (m_backend || !m_loggedOff) {
       m_backend.reset();
       m_loggedOff = true;
+      m_device.clear();
       for (SpaceMouseController* each : m_clients) {
         each->m_axes = {};
         each->m_memory = SpaceMouseMemory();
+        each->cancelKeys();
       }
       qInfo().noquote() << QStringLiteral("3D mouse: off");
       setStatus(tr("Off"));
@@ -167,6 +176,7 @@ void SpaceMouseConnection::start() {
 void SpaceMouseConnection::connected(const QString& device) {
   qInfo().noquote() << QStringLiteral("3D mouse: %1 connected (%2)").arg(backendName(), device);
   setStatus(tr("Connected: %1").arg(device));
+  m_device = device;
   // A copy: a design's settings change (its default button) may bring
   // its refresh along.
   const std::vector<SpaceMouseController*> wanting = m_wanting;
@@ -178,6 +188,7 @@ void SpaceMouseConnection::connected(const QString& device) {
 void SpaceMouseConnection::disconnected(const QString&) {
   qInfo().noquote() << QStringLiteral("3D mouse: %1 disconnected").arg(backendName());
   setStatus(tr("No 3D mouse found"));
+  m_device.clear();
   const std::vector<SpaceMouseController*> clients = m_clients;
   for (SpaceMouseController* client : clients) {
     client->deviceGone();
@@ -194,11 +205,18 @@ SpaceMouseController::SpaceMouseController(Hooks hooks, std::shared_ptr<SpaceMou
     m_connection = std::make_shared<SpaceMouseConnection>(Factory());
   }
   m_connection->add(this);
+  m_keyTimer = new QTimer(this);
+  m_keyTimer->setSingleShot(true);
+  connect(m_keyTimer, &QTimer::timeout, this, [this] { keysDue(); });
   // A device's motion stops when the application goes to the background:
-  // its release may go to another application.
+  // its release may go to another application, and so may a QuickView
+  // key's (mitcad#2642), which then runs nothing.
   connect(qGuiApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState state) {
     if (state != Qt::ApplicationActive && m_fromDevice) {
       motion(SpaceMouseAxes{}, true);
+    }
+    if (state != Qt::ApplicationActive) {
+      cancelKeys();
     }
   });
 }
@@ -225,6 +243,7 @@ void SpaceMouseController::refresh() {
       m_axes = {};
       m_memory = SpaceMouseMemory();
     }
+    cancelKeys();
     m_wanted = false;
     m_connection->setWanted(this, false);
   } else {
@@ -238,18 +257,26 @@ void SpaceMouseController::refresh() {
 void SpaceMouseController::deviceGone() {
   motion(SpaceMouseAxes{}, true);
   m_memory = SpaceMouseMemory();
+  // A QuickView key held as the device went runs nothing (mitcad#2642).
+  cancelKeys();
 }
 
 void SpaceMouseController::connected(const QString& device) {
   // Another device may reach further or less far (mitcad#1720).
   m_memory = SpaceMouseMemory();
-  // The device's rotation lock key runs Lock Rotation by default when its
-  // number is known (mitcad#1910); the settings keep it from then on.
+  cancelKeys();
+  // The device's labeled keys run their commands by default when their
+  // numbers are known: the rotation lock key Lock Rotation (mitcad#1910), a
+  // SpaceMouse Enterprise's QuickView keys the standard views
+  // (mitcad#2642); the settings keep them from then on.
   SpaceMouseSettings settings = m_hooks.settings ? m_hooks.settings() : SpaceMouseSettings();
-  if (addSpaceMouseDeviceButtons(settings, device)) {
-    qInfo().noquote() << QStringLiteral("3D mouse: button %1 runs %2 by default")
-                             .arg(int(settings.buttons.size()))
-                             .arg(spaceMouseLockRotationCommand());
+  std::vector<int> added;
+  if (addSpaceMouseDeviceButtons(settings, device, &added)) {
+    for (const int index : added) {
+      qInfo().noquote() << QStringLiteral("3D mouse: button %1 runs %2 by default")
+                               .arg(index + 1)
+                               .arg(settings.buttons.value(index));
+    }
     if (m_hooks.change) {
       m_hooks.change(settings);
     }
@@ -352,6 +379,14 @@ void SpaceMouseController::button(int index, bool pressed) {
   SpaceMouseStatus& status = spaceMouseStatus();
   status.buttonsSeen = std::max(status.buttonsSeen, index + 1);
   if (!pressed) {
+    // A QuickView key's release (mitcad#2642): its tap's view when it was
+    // held less than the hold time, nothing after its hold ran. Other
+    // buttons ran at their press.
+    if (m_keys.waiting(index)) {
+      const SpaceMouseKeyGestures::Run run = m_keys.release(index, nowMs());
+      scheduleKeys();
+      runKey(run);
+    }
     return;
   }
   const SpaceMouseSettings settings = m_hooks.settings ? m_hooks.settings() : SpaceMouseSettings();
@@ -363,9 +398,72 @@ void SpaceMouseController::button(int index, bool pressed) {
     qDebug().noquote() << QStringLiteral("3D mouse: button %1 has no command").arg(index + 1);
     return;
   }
-  qDebug().noquote() << QStringLiteral("3D mouse: button %1 runs %2").arg(index + 1).arg(id);
+  // A QuickView key of the connected device bound to a standard view
+  // (mitcad#2642): nothing runs yet; its release or its hold tells which
+  // view.
+  int vendor = 0;
+  int product = 0;
+  const std::uint32_t quickViewKeys =
+      spaceMouseHidIds(m_connection->device(), vendor, product) ? spaceMouseQuickViewKeys(vendor, product) : 0;
+  const QString hold = spaceMouseHoldCommand(quickViewKeys, index, id);
+  if (!hold.isEmpty()) {
+    qDebug().noquote() << QStringLiteral("3D mouse: button %1 waits for a tap or a hold").arg(index + 1);
+    m_keys.press(index, id, hold, nowMs());
+    scheduleKeys();
+    return;
+  }
+  runKey({index, id, false});
+}
+
+void SpaceMouseController::keysDue() {
+  // Only the design that has the input runs a view; another one's keys
+  // were forgotten when it lost the input (SpaceMouseConnection).
+  if (m_connection->current() != this) {
+    cancelKeys();
+    return;
+  }
+  const std::vector<SpaceMouseKeyGestures::Run> runs = m_keys.due(nowMs());
+  scheduleKeys();
+  for (const SpaceMouseKeyGestures::Run& run : runs) {
+    runKey(run);
+  }
+}
+
+std::int64_t SpaceMouseController::nowMs() const {
+  if (m_hooks.now) {
+    return m_hooks.now();
+  }
+  return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
+
+void SpaceMouseController::runKey(const SpaceMouseKeyGestures::Run& run) {
+  if (run.command.isEmpty()) {
+    return;
+  }
+  qDebug().noquote() << (run.held ? QStringLiteral("3D mouse: button %1 held runs %2")
+                                  : QStringLiteral("3D mouse: button %1 runs %2"))
+                            .arg(run.button + 1)
+                            .arg(run.command);
   if (m_hooks.runCommand) {
-    m_hooks.runCommand(id);
+    m_hooks.runCommand(run.command);
+  }
+}
+
+void SpaceMouseController::scheduleKeys() {
+  const std::int64_t next = m_keys.nextDueMs();
+  if (next < 0) {
+    m_keyTimer->stop();
+    return;
+  }
+  const std::int64_t wait = std::max<std::int64_t>(0, next - nowMs());
+  m_keyTimer->start(static_cast<int>(std::min<std::int64_t>(wait, kSpaceMouseHoldMs)));
+}
+
+void SpaceMouseController::cancelKeys() {
+  m_keys.cancel();
+  if (m_keyTimer != nullptr) {
+    m_keyTimer->stop();
   }
 }
 

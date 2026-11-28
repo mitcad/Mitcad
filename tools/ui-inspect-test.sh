@@ -140,7 +140,10 @@ ui_expect_new "Sketch finished" "back in the model"
 echo "--- Interference"
 ui_step "interference (search)"            ui_command "Interference"
 ui_expect_log "Inspect Interference: Body1 x Body2: 2000" "they overlap by 5 x 20 x 20"
-ui_step "close (Enter)"                    ui_key Return
+# Escape: OK would keep the check in the Analysis folder (mitcad#2664,
+# tools/ui-interference-check-test.sh), and the file's analyses below are
+# Section1's alone.
+ui_step "close (Escape)"                   ui_key Escape
 
 echo "--- Section Analysis"
 ui_step "section analysis (search)"        ui_command "Section Analysis"

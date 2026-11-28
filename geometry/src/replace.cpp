@@ -7,14 +7,17 @@
 #include <set>
 #include <stdexcept>
 
+#include <BOPAlgo_Alerts.hxx>
 #include <BOPAlgo_MakerVolume.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_BooleanOperation.hxx>
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
+#include <BRepAlgoAPI_Defeaturing.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_Transform.hxx>
 #include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepClass_FaceClassifier.hxx>
 #include <BRepGProp.hxx>
@@ -32,6 +35,8 @@
 #include <NCollection_IndexedDataMap.hxx>
 #include <NCollection_List.hxx>
 #include <Precision.hxx>
+#include <Standard_Failure.hxx>
+#include <Standard_OutOfMemory.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
@@ -302,7 +307,8 @@ double inside_share(const Shape& body, const TopoDS_Shape& cell, double cell_vol
 // The shape with the cells added (fuse) or removed (cut), names carried;
 // the coincident faces merge.
 ShapePtr apply(BRepAlgoAPI_BooleanOperation&& operation, const Shape& shape,
-               const std::vector<ShapePtr>& cells) {
+               const std::vector<ShapePtr>& cells,
+               const char* failure = "the body could not be joined with the region up to the target") {
   // On a copy of the shape and the cells, which share its faces, as a
   // boolean operation (boolean.cpp): the face merge writes into the
   // sub-shapes the boolean kept, and the shape may be the body itself.
@@ -322,7 +328,7 @@ ShapePtr apply(BRepAlgoAPI_BooleanOperation&& operation, const Shape& shape,
   operation.SetNonDestructive(true);
   detail::build(operation);
   if (!operation.IsDone() || operation.HasErrors()) {
-    throw std::runtime_error("the body could not be joined with the region up to the target");
+    throw std::runtime_error(failure);
   }
   operation.SimplifyResult();
   FaceNamer namer(operation.Shape());
@@ -834,6 +840,133 @@ ShapePtr move_planar_faces(const Shape& body, const std::vector<int>& faces, con
   }
   namer.finish();
   ShapePtr result = namer.shape();
+  require_valid(result->occt(), "moving the faces");
+  return result;
+}
+
+// A feature's faces moved rigidly as a whole (mitcad#2632; replace.hpp).
+
+namespace {
+
+// Below this share of the body's volume a region counts as none: what a
+// boolean operation leaves where the two shapes only touch.
+constexpr double kNoVolume = 1.0e-9;
+
+// The shape moved by `motion` (a copy), its faces' names carried.
+ShapePtr moved_by(const Shape& shape, const gp_Trsf& motion) {
+  BRepBuilderAPI_Transform transform(shape.occt(), motion, true);
+  if (!transform.IsDone()) {
+    throw std::runtime_error("the moved faces could not be moved");
+  }
+  FaceNamer namer(transform.Shape());
+  namer.carry(transform, shape);
+  return namer.shape();
+}
+
+} // namespace
+
+ShapePtr move_feature_faces(const Shape& body, const std::vector<int>& faces, const gp_Trsf& motion,
+                            const std::string& feature) {
+  if (faces.empty()) {
+    throw std::invalid_argument("there are no faces to move");
+  }
+  const std::string first = primary_name(body, faces.front());
+
+  // The body without the faces: the faces around extended over where they
+  // were (a boss's plate with its top whole, a pocket filled). Where they
+  // cannot close over them, the faces bound no feature that moves whole.
+  // (On a copy: the body's own faces and edges stay as they are.)
+  const ShapePtr copy = working_copy(body);
+  BRepAlgoAPI_Defeaturing remover;
+  remover.SetShape(copy->occt());
+  for (int f : faces) {
+    remover.AddFaceToRemove(copy->face(f));
+  }
+  remover.SetRunParallel(false);
+  remover.SetToFillHistory(true);
+  try {
+    build(remover);
+  } catch (const Standard_OutOfMemory&) {
+    throw;
+  } catch (const Standard_Failure&) {
+    throw NotAFeature("the faces around the moved faces cannot close over them");
+  }
+  if (!remover.IsDone() || remover.HasErrors() ||
+      remover.HasWarning(STANDARD_TYPE(BOPAlgo_AlertUnableToRemoveTheFeature)) ||
+      std::any_of(faces.begin(), faces.end(), [&](int f) { return !remover.IsDeleted(copy->face(f)); })) {
+    throw NotAFeature("the faces around the moved faces cannot close over them");
+  }
+  ShapePtr base;
+  {
+    FaceNamer namer(remover.Shape());
+    namer.carry(remover, *copy);
+    base = namer.shape();
+  }
+  const double whole = std::max(std::abs(volume_of(copy->occt())), std::abs(volume_of(base->occt())));
+  const double none = kNoVolume * std::max(whole, 1.0);
+
+  // The feature: the region of the body outside the extended faces (a boss)
+  // and the region inside them the body leaves empty (a pocket). Only the
+  // moved faces' names go with it: its faces on the extended faces are
+  // no faces of the body.
+  const ShapePtr unnamed_base = std::make_shared<Shape>(base->occt());
+  const char* failure = "the region the moved faces bound could not be found";
+  const ShapePtr added = apply(BRepAlgoAPI_Cut(), *copy, {unnamed_base}, failure);
+  const ShapePtr removed = apply(BRepAlgoAPI_Cut(), *unnamed_base, {copy}, failure);
+  const bool adds = std::abs(volume_of(added->occt())) > none;
+  const bool removes = std::abs(volume_of(removed->occt())) > none;
+  if (!adds && !removes) {
+    throw NotAFeature("the moved faces bound no region of the body");
+  }
+
+  // The feature moved and joined to the body again (or cut from it): the
+  // faces around are trimmed where they meet it.
+  const char* joined = "the moved faces could not be joined to the rest of the body at their new place";
+  const char* lost = "the moved faces would no longer meet the rest of the body: nothing would hold them "
+                     "at their new place";
+  ShapePtr result = base;
+  if (adds) {
+    result = apply(BRepAlgoAPI_Fuse(), *result, {moved_by(*added, motion)}, joined);
+    if (solid_count(result->occt()) > std::max(1, solid_count(body.occt()))) {
+      throw std::runtime_error(lost);
+    }
+  }
+  if (removes) {
+    const double before = std::abs(volume_of(result->occt()));
+    result = apply(BRepAlgoAPI_Cut(), *result, {moved_by(*removed, motion)}, joined);
+    if (!(before - std::abs(volume_of(result->occt())) > none)) {
+      throw std::runtime_error(lost);
+    }
+  }
+  if (solid_count(result->occt()) == 0) {
+    throw std::runtime_error("moving the faces leaves no body");
+  }
+
+  // The names: a face of the moved region that is no face of the body is a
+  // step after the first moved face.
+  FaceNamer namer(result->occt());
+  for (int i = 0; i < result->face_count(); ++i) {
+    const NameList& names = result->face_names(i);
+    if (names.empty()) {
+      namer.add(result->face(i), face_name(feature, "step", first));
+    } else {
+      namer.add(result->face(i), names, -1);
+    }
+  }
+  namer.finish();
+  result = namer.shape();
+  // Every moved face is still there: none ends up inside the body.
+  for (int f : faces) {
+    for (const std::string& name : body.face_names(f)) {
+      bool found = false;
+      for (int i = 0; i < result->face_count() && !found; ++i) {
+        found = face_matches(result->face_names(i), name);
+      }
+      if (!found) {
+        throw std::runtime_error("a moved face would end up inside the body");
+      }
+    }
+  }
   require_valid(result->occt(), "moving the faces");
   return result;
 }

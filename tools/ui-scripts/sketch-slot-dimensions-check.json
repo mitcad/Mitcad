@@ -15,5 +15,38 @@
     {"type":"horizontal_distance","a":"p12","b":"p5","measured":35},
     {"type":"vertical_distance","a":"p12","b":"p5","measured":15},
     {"type":"distance","a":"p5","b":"p6","driven":true,"measured":30}
+  ]},"tolerance":0.000001}},
+  {"comment":"The UI saved one Overall Slot in F2 drawn from (-20, -10) toward (-30, -20), at 45 degrees, with a typed length of 100 and width of 30 (mitcad#2622): its outline c1..c4 (c2 the arc at the second end, c4 the one at the first), the end centres p5 and p6 and the construction centre line c11. The typed width is the end arc's diameter d3, the typed length the overall length d4 between the far sides of the end arcs: only its place and direction are free (3 degrees of freedom). Driven dimensions show the end centres 70 apart and 70 / sqrt 2 (49.497...) across and down: the 100 is the true length along the slanted slot."},
+  {"expect":{"query":{"query":"sketch","uid":"F2"},"result":{"solved":true,"conflicts":[],"dof":3,"dimensions":[
+    {"type":"diameter","curve":"c2","value":"d3","measured":30},
+    {"type":"tangent_circle_distance","a":"c4","b":"c2","side":"far","value":"d4","measured":100}
+  ]},"tolerance":0.000001}},
+  {"cmd":"sketch.add_dimension","sketch":"F2","dimension":{"type":"distance","a":"p5","b":"p6"},"driven":true},
+  {"cmd":"sketch.add_dimension","sketch":"F2","dimension":{"type":"horizontal_distance","a":"p5","b":"p6"},"driven":true},
+  {"cmd":"sketch.add_dimension","sketch":"F2","dimension":{"type":"vertical_distance","a":"p5","b":"p6"},"driven":true},
+  {"expect":{"query":{"query":"sketch","uid":"F2"},"result":{"solved":true,"conflicts":[],"dof":3,"dimensions":[
+    {"type":"diameter","curve":"c2","value":"d3","measured":30},
+    {"type":"tangent_circle_distance","a":"c4","b":"c2","side":"far","value":"d4","measured":100},
+    {"type":"distance","a":"p5","b":"p6","driven":true,"measured":70},
+    {"type":"horizontal_distance","a":"p5","b":"p6","driven":true,"measured":49.49747468305832},
+    {"type":"vertical_distance","a":"p5","b":"p6","driven":true,"measured":49.49747468305832}
+  ]},"tolerance":0.000001}},
+  {"comment":"A wider slot keeps its overall length: the end centres come closer (70 to 60)."},
+  {"cmd":"set_parameter","name":"d3","value":40},
+  {"expect":{"query":{"query":"sketch","uid":"F2"},"result":{"solved":true,"conflicts":[],"dimensions":[
+    {"type":"diameter","curve":"c2","value":"d3","measured":40},
+    {"type":"tangent_circle_distance","a":"c4","b":"c2","side":"far","value":"d4","measured":100},
+    {"type":"distance","a":"p5","b":"p6","driven":true,"measured":60},
+    {},
+    {}
+  ]},"tolerance":0.000001}},
+  {"comment":"The overall length, edited after the design was saved and opened again, moves the ends: the end centres follow (60 to 80)."},
+  {"cmd":"set_parameter","name":"d4","value":120},
+  {"expect":{"query":{"query":"sketch","uid":"F2"},"result":{"solved":true,"conflicts":[],"dimensions":[
+    {"type":"diameter","curve":"c2","value":"d3","measured":40},
+    {"type":"tangent_circle_distance","a":"c4","b":"c2","side":"far","value":"d4","measured":120},
+    {"type":"distance","a":"p5","b":"p6","driven":true,"measured":80},
+    {},
+    {}
   ]},"tolerance":0.000001}}
 ]

@@ -24,6 +24,11 @@
 #     unlike the whole design; ui_select's reveal "fit" moves the view
 #     before the next screenshot; view.fit frames only the isolated body;
 #     a Home named view's target and height hold after view.home;
+#   - mitcad#2671 (GitHub mitcad/Mitcad#763): a design saved with an
+#     off-angle, zoomed perspective Home view opens at it, stays there
+#     after the first frame and is where view.home then takes the view; a
+#     design without one opened next is fitted and its view.home is the
+#     default view, not the first design's Home;
 #   - mitcad#1734: with a command panel's drop-down list open, ui_screenshot
 #     of the window takes in the list (a window of its own) over the panel
 #     and its windows names it a popup; once closed it is gone.
@@ -58,6 +63,12 @@ cat > "$WORK/blocks.json" << 'EOF'
 EOF
 "$CLI" run "$WORK/blocks.json" --save "$ALLOWED/sub/blocks.mitcad" > "$WORK/cli.log" 2>&1 ||
   ui_fail "mitcad-cli did not make the design: $(cat "$WORK/cli.log")"
+# The same blocks saved with a Home view off every standard view, in
+# perspective, zoomed onto the second block (mitcad#2671).
+jq '. + [{"cmd": "add_named_view", "name": "Home", "eye": [380, -260, 190], "target": [510, 10, 10],
+  "up": [0, 0, 1], "perspective": true, "height": 30}]' "$WORK/blocks.json" > "$WORK/home.json"
+"$CLI" run "$WORK/home.json" --save "$ALLOWED/sub/home.mitcad" > "$WORK/cli.log" 2>&1 ||
+  ui_fail "mitcad-cli did not make the design with a Home view: $(cat "$WORK/cli.log")"
 
 # ---------------------------------------------------------------------------
 # The bridge: JSON-RPC lines through two FIFOs. mcp_request leaves the answer
@@ -370,6 +381,48 @@ expect '.bytes <= 8192 and .max_bytes == 8192' "a file with max_bytes keeps to i
 mcp_tool model_query "$(jq -cn --arg d "$DOC" '{document: $d, query: {query: "print_thickness", minimum: 6}}')"
 expect '(.result.bodies[0] | has("triangles") | not) and .result.thin_triangles > 0' \
   "print_thickness answers its summary over MCP"
+
+echo "--- A design opens at its saved Home view (mitcad#2671)"
+ui_mark
+mcp_tool document_open '{"path": "sub/home.mitcad", "discard": true}'
+expect '.opened == true and (.path | endswith("/allowed/sub/home.mitcad"))' "the design with a Home view opens"
+DOC=$(jq -r '.document' "$WORK/result.json")
+ui_expect_new "View: opened at the design's home view" "the view takes the saved Home camera on opening"
+# The first frame applies any fit still waiting; the view stays at Home.
+ui_expect_new ": first frame " "the first frame after the open is drawn"
+ui_sync
+mcp_tool ui_camera '{}'
+# The Home view looks from (380, -260, 190) at (510, 10, 10): along
+# (130, 270, -180) / 349.57; a perspective camera keeps its height by its
+# distance, so the eye is checked through the direction.
+expect "$NEAR"' (122200 | sqrt) as $l | .camera.projection == "perspective"
+  and near(.camera.target[0]; 510; 0.01) and near(.camera.target[1]; 10; 0.01) and near(.camera.target[2]; 10; 0.01)
+  and near(.camera.direction[0]; 130 / $l; 1e-4) and near(.camera.direction[1]; 270 / $l; 1e-4)
+  and near(.camera.direction[2]; -180 / $l; 1e-4) and near(.camera.height; 30; 0.01) and .camera.up[2] > 0' \
+  "after the first frame the view is at the saved Home view: direction, target, height, perspective"
+cp "$WORK/result.json" "$WORK/opened-camera.json"
+mcp_tool ui_command "$(jq -cn --arg d "$DOC" '{document: $d, id: "view.home"}')"
+expect "$NEAR"' $o[0].camera as $c | .camera as $h | $h.projection == $c.projection
+  and ([range(3)] | all(near($h.eye[.]; $c.eye[.]; 0.01) and near($h.target[.]; $c.target[.]; 0.01)
+                        and near($h.up[.]; $c.up[.]; 1e-4)))
+  and near($h.height; $c.height; 0.01)' \
+  "Home after opening is the camera the design opened with" --slurpfile o "$WORK/opened-camera.json"
+
+ui_mark
+mcp_tool document_open '{"path": "sub/blocks.mitcad", "discard": true}'
+expect '.opened == true' "a design without a Home view opens next"
+DOC=$(jq -r '.document' "$WORK/result.json")
+ui_expect_new ": first frame " "its first frame is drawn"
+ui_sync
+grep -qF -- "View: opened at the design's home view" < <(tail -n +$((UI_MARK + 1)) "$UI_LOG") &&
+  ui_fail "a design without a Home view opened at a home view"
+mcp_tool ui_camera '{}'
+# Both blocks, 520 mm apart end to end, need far more than the Home's 30 mm.
+expect '.camera.height > 150' "it is fitted: both blocks in sight, not the last design's Home"
+mcp_tool ui_command "$(jq -cn --arg d "$DOC" '{document: $d, id: "view.home"}')"
+expect "$NEAR"' (122200 | sqrt) as $l | .camera.height > 150 and (near(.camera.direction[0]; 130 / $l; 0.01)
+  and near(.camera.direction[1]; 270 / $l; 0.01) | not)' \
+  "its view.home is the default view, not the last design's Home"
 
 echo "--- A picture of the window shows an open list (mitcad#1734)"
 # window_shot name: ui_screenshot of the whole window at its full size; the

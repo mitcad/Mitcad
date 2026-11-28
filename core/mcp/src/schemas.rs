@@ -195,8 +195,9 @@ fn plate_item(with_count: bool) -> Value {
 
 /// A command's schema as written here: `description`, `properties` (its
 /// fields without `cmd`), `required`, `examples` and, where it has its
-/// own, `restrictions`.
-fn spec(name: &str) -> Option<Value> {
+/// own, `restrictions`. The generated API reference reads it too
+/// (mitcad#2606).
+pub(crate) fn spec(name: &str) -> Option<Value> {
     let plate = || json!({"type": "string", "minLength": 1, "description": "A print plate by its id (plate2) or name"});
     let spec = match name {
         "add_feature" => json!({

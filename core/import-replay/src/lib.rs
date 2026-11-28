@@ -252,6 +252,11 @@ pub struct Options {
     /// of other documents a design refers to keep their own coordinates,
     /// which the design's placements of them assume.
     pub upright: bool,
+    /// The name of the document replayed, when it is one the design opened
+    /// refers to (mitcad#2635): each item's trace names it (`item document:
+    /// <name>`), so that the application's progress dialog says whose items
+    /// it counts. None for the design opened.
+    pub document_name: Option<String>,
 }
 
 impl Default for Options {
@@ -281,6 +286,7 @@ impl Default for Options {
             accept_deviations: AcceptDeviations::None,
             commands: None,
             upright: false,
+            document_name: None,
         }
     }
 }
@@ -2089,6 +2095,11 @@ impl<'a, K: ImportKernel> Importer<'a, K> {
         let at = self.report.items.len() - 1;
         // (The application's progress dialog shows it.)
         trace!("item {}: {name}", position + 1);
+        // A document the design opened refers to (mitcad#2635): the dialog
+        // names it.
+        if let Some(document) = &self.options.document_name {
+            trace!("item document: {document}");
+        }
         self.release_memory();
         if let Some(memory) = self.options.progress.as_ref().map(|p| p.memory())
             && !memory.is_empty()

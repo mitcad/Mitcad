@@ -417,6 +417,9 @@ void ViewController::applyImportedSettings(const SettingsBeforeImport& was, cons
     // The Browser rows' spacing (mitcad#2513).
     through<BrowserRowSpacing>(before, {QStringLiteral("browser/rowSpacing")}, [] { return browserRowSpacing(); },
                                [](const BrowserRowSpacing& spacing) { setBrowserRowSpacing(spacing); });
+    // The active component's highlight in the Browser (mitcad#2618).
+    through<bool>(before, {QStringLiteral("browser/highlightActiveComponent")}, [] { return browserHighlightActive(); },
+                  [](const bool& on) { setBrowserHighlightActive(on); });
     const ThemeChoice themeNow = themePreference();
     if (themeNow != was.theme) {
       applyThemePreference(themeNow);

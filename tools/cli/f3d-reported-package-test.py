@@ -30,7 +30,12 @@ in design coordinates. Then:
   joints (kept as as-built joints or left out) are counted (at most
   TOP_NOT_JOINTS_AT_MOST), and the joints that come in as joints over the
   design and its documents (each once, at least JOINTS_AT_LEAST);
-- the import's time per document, printed for the record.
+- the import's time per document, printed for the record;
+- the progress total (mitcad#2635): the items mitcad-cli import-f3d
+  --count-items counts before the import (the application's progress
+  dialog counts against it) equal the items the import replayed, the top
+  design's and each document's once (from the report), in as many
+  designs, and go past the largest design's count.
 
 With --compare-serial the package is imported again with one thread (its
 documents one after another; the first import has four, its documents
@@ -183,6 +188,25 @@ def references(entries):
     return seen
 
 
+def replayed_items(report):
+    """The timeline items an import replayed (mitcad#2635) and the designs
+    it replayed them in: the top design's and those of each document its
+    own import brought in (an entry with its import's time); an entry of a
+    document imported before for another reference has no time, and its
+    documents are the same as that import's, so they are not followed."""
+    items = len(report.get("items", []))
+    designs = 1
+    todo = list(report.get("references", []))
+    while todo:
+        entry = todo.pop(0)
+        if entry.get("seconds") is None:
+            continue
+        items += sum((entry.get("items") or {}).values())
+        designs += 1
+        todo.extend(entry.get("references", []))
+    return items, designs
+
+
 def compare_designs(path, reference_path):
     """What differs between two saved designs: components, occurrences
     (with their placements to 1e-6) and features (uid, name, type,
@@ -304,6 +328,25 @@ def main():
     not_linked = [f"{d.get('name') or d.get('document')}: {d.get('status')} {d.get('note') or ''}"
                   for d in documents.values() if d.get("status") not in ("linked", "found")]
     fail("documents not imported", not_linked)
+
+    # The progress dialog's total (mitcad#2635): the items the import
+    # replays, counted before it (--count-items, as the application's
+    # import process does), equal the items its report has replayed.
+    status, out, err = run([options.cli, "import-f3d", package, "--count-items", "--threads", "4"])
+    if status != 0:
+        fail(f"the item count failed ({status}): {(out + err)[-2000:]}")
+    else:
+        counted = json.loads(out)
+        replayed, imports = replayed_items(report)
+        print(f"note the items counted before the import: {counted['items']} in "
+              f"{len(counted['designs'])} designs; replayed: {replayed} in {imports} designs")
+        if counted["items"] != replayed or len(counted["designs"]) != imports:
+            fail(f"the progress total: {counted['items']} items in {len(counted['designs'])} designs "
+                 f"counted, {replayed} in {imports} designs replayed")
+        largest = max(d["items"] for d in counted["designs"])
+        if counted["items"] <= largest:
+            fail(f"the progress total {counted['items']} is not past the largest design's "
+                 f"{largest} items")
 
     # Light bulbs.
     unknown = [f"{d.get('name')}: {d['light_bulbs']['sketch_bulbs_unknown']} of "

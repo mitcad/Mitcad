@@ -13,7 +13,10 @@
 #      orthographic with the same height.
 #   5. Home, then the cube's front-top edge and its front-right-top corner:
 #      perspective each time.
-#   6. View › Camera › Perspective ends the mode: perspective at Front too.
+#   6. The orientation cube (Follow the View, mitcad#2641): a click on its
+#      top face, drawn orthographic there; an orbit, in its own perspective
+#      again; its top face clicked once more.
+#   7. View › Camera › Perspective ends the mode: perspective at Front too.
 # Run by tools/ui-view-orthographic-faces-test.sh (Linux),
 # tools/ui-windows-view-orthographic-faces-test.ps1 (Windows) and
 # tools/ui-macos-view-orthographic-faces-test.sh (macOS).
@@ -79,9 +82,31 @@ wait-idle
 mark
 click-logged '^Orientation cube front-right-top at '
 wait-log '^Camera direction -0[.]577 0[.]577 -0[.]577 up .* [(]perspective, perspective with orthographic faces[)]$' 30
+wait-log '^Orientation cube top at ' 30
 wait-idle
 
-# 6. Perspective ends the mode: perspective along the front face too.
+# 6. The orientation cube follows the camera (Follow the View, the
+#    default, mitcad#2641): drawn and picked orthographic at the top face,
+#    in its own perspective again once an orbit turns the view off it, and
+#    a click on its top face turns the view there again.
+mark
+click-logged '^Orientation cube top at '
+wait-log '^Camera direction -?0 -?0 -1 up .* [(]orthographic, perspective with orthographic faces[)]$' 30
+wait-log '^Orientation cube outline .*, looking -?0 -?0 -1 [(]orthographic[)], cube follow-view [(]orthographic[)]$' 30
+wait-idle
+mark
+drag 45 50 58 56 middle shift
+wait-log '^Camera direction .* [(]perspective, perspective with orthographic faces[)]$' 30
+wait-log '^Orientation cube outline .*, looking .* [(]perspective[)], cube follow-view [(]perspective[)]$' 30
+wait-log '^Orientation cube top at ' 30
+wait-idle
+mark
+click-logged '^Orientation cube top at '
+wait-log '^Camera direction -?0 -?0 -1 up .* [(]orthographic, perspective with orthographic faces[)]$' 30
+wait-log '^Orientation cube outline .*, looking -?0 -?0 -1 [(]orthographic[)], cube follow-view [(]orthographic[)]$' 30
+wait-idle
+
+# 7. Perspective ends the mode: perspective along the front face too.
 mark
 command view.perspective
 expect-log '^Camera perspective$'

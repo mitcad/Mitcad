@@ -49,7 +49,10 @@
 //! - **Ruled transition** (mitcad#2560, [`ruled_transition`]): for a die
 //!   formed transition laid flat by triangulation, the lines between the
 //!   points at the same share of both profiles' lengths, in bands between
-//!   corners.
+//!   corners; made solid by itself ([`ruled_body`], [`RuledBack`]): each
+//!   band's offset, two bands' offsets at a crease stretched or cut back to
+//!   the line where they meet (found in the planes square to the crease),
+//!   the walls from the front's sides to the back's.
 
 use std::collections::VecDeque;
 use std::f64::consts::{PI, TAU};
@@ -1717,6 +1720,77 @@ pub(super) struct Bend {
     pub radius: f64,
 }
 
+// Corner reliefs where bends meet in a point (mitcad#2576).
+#[path = "lofted_relief.rs"]
+mod relief;
+use relief::{Edge, Outline};
+
+/// How much larger than the least size a corner relief must be (mm), so
+/// that its cut keeps a length between the bends' tangent lines.
+const SPARE: f64 = 0.01;
+
+/// A fold's bend before it is placed (mitcad#2560): its cylinder and the
+/// facets' setbacks.
+#[derive(Debug, Clone, Copy)]
+struct Fold {
+    /// Its ends on the first and the second profile.
+    ends: [V3; 2],
+    /// Its unit direction from the first profile to the second: the
+    /// cylinder's axis.
+    axis: V3,
+    /// Unit directions into the facet before it and the one after it,
+    /// across it.
+    into: [V3; 2],
+    setback: f64,
+    centre: V3,
+    p: V3,
+    q: V3,
+    /// The front's radius.
+    radius: f64,
+    to: f64,
+    /// Its neutral surface's shift ([`Transition::shift`]).
+    shift: f64,
+}
+
+impl Fold {
+    /// A point of its tangent line on the facet before it (0) or after it
+    /// (1): the cylinder's line at its start or its end.
+    fn tangent(&self, side: usize) -> V3 {
+        add(self.ends[0], scale(self.into[side], self.setback))
+    }
+
+    /// The facet before it (0) or after it (1) cut back to it is kept on
+    /// the side of this plane its normal points to.
+    fn setback_plane(&self, side: usize) -> Plane {
+        (self.tangent(side), self.into[side])
+    }
+
+    /// Where its tangent line on a side meets a plane.
+    fn met(&self, side: usize, (origin, normal): Plane) -> Option<V3> {
+        let start = self.tangent(side);
+        let along = dot(self.axis, normal);
+        (along.abs() > 1e-9).then(|| {
+            add(
+                start,
+                scale(self.axis, dot(sub(origin, start), normal) / along),
+            )
+        })
+    }
+
+    fn section(&self, plane: Plane) -> Section {
+        Section {
+            centre: self.centre,
+            axis: self.axis,
+            p: self.p,
+            q: self.q,
+            radius: self.radius,
+            from: 0.0,
+            to: self.to,
+            plane,
+        }
+    }
+}
+
 /// The press brake's transition with its folds made bends of the inside
 /// `radius` (mitcad#2560): at each fold a cylinder strip tangent to the
 /// facets beside it, the facets cut back to where it meets them (the
@@ -1724,18 +1798,21 @@ pub(super) struct Bend {
 /// where its cylinder meets the profiles' `planes`. The front's radius is
 /// `radius` where the fold's inside is on the front, `radius + thickness`
 /// where it is on the back; the bend develops at the K-factor `k` from its
-/// inside. Folds that meet at a point of a profile (a fan's tip) cannot
-/// take bends: they would run into each other there.
+/// inside. Where folds meet in a point of a profile (a fan's tip) a corner
+/// relief of the size `relief` opens about it (mitcad#2576,
+/// `lofted_relief.rs`): the facets meeting there are cut straight across
+/// `relief` from it, and the bends end on those cuts, short of the point.
 pub(super) fn bent(
     t: &Transition,
     radius: f64,
     thickness: f64,
     k: f64,
     planes: [Plane; 2],
+    relief: f64,
 ) -> Result<(Transition, Vec<Bend>), RegionError> {
     let n = t.strips.len();
-    // The bend after strip i, with its front-side shift.
-    let mut after: Vec<Option<(Strip, f64)>> = vec![None; n];
+    // The bend at each fold.
+    let mut folds: Vec<Option<Fold>> = vec![None; t.joins.len()];
     for (i, join) in t.joins.iter().enumerate() {
         if join.angle == 0.0 {
             continue;
@@ -1803,33 +1880,19 @@ pub(super) fn bent(
         let q = unit3(sub(r2, scale(p, dot(r2, p))))
             .ok_or_else(|| RegionError::new("this fold has no angle", &s2))?;
         let to = dot(r2, q).atan2(dot(r2, p));
-        let section = |plane: Plane| Section {
-            centre,
+        folds[i] = Some(Fold {
+            ends: [oa, ob],
             axis: e,
+            into: [u1, u2],
+            setback,
+            centre,
             p,
             q,
             radius: rho,
-            from: 0.0,
             to,
-            plane,
-        };
-        after[i] = Some((
-            Strip {
-                a: Side::Section(section(planes[0])),
-                b: Side::Section(section(planes[1])),
-            },
             shift,
-        ));
+        });
     }
-    let converge = |s: &Strip| {
-        RegionError::new(
-            "folds meet at a point of a profile here (the tip of a three-sided facet): bends of \
-             the rules' bend radius would run into each other there. Fold the transition sharp, \
-             or join profiles whose facets all have four sides (two rectangles, two circles, two \
-             rounded rectangles)",
-            s,
-        )
-    };
     let narrow = |s: &Strip| {
         RegionError::new(
             "this facet is too narrow for the bends on its sides: use fewer facets or a smaller \
@@ -1837,55 +1900,220 @@ pub(super) fn bent(
             s,
         )
     };
-    // A facet's side cut back to the bends' ends on it.
-    let cut =
-        |side: Side, start: Option<V3>, end: Option<V3>, s: &Strip| -> Result<Side, RegionError> {
-            if start.is_none() && end.is_none() {
-                return Ok(side);
+    let large = |s: &Strip| {
+        RegionError::new(
+            "the corner relief is too large here: its cut reaches past the facets and bends that \
+             meet in this point. Make it smaller, or use fewer facets",
+            s,
+        )
+    };
+    let formed = |s: &Strip| {
+        RegionError::new(
+            "only the flat facets of a press brake transition bend: this fold meets a formed \
+             region",
+            s,
+        )
+    };
+    let before = |s: usize| s.checked_sub(1).and_then(|i| folds[i]);
+    let after = |s: usize| folds.get(s).copied().flatten();
+    // The tips where folds with bends meet in a point, and each facet's cut
+    // about those it meets (mitcad#2576).
+    let bent_at: Vec<bool> = folds.iter().map(Option::is_some).collect();
+    let tips = relief::tips(&t.strips, &bent_at);
+    let mut cuts: Vec<Vec<relief::Cut>> = vec![Vec::new(); n];
+    for (index, tip) in tips.iter().enumerate() {
+        for &s in &tip.strips {
+            let strip = &t.strips[s];
+            if !strip.flat() {
+                return Err(formed(strip));
             }
-            match side {
-                Side::Point(_) => Err(converge(s)),
-                Side::Segment(a0, a1) => {
-                    let d = sub(a1, a0);
-                    let l2 = dot(d, d);
-                    let at = |x: V3| dot(sub(x, a0), d) / l2;
-                    let (t0, t1) = (start.map_or(0.0, at), end.map_or(1.0, at));
-                    if (t1 - t0) * l2.sqrt() <= NEAR {
-                        return Err(narrow(s));
-                    }
-                    Ok(Side::Segment(start.unwrap_or(a0), end.unwrap_or(a1)))
+            let cut =
+                relief::facet_cut(strip, index, tip.point, relief).ok_or_else(|| large(strip))?;
+            cuts[s].push(cut);
+        }
+    }
+    // Each facet beside a bend or a tip as its outline, cut back to the
+    // bends beside it.
+    let mut outlines: Vec<Option<Outline>> = Vec::with_capacity(n);
+    for (s, strip) in t.strips.iter().enumerate() {
+        if before(s).is_none() && after(s).is_none() && cuts[s].is_empty() {
+            outlines.push(None);
+            continue;
+        }
+        let mut o = relief::outline_of(strip);
+        if let Some(f) = before(s) {
+            o = relief::clipped(&o, f.setback_plane(1), Edge::Start);
+        }
+        if let Some(f) = after(s) {
+            o = relief::clipped(&o, f.setback_plane(0), Edge::End);
+        }
+        outlines.push(Some(o));
+    }
+    // Every bend through a tip must reach the relief's cut on both facets
+    // beside it: the end of each tangent line towards the tip is cut away.
+    let mut needed: Option<(f64, usize)> = None;
+    for (index, tip) in tips.iter().enumerate() {
+        let end = usize::from(tip.second);
+        for &s in &tip.strips {
+            let (Some(o), Some(cut)) = (&outlines[s], cuts[s].iter().find(|c| c.tip == index))
+            else {
+                continue;
+            };
+            for (edge, fold) in [(Edge::Start, before(s)), (Edge::End, after(s))] {
+                let Some(f) = fold else {
+                    continue;
+                };
+                if !near(f.ends[end], tip.point) {
+                    continue;
                 }
-                _ => Err(narrow(s)),
+                if let Some(v) = relief::edge_end(o, edge, tip.second) {
+                    let size = cut.size_through(tip.point, v);
+                    if needed.is_none_or(|(most, _)| size > most) {
+                        needed = Some((size, s));
+                    }
+                }
+            }
+        }
+    }
+    if let Some((size, s)) = needed
+        && relief < size + SPARE
+    {
+        let least = ((size + SPARE) * 10.0).ceil() / 10.0;
+        return Err(RegionError::new(
+            format!(
+                "the corner relief where these bends meet in a point is too small: they would run \
+                 into each other before its cut. Make it at least {:.1} mm",
+                least
+            ),
+            &t.strips[s],
+        ));
+    }
+    for (s, o) in outlines.iter_mut().enumerate() {
+        if let Some(o) = o {
+            for cut in &cuts[s] {
+                let edge = if tips[cut.tip].second {
+                    Edge::Second
+                } else {
+                    Edge::First
+                };
+                *o = relief::clipped(o, cut.plane, edge);
+            }
+        }
+    }
+    // The facets' corners along both profiles' sides (and the reliefs'
+    // cuts there).
+    let mut sides: Vec<Option<(Vec<V3>, Vec<V3>)>> = Vec::with_capacity(n);
+    for (s, strip) in t.strips.iter().enumerate() {
+        let Some(o) = &outlines[s] else {
+            sides.push(None);
+            continue;
+        };
+        if !strip.flat() {
+            return Err(formed(strip));
+        }
+        let refused = || {
+            if cuts[s].is_empty() {
+                narrow(strip)
+            } else {
+                large(strip)
             }
         };
+        let (first, second) = relief::chains(o).ok_or_else(refused)?;
+        // A side with a length keeps one.
+        for (side, chain) in [(strip.a, &first), (strip.b, &second)] {
+            if !side.is_point() && relief::length_of(chain) <= NEAR {
+                return Err(refused());
+            }
+        }
+        sides.push(Some((first, second)));
+    }
+    // Each bend's ends on the profiles' planes or on a relief's cuts,
+    // where the facets beside it end.
+    let mut made: Vec<Option<Strip>> = vec![None; t.joins.len()];
+    for (i, fold) in folds.iter().enumerate() {
+        let Some(f) = fold else {
+            continue;
+        };
+        let s2 = &t.strips[i + 1];
+        let refused = || {
+            if cuts[i].is_empty() && cuts[i + 1].is_empty() {
+                narrow(s2)
+            } else {
+                large(s2)
+            }
+        };
+        let end_plane = |end: usize| -> Option<Plane> {
+            let Some(index) = tips
+                .iter()
+                .position(|tip| usize::from(tip.second) == end && near(tip.point, f.ends[end]))
+            else {
+                return Some(planes[end]);
+            };
+            let cut_of = |s: usize| cuts[s].iter().find(|c| c.tip == index).map(|c| c.plane);
+            relief::bend_end(f.met(0, cut_of(i)?)?, f.met(1, cut_of(i + 1)?)?, f.axis)
+        };
+        let (Some(plane_a), Some(plane_b)) = (end_plane(0), end_plane(1)) else {
+            return Err(refused());
+        };
+        let (a, b) = (f.section(plane_a), f.section(plane_b));
+        // Its lines run from the first profile's side to the second's.
+        if [0.0, 0.5, 1.0]
+            .iter()
+            .any(|&x| dot(sub(b.point(x), a.point(x)), f.axis) <= NEAR)
+        {
+            return Err(refused());
+        }
+        // It ends where the facets beside it end: the same points.
+        let fit = |chain: &mut Vec<V3>, last: bool, p: V3| {
+            let at = if last { chain.len() - 1 } else { 0 };
+            let fits = distance(chain[at], p) <= NEAR;
+            if fits {
+                chain[at] = p;
+            }
+            fits
+        };
+        let (here, next) = sides.split_at_mut(i + 1);
+        let fits = match (here[i].as_mut(), next[0].as_mut()) {
+            (Some((a1, b1)), Some((a2, b2))) => {
+                fit(a1, true, a.point(0.0))
+                    && fit(b1, true, b.point(0.0))
+                    && fit(a2, false, a.point(1.0))
+                    && fit(b2, false, b.point(1.0))
+            }
+            _ => false,
+        };
+        if !fits {
+            return Err(refused());
+        }
+        made[i] = Some(Strip {
+            a: Side::Section(a),
+            b: Side::Section(b),
+        });
+    }
     let mut strips = Vec::with_capacity(2 * n);
     let mut shift = Vec::with_capacity(2 * n);
     let mut bends = Vec::new();
-    for (i, s) in t.strips.iter().enumerate() {
-        let before = if i > 0 { after[i - 1] } else { None };
-        let next = after[i];
-        let a = cut(
-            s.a,
-            before.map(|(b, _)| b.a.point(1.0)),
-            next.map(|(b, _)| b.a.point(0.0)),
-            s,
-        )?;
-        let b = cut(
-            s.b,
-            before.map(|(b, _)| b.b.point(1.0)),
-            next.map(|(b, _)| b.b.point(0.0)),
-            s,
-        )?;
-        strips.push(Strip { a, b });
-        shift.push(0.0);
-        if let Some((bend, sh)) = next {
+    for (s, strip) in t.strips.iter().enumerate() {
+        match &sides[s] {
+            None => {
+                strips.push(*strip);
+                shift.push(0.0);
+            }
+            Some((first, second)) => {
+                for piece in relief::strips_between(first, second) {
+                    strips.push(piece);
+                    shift.push(0.0);
+                }
+            }
+        }
+        if let (Some(bend), Some(f)) = (made.get(s).copied().flatten(), after(s)) {
             bends.push(Bend {
                 strip: strips.len(),
-                join: t.joins[i],
+                join: t.joins[s],
                 radius,
             });
             strips.push(bend);
-            shift.push(sh);
+            shift.push(f.shift);
         }
     }
     let mut out = meeting(strips, t.side)?;
@@ -2922,10 +3150,45 @@ pub(super) fn ruled_transition(
     Ok(out)
 }
 
+/// The poles of a cubic through stations with their derivatives (by the
+/// fraction from the first station to the last) whose inner knots are
+/// twice, of [`smooth_knots`]: the curve of [`hermite_poles`], continuous in
+/// its first derivative in the knots as well as in its shape. Each
+/// station's own pole is left out, the midpoint of the poles beside it.
+fn smooth_poles(points: &[V3], derivatives: &[V3]) -> Vec<V3> {
+    let n = points.len() - 1;
+    let h = 1.0 / n as f64;
+    let mut poles = Vec::with_capacity(2 * n + 2);
+    poles.push(points[0]);
+    for i in 0..=n {
+        if i > 0 {
+            poles.push(add(points[i], scale(derivatives[i], -h / 3.0)));
+        }
+        if i < n {
+            poles.push(add(points[i], scale(derivatives[i], h / 3.0)));
+        }
+    }
+    poles.push(points[n]);
+    poles
+}
+
+/// The knots of [`smooth_poles`]: 0 to n, the inner ones twice.
+fn smooth_knots(n: usize) -> (Vec<f64>, Vec<u32>) {
+    let knots = (0..=n).map(|i| i as f64).collect();
+    let mut mults = vec![2; n + 1];
+    mults[0] = 4;
+    mults[n] = 4;
+    (knots, mults)
+}
+
 /// The front surface of a ruled transition as patches: a band between two
 /// straight runs bilinear, others cubic along the profiles through
 /// `SPANS + 1` exact stations with their tangents and straight across.
-/// Faces `<feature>:lofted_front(i)`.
+/// Faces `<feature>:lofted_front(i)`. The cubic's inner knots are twice
+/// ([`smooth_knots`]): the surface is continuous in its first derivative,
+/// as the kernel's offset that makes it solid needs (it refuses a surface
+/// whose knots repeat as often as its degree, which is continuous only in
+/// its points by its knots, mitcad#2560).
 pub(super) fn ruled_patches(bands: &[RuledBand], feature: FeatureUid) -> Vec<SurfacePatch> {
     let name = |i: usize| FaceName::new(feature, "lofted_front", Some(RoleKey::Index(i as u32)));
     bands
@@ -2948,13 +3211,469 @@ pub(super) fn ruled_patches(bands: &[RuledBand], feature: FeatureUid) -> Vec<Sur
             let pb: Vec<V3> = (0..=SPANS).map(|k| band.b.point(f(k))).collect();
             let da: Vec<V3> = (0..=SPANS).map(|k| band.a.derivative(f(k))).collect();
             let db: Vec<V3> = (0..=SPANS).map(|k| band.b.derivative(f(k))).collect();
-            ruled(
-                name(i),
-                &hermite_poles(&pa, &da, add, scale),
-                &hermite_poles(&pb, &db, add, scale),
-            )
+            let (first, second) = (smooth_poles(&pa, &da), smooth_poles(&pb, &db));
+            let (u_knots, u_mults) = smooth_knots(SPANS);
+            SurfacePatch {
+                face: name(i),
+                u_degree: 3,
+                v_degree: 1,
+                nu: first.len(),
+                nv: 2,
+                poles: first
+                    .iter()
+                    .zip(&second)
+                    .flat_map(|(p, q)| [*p, *q])
+                    .collect(),
+                u_knots,
+                u_mults,
+                v_knots: vec![0.0, 1.0],
+                v_mults: vec![2, 2],
+            }
         })
         .collect()
+}
+
+/// The steps of a ruled transition's back across it, from the first
+/// profile to the second (mitcad#2560).
+const BACK_SPANS: usize = 16;
+/// The step of the differences that give a ruled transition's back its
+/// derivatives (fractions of a band).
+const BACK_STEP: f64 = 1e-4;
+/// The steps a crease's line on the back is followed in, from the first
+/// profile to the second.
+const CREASE_STEPS: usize = 512;
+/// The sine of the angle between two bands' normals below which they meet
+/// smoothly there.
+const SMOOTH: f64 = 1e-7;
+
+const NO_NORMAL: &str = "the profiles meet here: a lofted flange needs room between them";
+const TOO_THICK: &str =
+    "the sheet is too thick for the folds of its transition, or a fold turns back on itself";
+
+/// Where two bands' backs meet at the crease between them: at each place
+/// `w` along the crease (0 at the first profile, 1 at the second), the
+/// fractions along and across of the earlier band's back and of the later
+/// one's.
+enum Crease {
+    /// The bands meet smoothly all along: their backs meet at their ends.
+    Smooth,
+    /// Their backs' line of intersection, followed in `CREASE_STEPS` steps.
+    Line(Vec<[f64; 4]>),
+}
+
+/// The back of a ruled transition made solid (mitcad#2560): each band's
+/// front moved `depth` along its normals (its offset, exact), and where
+/// two bands meet at an angle (a crease along the ruling from a corner),
+/// both backs stretched where they part, or cut back where they cross, to
+/// the line where they meet (as an offset with sharp joins makes it),
+/// found in the plane square to the crease at each place along it; a
+/// crease that fades out to a smooth join meets there at the bands' own
+/// ends. Built by the transition itself: the kernel's offset cannot offset
+/// faces along a crease that fades out to a smooth join (as the creases
+/// from one profile's corners to a smooth curve of the other do).
+pub(super) struct RuledBack<'a> {
+    bands: &'a [RuledBand],
+    depth: f64,
+    creases: Vec<Crease>,
+}
+
+impl<'a> RuledBack<'a> {
+    /// `depth`: the thickness, negative against the bands' normals.
+    pub fn new(bands: &'a [RuledBand], depth: f64) -> Result<Self, String> {
+        let mut back = Self {
+            bands,
+            depth,
+            creases: Vec::new(),
+        };
+        for k in 0..bands.len().saturating_sub(1) {
+            let crease = back.follow(k)?;
+            back.creases.push(crease);
+        }
+        Ok(back)
+    }
+
+    /// Band `i`'s front moved along its normal, at `f` along it (past its
+    /// ends too) and `v` across.
+    fn offset(&self, i: usize, f: f64, v: f64) -> Result<V3, String> {
+        let band = &self.bands[i];
+        let n = band.normal(f, v).ok_or(NO_NORMAL)?;
+        Ok(add(band.point(f, v), scale(n, self.depth)))
+    }
+
+    /// Whether bands `k` and `k + 1` meet smoothly `v` across.
+    fn smooth(&self, k: usize, v: f64) -> Result<bool, String> {
+        let a = self.bands[k].normal(1.0, v).ok_or(NO_NORMAL)?;
+        let b = self.bands[k + 1].normal(0.0, v).ok_or(NO_NORMAL)?;
+        Ok(dot(a, b) > 0.0 && norm(cross(a, b)) <= SMOOTH)
+    }
+
+    /// The crease between bands `k` and `k + 1` followed along, each
+    /// place from the one before.
+    fn follow(&self, k: usize) -> Result<Crease, String> {
+        let (start, end) = (self.smooth(k, 0.0)?, self.smooth(k, 1.0)?);
+        if start && end && self.smooth(k, 0.5)? {
+            return Ok(Crease::Smooth);
+        }
+        let mut line: Vec<[f64; 4]> = Vec::with_capacity(CREASE_STEPS + 1);
+        for m in 0..=CREASE_STEPS {
+            let w = m as f64 / CREASE_STEPS as f64;
+            let x = if (m == 0 && start) || (m == CREASE_STEPS && end) {
+                // A smooth end: the backs meet at the bands' ends.
+                [1.0, w, 0.0, w]
+            } else {
+                let guess = match line.len() {
+                    0 => [1.0, w, 0.0, w],
+                    1 => line[0],
+                    n => {
+                        let (a, b) = (line[n - 2], line[n - 1]);
+                        [0, 1, 2, 3].map(|c| 2.0 * b[c] - a[c])
+                    }
+                };
+                self.meet(k, w, guess)?
+            };
+            line.push(x);
+        }
+        Ok(Crease::Line(line))
+    }
+
+    /// Where the backs of bands `k` and `k + 1` meet in the plane square to
+    /// the crease at `w` along it, by Newton's method from `guess`: the
+    /// fractions along and across of both.
+    fn meet(&self, k: usize, w: f64, guess: [f64; 4]) -> Result<[f64; 4], String> {
+        let band = &self.bands[k];
+        let at = band.point(1.0, w);
+        let along = unit3(sub(band.b.point(1.0), band.a.point(1.0))).ok_or(NO_NORMAL)?;
+        let residual = |x: [f64; 4]| -> Result<[f64; 4], String> {
+            let p = self.offset(k, x[0], x[1])?;
+            let q = self.offset(k + 1, x[2], x[3])?;
+            let d = sub(p, q);
+            Ok([d[0], d[1], d[2], dot(sub(p, at), along)])
+        };
+        let size = |r: [f64; 4]| r.iter().map(|c| c * c).sum::<f64>().sqrt();
+        let mut x = guess;
+        for _ in 0..60 {
+            let r = residual(x)?;
+            if size(r) <= 1e-13 {
+                return Ok(x);
+            }
+            let h = 1e-7;
+            let mut jacobian = [[0.0; 4]; 4];
+            for c in 0..4 {
+                let (mut plus, mut minus) = (x, x);
+                plus[c] += h;
+                minus[c] -= h;
+                let (rp, rm) = (residual(plus)?, residual(minus)?);
+                for (row, (p, m)) in jacobian.iter_mut().zip(rp.iter().zip(&rm)) {
+                    row[c] = (p - m) / (2.0 * h);
+                }
+            }
+            let step = solve4(jacobian, r).ok_or(TOO_THICK)?;
+            for (xc, sc) in x.iter_mut().zip(&step) {
+                *xc -= sc;
+            }
+            if x.iter().any(|c| !(-0.5..=1.5).contains(c)) {
+                return Err(TOO_THICK.into());
+            }
+            // Down to the rounding of the points: the step itself.
+            if size(step) <= 1e-15 {
+                break;
+            }
+        }
+        if size(residual(x)?) <= 1e-8 {
+            Ok(x)
+        } else {
+            Err(TOO_THICK.into())
+        }
+    }
+
+    /// Where crease `k`'s backs meet at `w` along it.
+    fn crease_at(&self, k: usize, w: f64) -> Result<[f64; 4], String> {
+        match &self.creases[k] {
+            Crease::Smooth => Ok([1.0, w, 0.0, w]),
+            Crease::Line(line) => {
+                let at = w.clamp(0.0, 1.0) * CREASE_STEPS as f64;
+                let m = (at.floor() as usize).min(CREASE_STEPS - 1);
+                let t = at - m as f64;
+                if t == 0.0 {
+                    return Ok(line[m]);
+                }
+                if t == 1.0 {
+                    return Ok(line[m + 1]);
+                }
+                let guess = [0, 1, 2, 3].map(|c| line[m][c] + (line[m + 1][c] - line[m][c]) * t);
+                self.meet(k, w, guess)
+            }
+        }
+    }
+
+    /// Band `i`'s back's ends at `w` along it: the fractions along and
+    /// across of the band where it begins and where it ends.
+    pub fn ends(&self, i: usize, w: f64) -> Result<([f64; 2], [f64; 2]), String> {
+        let lo = if i == 0 {
+            [0.0, w]
+        } else {
+            let x = self.crease_at(i - 1, w)?;
+            [x[2], x[3]]
+        };
+        let hi = if i + 1 == self.bands.len() {
+            [1.0, w]
+        } else {
+            let x = self.crease_at(i, w)?;
+            [x[0], x[1]]
+        };
+        if hi[0] - lo[0] <= 1e-6 {
+            return Err(TOO_THICK.into());
+        }
+        Ok((lo, hi))
+    }
+
+    /// Band `i`'s back at `s` (0 to 1) between its ends at `w` along the
+    /// creases (0 at the first profile, 1 at the second): the point, and
+    /// where on the band's front it stands. For checks: the body's patches
+    /// sample the backs through [`BackGrid`].
+    #[cfg(test)]
+    pub fn place(&self, i: usize, s: f64, w: f64) -> Result<(V3, [f64; 2]), String> {
+        let (lo, hi) = self.ends(i, w)?;
+        let (f, v) = (lo[0] + (hi[0] - lo[0]) * s, lo[1] + (hi[1] - lo[1]) * s);
+        Ok((self.offset(i, f, v)?, [f, v]))
+    }
+
+    /// Band `i`'s back at `s` between its ends and `w` along the creases
+    /// (for checks).
+    #[cfg(test)]
+    pub fn point(&self, i: usize, s: f64, w: f64) -> Result<V3, String> {
+        Ok(self.place(i, s, w)?.0)
+    }
+}
+
+/// The solution of `a x = b` (4 by 4, partial pivoting); none when `a` is
+/// singular.
+fn solve4(mut a: [[f64; 4]; 4], mut b: [f64; 4]) -> Option<[f64; 4]> {
+    for c in 0..4 {
+        let pivot = (c..4).max_by(|&i, &j| a[i][c].abs().total_cmp(&a[j][c].abs()))?;
+        if a[pivot][c].abs() <= 1e-300 {
+            return None;
+        }
+        a.swap(c, pivot);
+        b.swap(c, pivot);
+        for r in c + 1..4 {
+            let factor = a[r][c] / a[c][c];
+            let above = a[c];
+            for (x, y) in a[r].iter_mut().zip(&above).skip(c) {
+                *x -= factor * y;
+            }
+            b[r] -= factor * b[c];
+        }
+    }
+    let mut x = [0.0; 4];
+    for c in (0..4).rev() {
+        let known: f64 = (c + 1..4).map(|k| a[c][k] * x[k]).sum();
+        x[c] = (b[c] - known) / a[c][c];
+    }
+    Some(x)
+}
+
+/// A band's back sampled at the stations of its patch: points and their
+/// derivatives by `s` (along, 0 to 1) and `w` (along the creases, across
+/// the band), and the twist.
+struct BackGrid {
+    points: Vec<Vec<V3>>,
+    ds: Vec<Vec<V3>>,
+    dv: Vec<Vec<V3>>,
+    dsv: Vec<Vec<V3>>,
+}
+
+impl BackGrid {
+    fn new(back: &RuledBack<'_>, i: usize) -> Result<Self, String> {
+        let h = BACK_STEP;
+        let mut grid = Self {
+            points: Vec::new(),
+            ds: Vec::new(),
+            dv: Vec::new(),
+            dsv: Vec::new(),
+        };
+        for l in 0..=BACK_SPANS {
+            let w = l as f64 / BACK_SPANS as f64;
+            // The derivative across from three places a step apart: about
+            // w inside, from it into the band at the profiles (the backs'
+            // ends are followed between them only). `here` is w's place.
+            let (offsets, weights, here): ([f64; 3], [f64; 3], usize) = if l == 0 {
+                ([0.0, h, 2.0 * h], [-1.5 / h, 2.0 / h, -0.5 / h], 0)
+            } else if l == BACK_SPANS {
+                ([-2.0 * h, -h, 0.0], [0.5 / h, -2.0 / h, 1.5 / h], 2)
+            } else {
+                ([-h, 0.0, h], [-0.5 / h, 0.0, 0.5 / h], 1)
+            };
+            let ends = [
+                back.ends(i, w + offsets[0])?,
+                back.ends(i, w + offsets[1])?,
+                back.ends(i, w + offsets[2])?,
+            ];
+            let at = |s: f64, k: usize| -> Result<V3, String> {
+                let (lo, hi) = ends[k];
+                back.offset(i, lo[0] + (hi[0] - lo[0]) * s, lo[1] + (hi[1] - lo[1]) * s)
+            };
+            let across = |s: f64| -> Result<V3, String> {
+                let mut sum = [0.0; 3];
+                for (k, weight) in weights.iter().enumerate() {
+                    sum = add(sum, scale(at(s, k)?, *weight));
+                }
+                Ok(sum)
+            };
+            let (mut points, mut ds, mut dv, mut dsv) =
+                (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+            for k in 0..=SPANS {
+                let s = k as f64 / SPANS as f64;
+                points.push(at(s, here)?);
+                ds.push(scale(sub(at(s + h, here)?, at(s - h, here)?), 0.5 / h));
+                dv.push(across(s)?);
+                dsv.push(scale(sub(across(s + h)?, across(s - h)?), 0.5 / h));
+            }
+            grid.points.push(points);
+            grid.ds.push(ds);
+            grid.dv.push(dv);
+            grid.dsv.push(dsv);
+        }
+        Ok(grid)
+    }
+
+    /// The back across at station `k` along: its points and their
+    /// derivatives across.
+    fn column(&self, k: usize) -> (Vec<V3>, Vec<V3>) {
+        (
+            self.points.iter().map(|row| row[k]).collect(),
+            self.dv.iter().map(|row| row[k]).collect(),
+        )
+    }
+
+    /// The patch: bicubic through the stations with their derivatives
+    /// and twists, its inner knots twice both ways.
+    fn patch(&self, face: FaceName) -> SurfacePatch {
+        // A pole's station and side: before it (-1), on it (0, at the
+        // ends) or after it (1), as smooth_poles orders them.
+        let entries = |n: usize| -> Vec<(usize, f64)> {
+            let mut out = vec![(0, 0.0)];
+            for i in 0..=n {
+                if i > 0 {
+                    out.push((i, -1.0));
+                }
+                if i < n {
+                    out.push((i, 1.0));
+                }
+            }
+            out.push((n, 0.0));
+            out
+        };
+        let (hs, hv) = (1.0 / SPANS as f64, 1.0 / BACK_SPANS as f64);
+        let (along, across) = (entries(SPANS), entries(BACK_SPANS));
+        let mut poles = Vec::with_capacity(along.len() * across.len());
+        for &(k, su) in &along {
+            for &(l, sv) in &across {
+                let mut p = self.points[l][k];
+                p = add(p, scale(self.ds[l][k], su * hs / 3.0));
+                p = add(p, scale(self.dv[l][k], sv * hv / 3.0));
+                p = add(p, scale(self.dsv[l][k], su * sv * hs * hv / 9.0));
+                poles.push(p);
+            }
+        }
+        let (u_knots, u_mults) = smooth_knots(SPANS);
+        let (v_knots, v_mults) = smooth_knots(BACK_SPANS);
+        SurfacePatch {
+            face,
+            u_degree: 3,
+            v_degree: 3,
+            nu: along.len(),
+            nv: across.len(),
+            poles,
+            u_knots,
+            u_mults,
+            v_knots,
+            v_mults,
+        }
+    }
+}
+
+/// A patch ruled between two curves of [`smooth_poles`] of the same spans.
+fn smooth_ruled(face: FaceName, first: &[V3], second: &[V3]) -> SurfacePatch {
+    let (knots, mults) = smooth_knots((first.len() - 2) / 2);
+    SurfacePatch {
+        face,
+        u_degree: 3,
+        v_degree: 1,
+        nu: first.len(),
+        nv: 2,
+        poles: first
+            .iter()
+            .zip(second)
+            .flat_map(|(p, q)| [*p, *q])
+            .collect(),
+        u_knots: knots,
+        u_mults: mults,
+        v_knots: vec![0.0, 1.0],
+        v_mults: vec![2, 2],
+    }
+}
+
+/// The patches of a ruled transition made solid `depth` along its bands'
+/// normals (negative: against them), mitcad#2560: the fronts of
+/// [`ruled_patches`], the backs of [`RuledBack`] (two bands' backs meeting
+/// along the line where they meet, the same curve of both), the walls along
+/// both profiles (from the front's side to the back's, two bands' walls
+/// meeting along the line from the corner to where their backs meet) and
+/// across the first and last rulings. Faces `<feature>:lofted_front(i)`,
+/// `lofted_back(i)`, `lofted_first(i)`, `lofted_second(i)`,
+/// `lofted_start(0)` and `lofted_end(0)`.
+pub(super) fn ruled_body(
+    bands: &[RuledBand],
+    depth: f64,
+    feature: FeatureUid,
+) -> Result<Vec<SurfacePatch>, String> {
+    let name = |role: &str, i: usize| FaceName::new(feature, role, Some(RoleKey::Index(i as u32)));
+    let back = RuledBack::new(bands, depth)?;
+    let grids = (0..bands.len())
+        .map(|i| BackGrid::new(&back, i))
+        .collect::<Result<Vec<_>, String>>()?;
+    let mut out = ruled_patches(bands, feature);
+    let stations = |f: &dyn Fn(f64) -> V3, n: usize| -> Vec<V3> {
+        (0..=n).map(|k| f(k as f64 / n as f64)).collect()
+    };
+    let last = bands.len() - 1;
+    for (i, (band, grid)) in bands.iter().zip(&grids).enumerate() {
+        out.push(grid.patch(name("lofted_back", i)));
+        // The walls along the profiles: the front's side to the back's.
+        for (role, run, row) in [
+            ("lofted_first", &band.a, 0),
+            ("lofted_second", &band.b, BACK_SPANS),
+        ] {
+            let front = smooth_poles(
+                &stations(&|f| run.point(f), SPANS),
+                &stations(&|f| run.derivative(f), SPANS),
+            );
+            out.push(smooth_ruled(
+                name(role, i),
+                &front,
+                &smooth_poles(&grid.points[row], &grid.ds[row]),
+            ));
+        }
+        // The walls across the first and the last ruling.
+        for (role, end, k) in [("lofted_start", 0.0, 0), ("lofted_end", 1.0, SPANS)] {
+            if (k == 0 && i != 0) || (k == SPANS && i != last) {
+                continue;
+            }
+            let ruling = sub(band.b.point(end), band.a.point(end));
+            let front = smooth_poles(
+                &stations(&|v| band.point(end, v), BACK_SPANS),
+                &[ruling; BACK_SPANS + 1],
+            );
+            let (points, dv) = grid.column(k);
+            out.push(smooth_ruled(
+                name(role, 0),
+                &front,
+                &smooth_poles(&points, &dv),
+            ));
+        }
+    }
+    Ok(out)
 }
 
 /// A press-brake transition's facets: the area of each flat band at the

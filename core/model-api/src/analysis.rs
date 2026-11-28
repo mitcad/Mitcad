@@ -202,6 +202,10 @@ pub(super) struct ShownExplode {
 pub(super) struct InterferenceQuery {
     #[serde(default)]
     bodies: Vec<BodyUid>,
+    /// A kept interference check (mitcad#2664) by its name: its bodies,
+    /// every body at the marker when it has none.
+    #[serde(default)]
+    name: Option<String>,
     /// mm³; smaller overlaps are not reported.
     #[serde(default = "min_volume")]
     min_volume: f64,
@@ -1363,7 +1367,30 @@ impl<K: Kernel> AnalysisOps<K> for Document<K> {
     }
 
     fn interference_json(&self, query: &InterferenceQuery) -> Result<Value, ApiError> {
-        let bodies = self.chosen_bodies(&query.bodies)?;
+        // A kept check's bodies (mitcad#2664), or why they are not there.
+        let kept;
+        let uids: &[BodyUid] = match &query.name {
+            Some(name) => {
+                if !query.bodies.is_empty() {
+                    return Err(ApiError(
+                        "give a kept interference check's name or the bodies, not both".to_owned(),
+                    ));
+                }
+                let analysis = self
+                    .analyses()
+                    .iter()
+                    .find(|a| &a.name == name)
+                    .ok_or_else(|| ApiError(format!("there is no analysis {name}")))?;
+                let mitcad_model::AnalysisDef::Interference(def) = &analysis.def else {
+                    return Err(ApiError(format!("{name} is not an interference check")));
+                };
+                self.interference_check(def).map_err(ApiError)?;
+                kept = def.bodies.clone();
+                &kept
+            }
+            None => &query.bodies,
+        };
+        let bodies = self.chosen_bodies(uids)?;
         let shapes: Vec<&K::Shape> = bodies.iter().map(|b| b.shape).collect();
         // In a model job (a live MCP query, mitcad#2540) the job's Cancel
         // stops the pairs' booleans and the query answers that it was
@@ -1395,7 +1422,7 @@ impl<K: Kernel> AnalysisOps<K> for Document<K> {
             })
             .collect();
         let mut answer = json!({"bodies": bodies.len(), "pairs": pairs});
-        if let Some(warning) = interference_warning(query.bodies.is_empty(), bodies.len()) {
+        if let Some(warning) = interference_warning(uids.is_empty(), bodies.len()) {
             answer["warning"] = json!(warning);
         }
         Ok(answer)

@@ -62,3 +62,6 @@ mod isoparametric_curve_tests;
 // A mirrored or patterned cosmetic Thread feature keeps its thread
 // (mitcad#2537).
 mod mirrored_thread_tests;
+// Thin walls along open and closed splines and chains with splines
+// (mitcad#2594).
+mod thin_spline_tests;

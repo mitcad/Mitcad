@@ -66,7 +66,7 @@ void registerSketchCommands(CommandRegistry& registry, sketch::SketchController&
 // The constraint commands' ids, in the sketch palette's order.
 QStringList sketchConstraintCommands();
 
-// SHEET METAL (mitcad#210), in the menu's sections (mitcad#1778): Sheet
+// SHEET PARTS (mitcad#210, mitcad#2602), in the menu's sections (mitcad#1778): Sheet
 // Rules and the main window's `editRules` (Edit Sheet Rules); Face,
 // Flange; Bend, Fold, Corner Relief; Corner Round, Corner Chamfer, Sheet
 // Cut; Unfold, Refold, Flat Pattern and the main window's `showFlat` (Show

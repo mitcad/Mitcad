@@ -14,7 +14,7 @@
 #      800 tan 5 deg) mm3, as the edge's direction runs.
 #   4. The top pushed down 30 mm: the model refuses it, the panel says why
 #      in red, OK is refused.
-# Move Face has a shortcut of the test's own (F9): the command search's
+# Move Face has a shortcut of the test's own (F12): the command search's
 # popup closes at once in session 0; Move Type is chosen with the wheel.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-move-face-test.ps1 [-App build\dev\mitcad.exe] [-Out dir] [-QtBin dir]
@@ -25,7 +25,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{ 'solid.move_face' = 'F9' } -StepPause 0
+Ui-Init $App $Out $QtBin @{ 'solid.move_face' = 'F12' } -StepPause 0
 
 $cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
   ForEach-Object { Join-Path (Split-Path $script:UiApp) $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
@@ -83,7 +83,7 @@ Ui-Step 'fit (F6)'                       { Ui-Key 'F6' }
 
 Write-Host '--- 1. The end face pushed out 5 mm'
 Ui-Mark
-Ui-Step 'move face (F9)'                 { Ui-Key 'F9' }
+Ui-Step 'move face (F12)'                 { Ui-Key 'F12' }
 Ui-ExpectNew 'Command Move Face started' 'Move Face started'
 Ui-ExpectNew 'Pick places:' 'it logs where its faces are'
 Ui-Step 'pick the end face at x = 60'    { Ui-ClickPick "face F2.b0/$right" }
@@ -118,7 +118,7 @@ Expect-Volume '[0-9.]+' 56000 'the block 70 long'
 Write-Host '--- 3. The top tilted 5 degrees about its front edge'
 Ui-Step 'fit (F6)'                       { Ui-Key 'F6' }
 Ui-Mark
-Ui-Step 'move face (F9)'                 { Ui-Key 'F9' }
+Ui-Step 'move face (F12)'                 { Ui-Key 'F12' }
 Ui-ExpectNew 'Pick places:' 'it logs where its faces are'
 Ui-Step 'pick the top'                   { Ui-ClickPick "face F2.b0/$top" }
 Ui-ExpectLog "Move Face Faces: 1 face [face $top of F2.b0]" 'the top picked'
@@ -147,7 +147,7 @@ Write-Host "ok   the top tilted about its front edge: $v mm3"
 
 Write-Host '--- 4. A motion the neighbours cannot follow'
 Ui-Mark
-Ui-Step 'move face (F9)'                 { Ui-Key 'F9' }
+Ui-Step 'move face (F12)'                 { Ui-Key 'F12' }
 Ui-ExpectNew 'Pick places:' 'it logs where its faces are'
 Ui-Step 'pick the top'                   { Ui-ClickPick "face F2.b0/$top" }
 Ui-Step 'Translate'                      { Choose-Type 1 }

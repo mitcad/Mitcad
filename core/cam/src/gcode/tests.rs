@@ -466,21 +466,28 @@ fn every_dialects_program_reads_back_as_its_moves_within_the_rounding() {
                                     assert!((g.feed.unwrap() - feed).abs() <= feed_tol, "{at}");
                                 }
                                 if s.arcs {
-                                    assert_eq!(got.len(), 1, "{at}");
-                                    let Motion::Arc {
-                                        center: c,
-                                        ccw: turn,
-                                        plane,
-                                    } = got[0].motion
-                                    else {
-                                        panic!("{at}: {:?}", got[0]);
-                                    };
-                                    assert_eq!((turn, plane), (ccw, Plane::Xy), "{at}");
+                                    // A whole turn is two half turns where
+                                    // the controller takes no whole turn.
                                     assert!(
-                                        (c[0] - center[0]).abs() <= 2.0 * tol
-                                            && (c[1] - center[1]).abs() <= 2.0 * tol,
-                                        "{at}: {c:?}"
+                                        got.len() == 1 || (!d.full_circles() && got.len() == 2),
+                                        "{at}"
                                     );
+                                    for g in &got {
+                                        let Motion::Arc {
+                                            center: c,
+                                            ccw: turn,
+                                            plane,
+                                        } = g.motion
+                                        else {
+                                            panic!("{at}: {g:?}");
+                                        };
+                                        assert_eq!((turn, plane), (ccw, Plane::Xy), "{at}");
+                                        assert!(
+                                            (c[0] - center[0]).abs() <= 2.0 * tol
+                                                && (c[1] - center[1]).abs() <= 2.0 * tol,
+                                            "{at}: {c:?}"
+                                        );
+                                    }
                                 } else {
                                     assert!(got.iter().all(|g| g.motion == Motion::Feed), "{at}");
                                 }

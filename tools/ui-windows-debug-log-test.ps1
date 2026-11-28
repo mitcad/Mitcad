@@ -31,7 +31,7 @@ param(
 # No shortcut for Create Sketch: its default Alt+S starts it. Popups close
 # at once in session 0, so the Diagnostics page and Open Log Folder get
 # keys of the test's own.
-Ui-Init $App $Out $QtBin @{ 'tools.preferences.diagnostics' = 'F8'; 'help.open_log_folder' = 'F9';
+Ui-Init $App $Out $QtBin @{ 'tools.preferences.diagnostics' = 'F8'; 'help.open_log_folder' = 'F3';
   'test.nested_wait' = 'F11'; 'test.leave_wait_cursor' = 'F12' } -StepPause 0
 
 $work = Join-Path $script:UiOut 'debug-log'
@@ -186,7 +186,7 @@ File-Has "${time}warning +Wait cursor left on after test hook: cleared$" 'the wa
 
 Write-Host '--- Help > Open Log Folder'
 Ui-Mark
-Ui-Step 'Open Log Folder (F9)'            { Ui-Key 'F9' }
+Ui-Step 'Open Log Folder (F3)'            { Ui-Key 'F3' }
 Ui-ExpectNew "Open Log Folder: $work" "the log file's folder"
 Ui-ExpectNew 'Open URL (test, not opened): file:///' 'the folder opened'
 
@@ -224,7 +224,7 @@ Write-Host 'ok   the sketch started while it was off is in the new file'
 if (-not (Select-String -Path $ini -Pattern '^debugLog=true' -Quiet)) { Ui-Fail 'the switch is not saved' }
 Write-Host 'ok   the switch saved'
 Ui-Mark
-Ui-Step 'Open Log Folder (F9)'            { Ui-Key 'F9' }
+Ui-Step 'Open Log Folder (F3)'            { Ui-Key 'F3' }
 Ui-ExpectNew "Open Log Folder: $folder" 'the log folder'
 File-Has "${time}info +Open Log Folder: $([regex]::Escape($folder))$" 'a new line in the new file' $new
 Ui-StopApp

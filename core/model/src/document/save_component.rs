@@ -1554,7 +1554,7 @@ impl<K: Kernel> Document<K> {
 
 /// An annotation's picks (its two and its plane's) with the references
 /// `rename` renames: their bodies, faces, edges, vertices and occurrences.
-fn rename_picks(
+pub(super) fn rename_picks(
     annotation: &mut Annotation,
     rename: &dyn Fn(&str) -> Option<String>,
 ) -> Result<(), ModelError> {
@@ -2166,7 +2166,7 @@ fn rename_def(
     Ok(Some(renamed))
 }
 
-fn rename_value(value: &mut Value, rename: &dyn Fn(&str) -> Option<String>) -> bool {
+pub(super) fn rename_value(value: &mut Value, rename: &dyn Fn(&str) -> Option<String>) -> bool {
     match value {
         Value::String(text) if !text.starts_with(PARAM) => match rename(text) {
             Some(new) if new != *text => {

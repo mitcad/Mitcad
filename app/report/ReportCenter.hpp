@@ -58,11 +58,15 @@
 #include <QJsonObject>
 #include <QList>
 #include <QObject>
+#include <QPointer>
+#include <QRect>
 #include <QSet>
 #include <QString>
 #include <QStringList>
 #include <QUrl>
 
+#include "report/RegionPicker.hpp"
+#include "report/ReportDialogs.hpp"
 #include "report/ReportText.hpp"
 
 class QFileSystemWatcher;
@@ -121,6 +125,16 @@ public:
 
   // Help > Send Feedback.
   void sendFeedback();
+  // Help > Send Feedback on a Region (help.send_feedback_region, F9;
+  // mitcad#2616): the overlay to drag the region on (RegionPicker.hpp),
+  // then the picture of that region from the screens (FeedbackRegion.hpp;
+  // on macOS without the Screen Recording permission, or where the screen
+  // cannot be read, the window's picture cropped to it) and the form for a
+  // region (FeedbackStart::Region). Nothing while a modal dialog is open or
+  // a drag is under way. Logs "Feedback region: picking", "Feedback region:
+  // WxH at the window's (x, y)", "Feedback region image: WxH from <source>"
+  // and "Feedback region: canceled (<why>)".
+  void sendFeedbackOnRegion();
 
   // Where crash reports go: MITCAD_CRASH_DIR, else "crashes" in the
   // user's local application data.
@@ -143,6 +157,10 @@ private:
     QStringList files; // crash files the offer answers
   };
 
+  // Send Feedback's form with `screenshot`, as `start` says.
+  void showFeedbackForm(const QImage& screenshot, report::FeedbackStart start);
+  // A region picked (global logical coordinates): its picture, then the form.
+  void regionPicked(const QRect& region);
   void scanCrashes(bool atStart);
   // The last session ended unexpectedly (SessionLog::endedUnexpectedly, no
   // crash report of it): the notice, once per run (mitcad#1896).
@@ -187,6 +205,8 @@ private:
   QTimer* m_offerTimer = nullptr;
   bool m_offering = false;
   bool m_crashOfferedAtStart = false; // a crash of an earlier run is offered
+  CommandRegistry* m_registry = nullptr; // the command's key (registerCommands)
+  QPointer<report::RegionPicker> m_regionPicker; // while a region is picked
 };
 
 // Opens `url` in the browser; with MITCAD_TEST_LOG_URLS=1 (UI tests) only

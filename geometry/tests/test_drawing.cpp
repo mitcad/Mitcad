@@ -19,15 +19,20 @@
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepBndLib.hxx>
+#include <BRepBuilderAPI_Copy.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepBuilderAPI_NurbsConvert.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepLib.hxx>
+#include <BRepMesh_IncrementalMesh.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepTools.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
+#include <Bnd_Box.hxx>
+#include <ElSLib.hxx>
 #include <Geom2d_Curve.hxx>
 #include <HLRAlgo_Projector.hxx>
 #include <HLRBRep_Algo.hxx>
@@ -35,6 +40,7 @@
 #include <NCollection_IndexedDataMap.hxx>
 #include <NCollection_IndexedMap.hxx>
 #include <NCollection_List.hxx>
+#include <Poly_Triangulation.hxx>
 #include <ShapeUpgrade_ShapeDivideClosed.hxx>
 #include <ShapeUpgrade_UnifySameDomain.hxx>
 #include <Standard_Failure.hxx>
@@ -49,6 +55,7 @@
 #include <gp.hxx>
 #include <gp_Ax1.hxx>
 #include <gp_Ax2.hxx>
+#include <gp_Cylinder.hxx>
 #include <gp_Pnt2d.hxx>
 #include <gp_Torus.hxx>
 #include <gp_Trsf.hxx>
@@ -2235,9 +2242,208 @@ void test_outlines_along_split_round_faces() {
   }
 }
 
+// --- A probe of round faces' outlines at a view's scale (mitcad#2539) -----------
+
+// The stretches (in the view's x) of the outline line from `a` to `b` that
+// no seen curve of `drawn` passes within 0.05 mm of, sampled every 0.5 mm.
+std::string gaps_on(const DrawnView& drawn, const Point2& a, const Point2& b) {
+  const double length = std::hypot(b[0] - a[0], b[1] - a[1]);
+  const int n = std::max(2, static_cast<int>(length / 0.5));
+  std::string out;
+  double from = 0.0;
+  bool open = false;
+  int missing = 0;
+  for (int k = 0; k <= n; ++k) {
+    const double t = static_cast<double>(k) / n;
+    const Point2 p{a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t};
+    double nearest = 1e300;
+    for (const DrawnCurve& c : drawn.curves) {
+      if (c.visible) {
+        nearest = std::min(nearest, distance_to(c, p));
+      }
+    }
+    const bool gap = nearest > 0.05;
+    missing += gap ? 1 : 0;
+    if (gap && !open) {
+      from = p[0];
+      open = true;
+    } else if (!gap && open) {
+      char text[64];
+      std::snprintf(text, sizeof text, " [%.1f, %.1f]", from, p[0]);
+      out += text;
+      open = false;
+    }
+  }
+  if (open) {
+    char text[64];
+    std::snprintf(text, sizeof text, " [%.1f, %.1f]", from, b[0]);
+    out += text;
+  }
+  char head[64];
+  std::snprintf(head, sizeof head, "%d/%d missing", missing, n + 1);
+  return head + out;
+}
+
+// `test_drawing --round-outlines <file.brep> <scale>`, a probe (mitcad#2539):
+// the solids of a file (a design's bodies where it places them) seen from
+// the front (toward the eye -y, x to the right) as a view at 1:<1/scale>
+// on a sheet draws them: on the quick path with the view's deviation and
+// chord angle, without hidden edges and tangent edges. For each round face
+// whose axis lies square to the view and that is longer than 50 mm: the
+// triangulation the polygonal algorithm meshes it with (its triangles'
+// least |n . eye|, how many lie within 1e-3 of edge on, and the nodes
+// nearest each outline, in degrees about the axis from it), and the
+// stretches of its two outline lines no seen line covers: in the view of
+// all solids, of its solid alone polygonal, and of its solid alone exact.
+int print_round_outlines(const char* path, double scale) {
+  TopoDS_Shape shape;
+  BRep_Builder builder;
+  if (!BRepTools::Read(shape, path, builder) || shape.IsNull() || !(scale > 0.0)) {
+    std::fprintf(stderr, "test_drawing: cannot read %s\n", path);
+    return 1;
+  }
+  std::vector<TopoDS_Shape> solids;
+  for (TopExp_Explorer it(shape, TopAbs_SOLID); it.More(); it.Next()) {
+    solids.push_back(it.Current());
+  }
+  const gp_Dir eye(0.0, -1.0, 0.0);
+  DrawingViewSpec spec = view(eye, gp_Dir(1.0, 0.0, 0.0), false);
+  spec.quick = true;
+  spec.quick_deviation = std::max(0.02 / scale, spec.deflection); // ViewSpec::quick_deviation
+  spec.quick_chord_angle = std::min(std::max(0.2 / scale, 0.2), 3.14159265358979 / 6.0);
+  Bnd_Box box;
+  BRepBndLib::Add(shape, box);
+  const double size = box.IsVoid() ? 1.0 : std::sqrt(box.SquareExtent());
+  const double deflection = std::max(spec.deflection, std::min(size * 5e-4, spec.quick_deviation / 1.5));
+  std::printf("scale %g: %zu solids, deviation %.4g, chord angle %.4g, mesh deflection %.4g (all parts quick)\n",
+              scale, solids.size(), spec.quick_deviation, spec.quick_chord_angle, deflection);
+  std::vector<ShapePtr> all;
+  for (const TopoDS_Shape& s : solids) {
+    all.push_back(std::make_shared<Shape>(s));
+  }
+  const DrawnView together = project_view(all, spec);
+  std::printf("all solids: %s, %zu lines\n", together.polygonal ? "polygonal" : "exact", together.curves.size());
+  DrawingViewSpec polygonal = spec;
+  polygonal.exact = false;
+  DrawingViewSpec exact = spec;
+  exact.quick = false;
+  for (std::size_t i = 0; i < solids.size(); ++i) {
+    TopoDS_Shape meshed = BRepBuilderAPI_Copy(solids[i], true, false).Shape();
+    const BRepMesh_IncrementalMesh mesher(meshed, deflection, false, spec.quick_chord_angle, true);
+    bool alone_done = false;
+    DrawnView alone_polygonal;
+    DrawnView alone_exact;
+    int f = 0;
+    for (TopExp_Explorer it(meshed, TopAbs_FACE); it.More(); it.Next(), ++f) {
+      const TopoDS_Face& face = TopoDS::Face(it.Current());
+      const BRepAdaptor_Surface surface(face);
+      if (surface.GetType() != GeomAbs_Cylinder) {
+        continue;
+      }
+      const gp_Cylinder cyl = surface.Cylinder();
+      const gp_Dir axis = cyl.Axis().Direction();
+      if (std::abs(gp_Vec(axis).Dot(gp_Vec(eye))) > 0.01) {
+        continue;
+      }
+      const double v0 = surface.FirstVParameter();
+      const double v1 = surface.LastVParameter();
+      if (v1 - v0 < 50.0) {
+        continue;
+      }
+      const gp_Dir side = axis.Crossed(eye); // the radial direction of an outline
+      const double r = cyl.Radius();
+      // The triangulation.
+      double least = 1e300;
+      int edge_on = 0;
+      int triangles = 0;
+      double nearest[2][2] = {{-1e300, 1e300}, {-1e300, 1e300}}; // per outline: below, above (degrees)
+      TopLoc_Location location;
+      const occ::handle<Poly_Triangulation> mesh = BRep_Tool::Triangulation(face, location);
+      if (!mesh.IsNull()) {
+        const gp_Trsf placement = location.Transformation();
+        auto node = [&](int k) {
+          gp_Pnt p = mesh->Node(k);
+          if (!location.IsIdentity()) {
+            p.Transform(placement);
+          }
+          return p;
+        };
+        for (int t = 1; t <= mesh->NbTriangles(); ++t) {
+          int a = 0;
+          int b = 0;
+          int c = 0;
+          mesh->Triangle(t).Get(a, b, c);
+          const gp_Pnt pa = node(a);
+          const gp_Vec n = gp_Vec(pa, node(b)).Crossed(gp_Vec(pa, node(c)));
+          if (n.Magnitude() < 1e-12) {
+            continue;
+          }
+          const double s = std::abs(n.Normalized().Dot(gp_Vec(eye)));
+          ++triangles;
+          least = std::min(least, s);
+          edge_on += s < 1e-3 ? 1 : 0;
+        }
+        for (int k = 1; k <= mesh->NbNodes(); ++k) {
+          gp_Vec v(cyl.Location(), node(k));
+          v -= gp_Vec(axis) * v.Dot(gp_Vec(axis));
+          if (v.Magnitude() < 1e-9) {
+            continue;
+          }
+          const double c = v.Dot(gp_Vec(side));
+          const double deg = std::asin(std::max(-1.0, std::min(1.0, v.Normalized().Dot(gp_Vec(eye))))) * 180.0 /
+                             3.14159265358979;
+          double(&at)[2] = nearest[c > 0.0 ? 0 : 1];
+          if (deg <= 0.0) {
+            at[0] = std::max(at[0], deg);
+          }
+          if (deg >= 0.0) {
+            at[1] = std::min(at[1], deg);
+          }
+        }
+      }
+      std::printf("solid %zu face %d: round r=%.3f length %.1f, %d triangles, least |n.eye| %.2e, %d edge on; nodes "
+                  "about outline +: %.3f/%.3f deg, outline -: %.3f/%.3f deg\n",
+                  i, f, r, v1 - v0, triangles, least, edge_on, nearest[0][0], nearest[0][1], nearest[1][0],
+                  nearest[1][1]);
+      if (!alone_done) {
+        alone_polygonal = project_view({all[i]}, polygonal);
+        alone_exact = project_view({all[i]}, exact);
+        alone_done = true;
+      }
+      for (const double sign : {1.0, -1.0}) {
+        // The outline line along the face, where the face reaches it.
+        const gp_Pnt on = cyl.Location().Translated(gp_Vec(side) * (sign * r));
+        double u = 0.0;
+        double v = 0.0;
+        ElSLib::Parameters(cyl, on, u, v);
+        const double u0 = surface.FirstUParameter();
+        double uu = u;
+        while (uu < u0) {
+          uu += 2.0 * 3.14159265358979;
+        }
+        while (uu > u0 + 2.0 * 3.14159265358979) {
+          uu -= 2.0 * 3.14159265358979;
+        }
+        if (uu > surface.LastUParameter() + 1e-9) {
+          continue; // the face does not reach this outline
+        }
+        const Point2 a = projected(ElSLib::Value(uu, v0, cyl), spec);
+        const Point2 b = projected(ElSLib::Value(uu, v1, cyl), spec);
+        std::printf("  outline %s from (%.1f, %.2f) to (%.1f, %.2f): all %s; alone polygonal %s; alone exact %s\n",
+                    sign > 0 ? "+" : "-", a[0], a[1], b[0], b[1], gaps_on(together, a, b).c_str(),
+                    gaps_on(alone_polygonal, a, b).c_str(), gaps_on(alone_exact, a, b).c_str());
+      }
+    }
+  }
+  return 0;
+}
+
 } // namespace
 
 MITCAD_BUNDLED_TEST_ARGS(drawing) {
+  if (argc == 4 && std::string(argv[1]) == "--round-outlines") {
+    return print_round_outlines(argv[2], std::atof(argv[3]));
+  }
   if (argc == 3 && std::string(argv[1]) == "--tangent-edges") {
     return check_brep_file(argv[2]);
   }

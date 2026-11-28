@@ -389,16 +389,28 @@ void TestDriver::testNavigationRelease() {
       // Keep one event turn so the 150 ms quiet fallback cannot interrupt
       // this gesture when a software-rendered frame takes longer.
       state->view->grabFramebuffer();
-      for (const auto keys : {Qt::NoModifier, Qt::ControlModifier}) {
-        const CameraState before = state->view->camera();
+      // An orbit stops with the fingers: the momentum ends its drag (what
+      // the glide had left is applied) and moves nothing, whatever its keys
+      // (no pan without the orbit key, no zoom with Cmd).
+      scroll(Qt::ScrollMomentum, {18, 9}, orbitKey);
+      state->view->grabFramebuffer();
+      if (state->view->PressedMouseButtons() != Aspect_VKeyMouse_NONE) {
+        fail(m_line, QStringLiteral("trackpad momentum went on with the orbit: pressed buttons %1, scheme %2")
+                         .arg(static_cast<int>(state->view->PressedMouseButtons()))
+                         .arg(static_cast<int>(scheme)));
+        return;
+      }
+      const CameraState before = state->view->camera();
+      for (const auto keys : {orbitKey, Qt::NoModifier, Qt::ControlModifier}) {
         scroll(Qt::ScrollMomentum, {18, 9}, keys);
         state->view->grabFramebuffer();
         const CameraState after = state->view->camera();
         const double angle = gp_Vec(before.eye, before.target).Angle(gp_Vec(after.eye, after.target));
-        if (angle < 1e-8 || std::abs(before.height - after.height) > 1e-6 ||
-            state->view->PressedMouseButtons() != Aspect_VKeyMouse_LeftButton) {
-          fail(m_line, QStringLiteral("trackpad momentum changed the original orbit after its modifier changed: angle %1, height delta %2, pressed buttons %3, scheme %4, keys %5")
-                           .arg(angle, 0, 'g', 16).arg(after.height - before.height, 0, 'g', 16)
+        if (angle > 1e-9 || before.eye.Distance(after.eye) > 1e-6 || std::abs(before.height - after.height) > 1e-6 ||
+            state->view->PressedMouseButtons() != Aspect_VKeyMouse_NONE) {
+          fail(m_line, QStringLiteral("trackpad momentum after an orbit moved the view: angle %1, eye moved %2, height delta %3, pressed buttons %4, scheme %5, keys %6")
+                           .arg(angle, 0, 'g', 16).arg(before.eye.Distance(after.eye), 0, 'g', 16)
+                           .arg(after.height - before.height, 0, 'g', 16)
                            .arg(static_cast<int>(state->view->PressedMouseButtons()))
                            .arg(static_cast<int>(scheme)).arg(static_cast<int>(keys)));
           return;
@@ -406,7 +418,7 @@ void TestDriver::testNavigationRelease() {
       }
       scroll(Qt::ScrollEnd, {}, Qt::NoModifier);
       if (state->view->PressedMouseButtons() != Aspect_VKeyMouse_NONE) {
-        fail(m_line, QStringLiteral("phase-only end left the momentum orbit button held"));
+        fail(m_line, QStringLiteral("phase-only end after an orbit's momentum left the button held"));
       }
     });
   }
@@ -415,7 +427,8 @@ void TestDriver::testNavigationRelease() {
     state->view->setCamera(state->camera);
     state->view->settleCamera();
     qInfo() << "Navigation release: both modifier/button orders, Cmd after orbit, hover and phase-only scroll end passed";
-    qInfo() << "Navigation momentum: orbit retained with no modifier and Cmd, phase-only end released the button";
+    qInfo() << "Navigation momentum: an orbit's momentum moved nothing with the orbit key, no modifier and Cmd, "
+               "phase-only end released the button";
   });
 }
 
@@ -659,10 +672,15 @@ void TestDriver::testNavigationGestureState() {
                  QStringLiteral("Ended with a delta left the button held (scheme %1)").arg(number))) {
         return;
       }
+      frame();
+      // An orbit has no momentum: one begun as a new scroll right after the
+      // end, with the cursor where it was, moves nothing either.
+      state->before = state->view->camera();
       scroll(Qt::ScrollBegin, {12, 6}, orbit, Qt::NoButton);
       scroll(Qt::ScrollMomentum, {9, 4}, orbit, Qt::NoButton);
-      if (!check(held(Aspect_VKeyMouse_LeftButton),
-                 QStringLiteral("a momentum begun as a new scroll did not orbit (scheme %1)").arg(number))) {
+      frame();
+      if (!check(held(Aspect_VKeyMouse_NONE) && sameCamera(state->before, state->view->camera()),
+                 QStringLiteral("a momentum begun as a new scroll orbited (scheme %1)").arg(number))) {
         return;
       }
       scroll(Qt::ScrollEnd, {}, orbit, Qt::NoButton);

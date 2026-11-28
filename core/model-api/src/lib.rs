@@ -263,6 +263,9 @@ mod continuity;
 mod surface_quality;
 // Curvature combs of sketch curves and edges (mitcad#2520).
 mod curvature_comb;
+// Gear Drive: a planetary set, a gear train, a rack and pinion or a bevel
+// pair as placed components with joints and motion links (mitcad#2608).
+mod gear_drives;
 // Section Analysis worked out without the document, off the UI thread
 // (mitcad#438).
 pub use analysis::{PreparedClips, PreparedQuery};
@@ -913,6 +916,12 @@ named_enum! {
         "export_die_line" => ExportDieLine(Box<sheet_process::ExportDieLineCommand>),
         "edit_standard_box" => EditStandardBox(Box<sheet_process::EditStandardBoxCommand>),
         "add_glue_flap" => AddGlueFlap(Box<sheet_process::AddGlueFlapCommand>),
+        // What the design file at `path` has that this build does not read,
+        // kept with the document as if it had been read from that file:
+        // recovered work's file (mitcad#2587).
+        "keep_fields_not_read" => KeepFieldsNotRead {
+            path: String,
+        },
     }
 }
 
@@ -1621,6 +1630,10 @@ named_enum! {
         // A cut sheet's cutting paths and what keeps it from being cut
         // (mitcad#2553, `cut_sheets/cutting.rs`).
         "cut_sheet_cutting" => CutSheetCutting(cut_sheets::cutting::CuttingQuery),
+        // Gear Drive: a drive's values and checks, and the drive a
+        // component is (mitcad#2608, `gear_drives.rs`).
+        "gear_drive_values" => GearDriveValues(Box<gear_drives::ValuesQuery>),
+        "gear_drive" => GearDrive(gear_drives::DriveQuery),
     }
 }
 
@@ -2520,6 +2533,9 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             Query::CurvatureComb(query) => curvature_comb::query(self, &query)?,
             // A cut sheet's cutting paths (mitcad#2553).
             Query::CutSheetCutting(query) => cut_sheets::cutting::cutting_query(self, &query)?,
+            // Gear Drive (mitcad#2608).
+            Query::GearDriveValues(query) => gear_drives::values_query(&query),
+            Query::GearDrive(query) => gear_drives::drive_query(self, &query)?,
         };
         // A result with `warnings` lists them as `notices` too (mitcad#1040).
         notice::add_notices(&mut result);
@@ -3559,6 +3575,13 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
             Command::ExportDieLine(c) => sheet_process::export_die_line(self, *c)?,
             Command::EditStandardBox(c) => sheet_process::edit_standard_box(self, *c)?,
             Command::AddGlueFlap(c) => sheet_process::add_glue_flap(self, *c)?,
+            // Recovered work keeps what its file has that this build does
+            // not read (mitcad#2587): no undo step, nothing recomputed.
+            Command::KeepFieldsNotRead { path } => {
+                self.keep_fields_not_read(std::path::Path::new(&path))
+                    .map_err(|e| ApiError(e.to_string()))?;
+                unknown_fields_json(self, None)
+            }
         })
     }
 

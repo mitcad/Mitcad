@@ -15730,8 +15730,16 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>kohteelle %1 ei voi tehdä siirtymää rivan luonnostasossa suunnalle Käyrien normaalin suuntaan</translation>
     </message>
     <message>
+        <source>%1 cannot be replaced in all its places while %2 use its geometry; edit them to use other geometry first</source>
+        <translation>kohdetta %1 ei voi korvata kaikilla paikoillaan, kun %2 käyttää sen geometriaa; muokkaa ne ensin käyttämään muuta geometriaa</translation>
+    </message>
+    <message>
         <source>%1 cannot follow %2 there: the joints do not hold</source>
         <translation>%1 ei voi seurata kohdetta %2 sinne: liitokset eivät pidä</translation>
+    </message>
+    <message>
+        <source>%1 cannot replace itself</source>
+        <translation>%1 ei voi korvata itseään</translation>
     </message>
     <message>
         <source>%1 cells%2, open area %3 mm² (%4% of the field)</source>
@@ -15782,6 +15790,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>Ohjaimessa %1 on tässä tulva- ja sumujäähdytys, ei ilmapuhallusta.</translation>
     </message>
     <message>
+        <source>%1 has no bodies of its own for the joints on %2 to stay on, marked, where it has nothing to match them</source>
+        <translation>kohteella %1 ei ole omia kappaleita, joille kohteen %2 liitokset voisivat jäädä merkittyinä, kun sillä ei ole niille vastinetta</translation>
+    </message>
+    <message>
         <source>%1 has no box to rest on the side</source>
         <translation>Kohteella %1 ei ole laatikkoa, joka lepäisi kyljellä</translation>
     </message>
@@ -15822,12 +15834,24 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>kohdetta %1 ei ole laskettu</translation>
     </message>
     <message>
+        <source>%1 holds %2, so it cannot be placed in it</source>
+        <translation>%1 sisältää kohteen %2, joten sitä ei voi sijoittaa siihen</translation>
+    </message>
+    <message>
+        <source>%1 has one work zero, set in its controller; choose G54 as the setup&apos;s work offset.</source>
+        <translation>Ohjaimessa %1 on yksi nollapiste, joka asetetaan ohjaimessa; valitse kiinnityksen työkoordinaatistoksi G54.</translation>
+    </message>
+    <message>
         <source>%1 is %2 mm long: an inward end cap of %3 mm leaves nothing of it</source>
         <translation>%1 on %2 mm pitkä: %3 mm:n sisäänpäin oleva päätykansi ei jätä siitä mitään</translation>
     </message>
     <message>
         <source>%1 is a boring bar&apos;s code: a turning tool needs a holder&apos;s code, like PCLNR 2525 M12.</source>
         <translation>%1 on sisäsorvausterän koodi: sorvausterä tarvitsee pitimen koodin, kuten PCLNR 2525 M12.</translation>
+    </message>
+    <message>
+        <source>%1 is a copy a Pattern at Points makes; replace its source, or all its occurrences</source>
+        <translation>%1 on piirteen Kuvio pisteisiin tekemä kopio; korvaa sen lähde tai kaikki sen esiintymät</translation>
     </message>
     <message>
         <source>%1 is a feature of the type %2, not %3</source>
@@ -15858,8 +15882,16 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>%2 pitää kohteen %1 sen ohjatussa asemassa kohteella %3, joka ei voi liikkua</translation>
     </message>
     <message>
+        <source>%1 is inside %2, which goes when it is replaced in all its places</source>
+        <translation>%1 on kohteen %2 sisällä, joka poistuu, kun se korvataan kaikilla paikoillaan</translation>
+    </message>
+    <message>
         <source>%1 is linked with options; change its options, or open its design</source>
         <translation>%1 on linkitetty vaihtoehdoin; muuta sen vaihtoehtoja tai avaa sen malli</translation>
+    </message>
+    <message>
+        <source>%1 is made after %2 on the timeline; move it before %3 first</source>
+        <translation>%1 on tehty aikajanalla kohteen %2 jälkeen; siirrä se ensin ennen kohdetta %3</translation>
     </message>
     <message>
         <source>%1 is neither a plane nor a line</source>
@@ -15966,6 +15998,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>%1 ei ole teräpalan paksuuden koodi.</translation>
     </message>
     <message>
+        <source>%1 is not an interference check</source>
+        <translation>%1 ei ole päällekkäisyystarkistus</translation>
+    </message>
+    <message>
         <source>%1 is not cut to length: its ends cannot be cut back</source>
         <translation>%1 ei ole katkaistu mittaan: sen päitä ei voi lyhentää</translation>
     </message>
@@ -15986,8 +16022,16 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>%1 ei ole liitoksessa: puskuliitoksessa %2 tai %3 jatkuu läpi</translation>
     </message>
     <message>
+        <source>%1 is not joined to the lofted flange&apos;s sheet</source>
+        <translation>%1 ei ole liitetty siirtymälaipan levyyn</translation>
+    </message>
+    <message>
         <source>%1 is not placed along a sketch line: joint conditions are kept for profiles along sketch lines; use the shared miter or Length&apos;s to a face instead</source>
         <translation>%1 ei ole sijoitettu luonnoksen viivaa pitkin: liitosehdot säilytetään luonnoksen viivoja pitkin sijoitetuille profiileille; käytä sen sijaan yhteistä jiiriä tai Pituuden valintaa tahkoon asti</translation>
+    </message>
+    <message>
+        <source>%1 is not placed anywhere</source>
+        <translation>%1 ei ole sijoitettu mihinkään</translation>
     </message>
     <message>
         <source>%1 is not placed in parallel: Across is for a profile placed in parallel</source>
@@ -16016,6 +16060,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>%1 is part of %2, which is linked from %3; it changes only with that file</source>
         <translation>%1 on osa kohdetta %2, joka on linkitetty tiedostosta %3; se muuttuu vain sen tiedoston mukana</translation>
+    </message>
+    <message>
+        <source>%1 is part of a linked design and is placed only by it</source>
+        <translation>%1 kuuluu linkitettyyn malliin, ja vain se sijoittaa sen</translation>
     </message>
     <message>
         <source>%1 is placed on end %2 of %3: an end cap needs a free end</source>
@@ -16058,6 +16106,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>Kohteen %2 %1 ei ole kylki: valitse sen pitkä kylki</translation>
     </message>
     <message>
+        <source>%1 of its bodies are not in the design at the timeline marker: edit the check to choose its bodies again</source>
+        <translation>Sen kappaleista %1 ei ole mallissa aikajanan merkin kohdalla: valitse kappaleet uudelleen muokkaamalla tarkistusta</translation>
+    </message>
+    <message>
         <source>%1 of the feature</source>
         <translation>%1 piirteessä</translation>
     </message>
@@ -16072,6 +16124,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>%1 places no components to explode</source>
         <translation>%1 ei sijoita räjäytettäviä komponentteja</translation>
+    </message>
+    <message>
+        <source>%1 switches only one output for coolant; use flood coolant.</source>
+        <translation>Ohjain %1 kytkee jäähdytykseen vain yhden lähdön; käytä tulvajäähdytystä.</translation>
     </message>
     <message>
         <source>%1 takes the edits made in place</source>
@@ -16094,6 +16150,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>%1 käyttää anturilleen työkalua 0; anna kohteelle %2 toinen numero.</translation>
     </message>
     <message>
+        <source>%1 was made in no component of its own</source>
+        <translation>kohdetta %1 ei tehty omaan komponenttiinsa</translation>
+    </message>
+    <message>
+        <source>%1 was not made</source>
+        <translation>kohdetta %1 ei tehty</translation>
+    </message>
+    <message>
         <source>%1 was removed: the explode view %2 no longer moves it</source>
         <translation>%1 poistettiin: räjäytyskuvanto %2 ei enää siirrä sitä</translation>
     </message>
@@ -16108,6 +16172,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>%1 would join or place the assembly around the design, which it cannot while edited in place; make joints to the assembly in the assembly itself</source>
         <translation>%1 liittäisi tai sijoittaisi mallin ympärillä olevan kokoonpanon, mitä se ei voi tehdä paikallaan muokattaessa; tee liitokset kokoonpanoon itse kokoonpanossa</translation>
+    </message>
+    <message>
+        <source>%1 would no longer work with %2: %3</source>
+        <translation>%1 ei enää toimisi kohteen %2 kanssa: %3</translation>
     </message>
     <message>
         <source>%1&apos;s faces do not build a closed solid for the boolean (%2 of %3 left out)</source>
@@ -16350,8 +16418,16 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>; tilavuus muuttui %1 mm³:stä %2 mm³:iin</translation>
     </message>
     <message>
+        <source>A CAM operation cannot follow a sketch text: Explode Text turns it into sketch curves to pick instead.</source>
+        <translation>CAM-työstövaihe ei voi seurata luonnoksen tekstiä: Pura teksti tekee siitä luonnoskäyriä, jotka voi valita sen sijaan.</translation>
+    </message>
+    <message>
         <source>A Y axis or a B head mills with live tools on a C axis.</source>
         <translation>Y-akseli tai B-pää jyrsii pyörivillä työkaluilla C-akselin kanssa.</translation>
+    </message>
+    <message>
+        <source>A body of the setup cannot be meshed for its spun target.</source>
+        <translation>Kiinnityksen kappaletta ei voi verkottaa sen pyöräytettyä kohdetta varten.</translation>
     </message>
     <message>
         <source>A curve is a %1, not a line or an arc</source>
@@ -16470,6 +16546,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>Lisää konstruktiojoukko %1</translation>
     </message>
     <message>
+        <source>Add Gear Drive</source>
+        <translation>Lisää hammaspyörävaihde</translation>
+    </message>
+    <message>
         <source>Add Parameter Group %1</source>
         <translation>Lisää parametriryhmä %1</translation>
     </message>
@@ -16490,12 +16570,44 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>Kaikki %1 kappaletta voi lähettää tulostuspalveluun.</translation>
     </message>
     <message>
+        <source>An engraving cutter or a chamfer mill cuts a contour only with the tool on the line.</source>
+        <translation>Kaiverrusterä tai viistejyrsin työstää ääriviivan vain työkalun ollessa viivalla.</translation>
+    </message>
+    <message>
+        <source>An input of sketch curves names the sketch&apos;s curves by their ids, as the sketch query lists them.</source>
+        <translation>Luonnoskäyrien syöte nimeää luonnoksen käyrät niiden tunnisteilla, kuten sketch-kysely ne luettelee.</translation>
+    </message>
+    <message>
         <source>An insert of %1 degrees does not fit a holder of %2 degrees: its trailing edge would turn into the work.</source>
         <translation>%1 asteen teräpala ei sovi %2 asteen pitimeen: sen jättöpuolen särmä kääntyisi työkappaleeseen.</translation>
     </message>
     <message>
         <source>Auto Explode %1</source>
         <translation>Automaattinen räjäytys %1</translation>
+    </message>
+    <message>
+        <source>Bevel Gear %1</source>
+        <translation>Kartiohammaspyörä %1</translation>
+    </message>
+    <message>
+        <source>Bevel Gear 1 Joint</source>
+        <translation>Kartiohammaspyörän 1 liitos</translation>
+    </message>
+    <message>
+        <source>Bevel Gear 2 Joint</source>
+        <translation>Kartiohammaspyörän 2 liitos</translation>
+    </message>
+    <message>
+        <source>Bevel Mesh</source>
+        <translation>Kartiopyörien ryntö</translation>
+    </message>
+    <message>
+        <source>Bevel Pair</source>
+        <translation>Kartiopyöräpari</translation>
+    </message>
+    <message>
+        <source>Carrier Joint</source>
+        <translation>Planeettakannattimen liitos</translation>
     </message>
     <message>
         <source>Change Construction Set %1</source>
@@ -16548,6 +16660,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>Delete Selection Set %1</source>
         <translation>Poista valintajoukko %1</translation>
+    </message>
+    <message>
+        <source>Edit Gear Drive</source>
+        <translation>Muokkaa hammaspyörävaihdetta</translation>
     </message>
     <message>
         <source>Edit in Place</source>
@@ -16632,6 +16748,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>G71&apos;s allowance (U) is on the other side of its contour</source>
         <translation>G71:n työvara (U) on muodon toisella puolella</translation>
+    </message>
+    <message>
+        <source>Gear %1 on Shaft %2</source>
+        <translation>Hammaspyörä %1 akselilla %2</translation>
+    </message>
+    <message>
+        <source>Gear Train</source>
+        <translation>Hammaspyörästö</translation>
     </message>
     <message>
         <source>Give the plane&apos;s angles, or pick a planar face or a hole the plane is square to.</source>
@@ -16790,6 +16914,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>Valitse reiät: pisteet, pyöreät särmät tai reikien tahkot.</translation>
     </message>
     <message>
+        <source>Pinion Joint</source>
+        <translation>Pikkupyörän liitos</translation>
+    </message>
+    <message>
         <source>Placed more than once, so it is left out; check it to machine this occurrence only. The other occurrences stay as they are.</source>
         <translation>Sijoitettu useammin kuin kerran, joten se jätetään pois; valitse se työstääksesi vain tämän esiintymän. Muut esiintymät pysyvät ennallaan.</translation>
     </message>
@@ -16802,6 +16930,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>Tason kulmat koskevat tasolla työstävää pyörivää työkalua.</translation>
     </message>
     <message>
+        <source>Planetary Drive</source>
+        <translation>Planeettavaihde</translation>
+    </message>
+    <message>
         <source>Plunge by Tool geometry needs the insert and holder of tool %1: give them in Machines and Tools (Edit Tool), or choose Free or Don&apos;t plunge.</source>
         <translation>Pisto työkalun geometrian mukaan tarvitsee työkalun %1 teräpalan ja pitimen: anna ne kohdassa Koneet ja työkalut (Muokkaa työkalua) tai valitse Vapaa tai Ei pistoa.</translation>
     </message>
@@ -16812,6 +16944,18 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>Profile Boundary in %1</source>
         <translation>Profiilin raja kohteessa %1</translation>
+    </message>
+    <message>
+        <source>Rack Joint</source>
+        <translation>Hammastangon liitos</translation>
+    </message>
+    <message>
+        <source>Rack Mesh</source>
+        <translation>Hammastangon ryntö</translation>
+    </message>
+    <message>
+        <source>Rack and Pinion</source>
+        <translation>Hammastanko ja -pyörä</translation>
     </message>
     <message>
         <source>Remove Spline Point in %1</source>
@@ -16832,6 +16976,22 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>Rename Selection Set %1</source>
         <translation>Nimeä valintajoukko %1 uudelleen</translation>
+    </message>
+    <message>
+        <source>Ring Joint</source>
+        <translation>Sisähammaspyörän liitos</translation>
+    </message>
+    <message>
+        <source>Ring Link</source>
+        <translation>Sisähammaspyörän linkki</translation>
+    </message>
+    <message>
+        <source>Ring Mesh</source>
+        <translation>Sisähammaspyörän ryntö</translation>
+    </message>
+    <message>
+        <source>Set Estlcam to these units before running it.</source>
+        <translation>Aseta Estlcam näihin yksiköihin ennen ajoa.</translation>
     </message>
     <message>
         <source>Set the bottom diameter of what is wrapped onto the diameter.</source>
@@ -16864,6 +17024,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>Split at Point in %1</source>
         <translation>Jako pisteessä kohteessa %1</translation>
+    </message>
+    <message>
+        <source>Sun Joint</source>
+        <translation>Aurinkopyörän liitos</translation>
+    </message>
+    <message>
+        <source>Sun Link</source>
+        <translation>Aurinkopyörän linkki</translation>
     </message>
     <message>
         <source>Suppress %1 and the features that use it</source>
@@ -16950,6 +17118,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>Mallissa ei ole luonnosta %1</translation>
     </message>
     <message>
+        <source>The entry angle must be from 0 to 90 degrees.</source>
+        <translation>Sisääntulokulman on oltava 0–90 astetta.</translation>
+    </message>
+    <message>
         <source>The expression cannot be read: %1.</source>
         <translation>Lauseketta ei voi lukea: %1.</translation>
     </message>
@@ -17026,12 +17198,20 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>Sorvissa ei ole vastakaraa työkappaleen takapään sorvaamiseen.</translation>
     </message>
     <message>
+        <source>The limit towards the face must be in front of the limit towards the chuck.</source>
+        <translation>Otsapään puoleisen rajan on oltava istukan puoleisen rajan edessä.</translation>
+    </message>
+    <message>
         <source>The live spindle&apos;s speeds must run from a minimum up to a maximum above zero.</source>
         <translation>Pyörivän karan nopeuksien on ulotuttava pienimmästä nollaa suurempaan suurimpaan.</translation>
     </message>
     <message>
         <source>The machine %1 takes milling tools only.</source>
         <translation>Kone %1 ottaa vain jyrsintätyökaluja.</translation>
+    </message>
+    <message>
+        <source>The machine&apos;s park position is not written: Estlcam has no machine coordinates.</source>
+        <translation>Koneen pysäköintiasemaa ei kirjoiteta: Estlcamissa ei ole konekoordinaatteja.</translation>
     </message>
     <message>
         <source>The manual G-code %1 cannot be written for %2: its line %3 has %4.</source>
@@ -17076,6 +17256,18 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>The operation has nothing to wrap onto the diameter.</source>
         <translation>Työstövaiheella ei ole mitään kehälle kiedottavaa.</translation>
+    </message>
+    <message>
+        <source>The operation needs an end mill with a flat end; this bull nose&apos;s corner radius is its whole radius, so its end is round like a ball end mill&apos;s.</source>
+        <translation>Työstövaihe tarvitsee tasapäisen varsijyrsimen; tämän nurkkapyöristetyn varsijyrsimen nurkkasäde on sen koko säde, joten sen pää on pyöreä kuin pallopääjyrsimen.</translation>
+    </message>
+    <message>
+        <source>The operation&apos;s limits leave none of the part&apos;s profile between them.</source>
+        <translation>Työstövaiheen rajojen väliin ei jää mitään kappaleen profiilista.</translation>
+    </message>
+    <message>
+        <source>The operation&apos;s limits must be numbers.</source>
+        <translation>Työstövaiheen rajojen on oltava lukuja.</translation>
     </message>
     <message>
         <source>The part&apos;s back cannot be cut through the spindle axis.</source>
@@ -17130,6 +17322,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>Haku pysähtyi aikarajaansa %1 s (time_limit).</translation>
     </message>
     <message>
+        <source>The stepover must not be more than the flat of the tool&apos;s end, %1 mm (its diameter less twice its corner radius): wider passes leave ridges on the floor between them.</source>
+        <translation>Sivuaskel saa olla enintään työkalun pään tasaisen osan levyinen, %1 mm (sen halkaisija vähennettynä kahdella nurkkasäteellä): leveämmät kierrokset jättävät lattiaan harjanteita niiden väliin.</translation>
+    </message>
+    <message>
         <source>The sub-spindle&apos;s C axis needs one to eight blocks that switch it off.</source>
         <translation>Vastakaran C-akseli tarvitsee yhdestä kahdeksaan lausetta, jotka kytkevät sen pois.</translation>
     </message>
@@ -17164,6 +17360,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>The sub-spindle&apos;s work offset must be one of G54 to G59.</source>
         <translation>Vastakaran työkoordinaatiston on oltava jokin G54–G59.</translation>
+    </message>
+    <message>
+        <source>The tool cannot go down into the stock at the limit towards the face: choose Plunge Free, or a tool whose insert leaves room behind its nose.</source>
+        <translation>Työkalu ei voi laskeutua aihioon otsapään puoleisella rajalla: valitse vapaa pisto (Plunge Free) tai työkalu, jonka terä jättää tilaa kärkensä taakse.</translation>
     </message>
     <message>
         <source>The tool change position must be numbers.</source>
@@ -17612,6 +17812,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
 </source>
         <translation>Yksiköt: %1 (%2 mm piirustusyksikköä kohden%3)
 </translation>
+    </message>
+    <message>
+        <source>Units: inches, feeds in inches per minute.</source>
+        <translation>Yksiköt: tuumat, syötöt tuumina minuutissa.</translation>
+    </message>
+    <message>
+        <source>Units: millimeters, feeds in mm per minute.</source>
+        <translation>Yksiköt: millimetrit, syötöt millimetreinä minuutissa.</translation>
     </message>
     <message>
         <source>Unloading speed</source>
@@ -18270,6 +18478,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>transformaatiota (%1) ei muunneta</translation>
     </message>
     <message>
+        <source>a %1 with involute teeth has no rolling circles (cycloidal teeth have)</source>
+        <translation>evolventtihampaisella kohteella (%1) ei ole vierintäympyröitä (sykloidihampailla on)</translation>
+    </message>
+    <message>
         <source>a %1 x %2 mesh of %3 vertices</source>
         <translation>%1 x %2 -verkko, %3 kärkipistettä</translation>
     </message>
@@ -18482,6 +18694,50 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>rinnakkais- tai ketjumitoitus ottaa vähintään kaksi poimintaa</translation>
     </message>
     <message>
+        <source>a bead needs a sheet of positive thickness</source>
+        <translation>palko tarvitsee levyn, jonka paksuus on suurempi kuin nolla</translation>
+    </message>
+    <message>
+        <source>a bead needs a width and a depth above zero</source>
+        <translation>palko tarvitsee nollaa suuremman leveyden ja syvyyden</translation>
+    </message>
+    <message>
+        <source>a bead needs at least one line or arc of a sketch</source>
+        <translation>palko tarvitsee vähintään yhden luonnoksen viivan tai kaaren</translation>
+    </message>
+    <message>
+        <source>a bead&apos;s bend radius must be above zero</source>
+        <translation>palon taivutussäteen on oltava suurempi kuin nolla</translation>
+    </message>
+    <message>
+        <source>a bead&apos;s center line doubles back on itself at a corner</source>
+        <translation>palon keskiviiva kääntyy nurkassa takaisin itseensä</translation>
+    </message>
+    <message>
+        <source>a bead&apos;s center line turns at a corner only where two lines meet: join an arc to its neighbours without a corner</source>
+        <translation>palon keskiviiva voi kääntyä nurkassa vain kahden viivan kohdatessa: liitä kaari naapureihinsa ilman nurkkaa</translation>
+    </message>
+    <message>
+        <source>a bead&apos;s center lines are made of sketch lines and arcs</source>
+        <translation>palon keskiviivat koostuvat luonnoksen viivoista ja kaarista</translation>
+    </message>
+    <message>
+        <source>a bead&apos;s flat face is no longer a face of the sheet</source>
+        <translation>palon tasainen tahko ei ole enää levyn tahko</translation>
+    </message>
+    <message>
+        <source>a bead&apos;s run-out ends on a straight line that holds its ramp: make the lines at its ends longer or the run-out shorter</source>
+        <translation>palon ulosajon on päätyttävä suoralle viivalle, jolle sen luiska mahtuu: pidennä päiden viivoja tai lyhennä ulosajoa</translation>
+    </message>
+    <message>
+        <source>a bead&apos;s run-out must be longer than zero</source>
+        <translation>palon ulosajon on oltava pidempi kuin nolla</translation>
+    </message>
+    <message>
+        <source>a bead&apos;s sketch must lie on a flat face of the sheet, with its lines and arcs on that face</source>
+        <translation>palon luonnoksen on oltava levyn tasaisella tahkolla ja sen viivojen ja kaarien sillä tahkolla</translation>
+    </message>
+    <message>
         <source>a bearing cut into a face takes its place from the face, not a plane</source>
         <translation>tahkoon leikattu laakeri saa paikkansa tahkosta, ei tasosta</translation>
     </message>
@@ -18586,8 +18842,20 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>paras sovitus vaatii vähintään %1 pistettä, pilvessä on %2</translation>
     </message>
     <message>
+        <source>a bevel gear has involute teeth: cycloidal teeth are for spur, helical, herringbone and ring gears and racks</source>
+        <translation>kartiohammaspyörällä on evolventtihampaat: sykloidihampaat ovat suora-, vino- ja nuolihampaisille hammaspyörille, sisähammaspyörille ja hammastangoille</translation>
+    </message>
+    <message>
         <source>a bevel gear meshes with its mate through its pair option</source>
         <translation>kartiohammaspyörä ryntää vastinpyöränsä kanssa parivalintansa kautta</translation>
+    </message>
+    <message>
+        <source>a bevel pair has straight teeth: it takes no helix angle</source>
+        <translation>kartiopyöräparilla on suorat hampaat: se ei ota kierukkakulmaa</translation>
+    </message>
+    <message>
+        <source>a bevel pair has two gears</source>
+        <translation>kartiopyöräparissa on kaksi hammaspyörää</translation>
     </message>
     <message>
         <source>a bevel pair is not placed by at (make the two gears one by one)</source>
@@ -18596,6 +18864,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a bevel pair is not placed on a shaft (make the two gears one by one)</source>
         <translation>kartiopyöräparia ei sijoiteta akselille (tee kaksi hammaspyörää yksi kerrallaan)</translation>
+    </message>
+    <message>
+        <source>a bevel pair needs the teeth of its two gears</source>
+        <translation>kartiopyöräpari tarvitsee kahden hammaspyöränsä hammasluvut</translation>
     </message>
     <message>
         <source>a bevel pair takes no bore or hub (make the two gears one by one)</source>
@@ -19446,6 +19718,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>komponentin, esiintymän tai kappaleen tunniste, kuten &quot;C2&quot;, &quot;O3&quot; tai &quot;F7.b0&quot;</translation>
     </message>
     <message>
+        <source>a compound train&apos;s gears come in pairs, a driving and a driven gear per stage</source>
+        <translation>monivaiheisen hammaspyörästön hammaspyörät ovat pareittain, vaihetta kohden käyttävä ja käytettävä hammaspyörä</translation>
+    </message>
+    <message>
         <source>a compressed buffer of a method MitCad does not read</source>
         <translation>pakattu puskuri menetelmällä, jota MitCad ei lue</translation>
     </message>
@@ -19942,6 +20218,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>leikkuuarkin osat eivät tuo mallin kohteita</translation>
     </message>
     <message>
+        <source>a cut that reaches the sheet&apos;s edge does not close along it</source>
+        <translation>levyn reunaan ulottuva leikkaus ei sulkeudu reunaa pitkin</translation>
+    </message>
+    <message>
         <source>a cut that removes nothing is suppressed</source>
         <translation>leikkaus, joka ei poista mitään, on ohitettu</translation>
     </message>
@@ -19958,6 +20238,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>lastuava liike ilman syöttöä</translation>
     </message>
     <message>
+        <source>a cut&apos;s edge on the sheet&apos;s front has no length</source>
+        <translation>leikkauksen särmällä levyn etupinnalla ei ole pituutta</translation>
+    </message>
+    <message>
+        <source>a cut&apos;s edge on the sheet&apos;s front neither closes nor reaches the sheet&apos;s edge</source>
+        <translation>leikkauksen särmä levyn etupinnalla ei sulkeudu eikä ulotu levyn reunaan</translation>
+    </message>
+    <message>
         <source>a cut-out image</source>
         <translation>rajattu kuva</translation>
     </message>
@@ -19972,6 +20260,18 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a cycle: the assembly contains itself</source>
         <translation>kehä: kokoonpano sisältää itsensä</translation>
+    </message>
+    <message>
+        <source>a cycloid %1 has no pressure angle: its rolling circles shape its teeth</source>
+        <translation>sykloidikohteella (%1) ei ole ryntökulmaa: sen vierintäympyrät muotoilevat sen hampaat</translation>
+    </message>
+    <message>
+        <source>a cycloid %1 has no profile shift</source>
+        <translation>sykloidikohteella (%1) ei ole profiilinsiirtoa</translation>
+    </message>
+    <message>
+        <source>a cycloidal ring gear&apos;s pitch diameter must be larger than its pinion&apos;s by at least the two rolling circles&apos; diameters together (%1 mm), got %2 mm</source>
+        <translation>sykloidi-sisähammaspyörän jakohalkaisijan on oltava pikkupyörän jakohalkaisijaa suurempi vähintään kahden vierintäympyrän halkaisijoiden summalla (%1 mm), annettiin %2 mm</translation>
     </message>
     <message>
         <source>a cylinder of radius %1</source>
@@ -20998,6 +21298,30 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>laippa %1 särmällä omilla kulma-asetuksilla (kulman vapautusleikkauksen muoto %2, väli %3): sen seinämien muodostamia kulmia ei purettu</translation>
     </message>
     <message>
+        <source>a flange on a lofted flange&apos;s sheet goes on a straight edge of a flat facet</source>
+        <translation>siirtymälaipan levyllä laippa tulee tasaisen fasetin suoralle särmälle</translation>
+    </message>
+    <message>
+        <source>a flange on a lofted flange&apos;s sheet goes on an edge of its transition: flanges on its flanges are not taken yet</source>
+        <translation>siirtymälaipan levyllä laippa tulee sen siirtymän särmälle: sen laippojen laippoja ei vielä oteta</translation>
+    </message>
+    <message>
+        <source>a flange on a lofted flange&apos;s sheet goes on one straight edge of a flat facet, with its ends free: several edges, a run of edges and half open corners are not taken yet</source>
+        <translation>siirtymälaipan levyllä laippa tulee tasaisen fasetin yhdelle suoralle särmälle päät vapaina: useita särmiä, särmäketjua ja puoliavoimia kulmia ei vielä oteta</translation>
+    </message>
+    <message>
+        <source>a flange on a lofted flange&apos;s sheet stands on one edge</source>
+        <translation>siirtymälaipan levyllä laippa seisoo yhdellä särmällä</translation>
+    </message>
+    <message>
+        <source>a flange&apos;s edge does not lie on one flat facet of the lofted flange</source>
+        <translation>laipan särmä ei ole siirtymälaipan yhdellä tasaisella fasetilla</translation>
+    </message>
+    <message>
+        <source>a flange&apos;s edge is not on the lofted flange&apos;s sheet</source>
+        <translation>laipan särmä ei ole siirtymälaipan levyllä</translation>
+    </message>
+    <message>
         <source>a flange&apos;s wall is not planar</source>
         <translation>laipan seinämä ei ole tasomainen</translation>
     </message>
@@ -21166,6 +21490,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>hammaspyörä tarvitsee vähintään %1 hammasta, annettiin %2</translation>
     </message>
     <message>
+        <source>a gear of the drive was not made</source>
+        <translation>vaihteen hammaspyörää ei tehty</translation>
+    </message>
+    <message>
         <source>a gear on a rack is placed by mesh_with&apos;s position, not toward a pick</source>
         <translation>hammastangolla oleva hammaspyörä sijoitetaan mesh_with-kentän position mukaan, ei poimintaa kohti</translation>
     </message>
@@ -21180,6 +21508,18 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a gear pair is spur or helical, not %1</source>
         <translation>hammaspyöräpari on suora- tai vinohampainen, ei %1</translation>
+    </message>
+    <message>
+        <source>a gear train has from 2 to %1 gears</source>
+        <translation>hammaspyörästössä on 2–%1 hammaspyörää</translation>
+    </message>
+    <message>
+        <source>a gear train needs the teeth of its gears</source>
+        <translation>hammaspyörästö tarvitsee hammaspyöriensä hammasluvut</translation>
+    </message>
+    <message>
+        <source>a gear with cycloidal teeth meshes only with a gear with cycloidal teeth</source>
+        <translation>sykloidihampainen hammaspyörä rynnöstää vain sykloidihampaisen hammaspyörän kanssa</translation>
     </message>
     <message>
         <source>a gear, rack, screw or roller needs a positive size, not %1</source>
@@ -21650,6 +21990,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>lasso tarvitsee vähintään kolme pistettä, saatiin %1</translation>
     </message>
     <message>
+        <source>a later change reaches a bead of the sheet: keep cuts, holes and other changes of the face clear of its beads</source>
+        <translation>myöhempi muutos ulottuu levyn palkoon: pidä tahkon leikkaukset, reiät ja muut muutokset erillään sen paloista</translation>
+    </message>
+    <message>
         <source>a later feature uses this 3D sketch: a reference to it would make a link cycle</source>
         <translation>myöhempi piirre käyttää tätä 3D-luonnosta: viittaus siihen tekisi linkkisilmukan</translation>
     </message>
@@ -21746,12 +22090,24 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>nollapituinen viiva</translation>
     </message>
     <message>
+        <source>a line of the bead&apos;s center line has no length</source>
+        <translation>palon keskiviivan viivalla ei ole pituutta</translation>
+    </message>
+    <message>
         <source>a line of zero length</source>
         <translation>nollan pituinen viiva</translation>
     </message>
     <message>
         <source>a line or an arc</source>
         <translation>viiva tai kaari</translation>
+    </message>
+    <message>
+        <source>a line or arc of the bead is listed more than once</source>
+        <translation>palon viiva tai kaari on luettelossa useammin kuin kerran</translation>
+    </message>
+    <message>
+        <source>a line or arc of the bead is no longer in its sketch</source>
+        <translation>palon viiva tai kaari ei ole enää luonnoksessaan</translation>
     </message>
     <message>
         <source>a line path</source>
@@ -21958,8 +22314,20 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>siirtymälaippa kulkee kahden profiilin välillä, saatiin %1</translation>
     </message>
     <message>
+        <source>a lofted flange&apos;s Flat Pattern keeps its transition fixed: choose the lofted flange as the fixed panel</source>
+        <translation>siirtymälaipan levityskuvanto pitää sen siirtymän kiinteänä: valitse siirtymälaippa kiinteäksi levyosaksi</translation>
+    </message>
+    <message>
+        <source>a lofted flange&apos;s corner relief is where its bends meet in a point: turn Bends on or leave the corner relief out</source>
+        <translation>siirtymälaipan nurkan vapautusleikkaus tulee taivutusten kohtauspisteeseen: kytke Taivutukset päälle tai jätä nurkan vapautusleikkaus pois</translation>
+    </message>
+    <message>
         <source>a lofted flange&apos;s facets are given by a count or by a chord tolerance, not both</source>
         <translation>siirtymälaipan fasetit annetaan määränä tai jännetoleranssina, ei molempina</translation>
+    </message>
+    <message>
+        <source>a lofted flange&apos;s sheet takes Sheet Cut, and Flange and Hem on a straight edge of a flat facet; other sheet metal features (bends, folds, unfolds, corners) not yet: edit the lofted flange itself, or cut it with Hole or a cutting Extrude</source>
+        <translation>siirtymälaipan levy ottaa Levyleikkauksen sekä Laipan ja Reunataitoksen tasaisen fasetin suoralle särmälle; muita ohutlevypiirteitä (taivutuksia, taitteita, levityksiä, kulmia) ei vielä: muokkaa itse siirtymälaippaa tai leikkaa sitä Reiällä tai leikkaavalla Pursotuksella</translation>
     </message>
     <message>
         <source>a lofted flange&apos;s transition is not rebuilt by the sheet construction</source>
@@ -22554,6 +22922,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>liian suuri sivun siirtymä</translation>
     </message>
     <message>
+        <source>a pair with cycloidal teeth has no pressure angle</source>
+        <translation>sykloidihampaisella parilla ei ole ryntökulmaa</translation>
+    </message>
+    <message>
+        <source>a pair with cycloidal teeth has no profile shift</source>
+        <translation>sykloidihampaisella parilla ei ole profiilinsiirtoa</translation>
+    </message>
+    <message>
         <source>a panel %1 mm thick</source>
         <translation>paneeli, paksuus %1 mm</translation>
     </message>
@@ -23040,6 +23416,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a plane, a face, a body or sketch curves</source>
         <translation>taso, tahko, kappale tai luonnoskäyriä</translation>
+    </message>
+    <message>
+        <source>a planetary drive has at most %1 planets</source>
+        <translation>planeettavaihteessa on enintään %1 planeettapyörää</translation>
     </message>
     <message>
         <source>a plastic rule needs a name</source>
@@ -23970,6 +24350,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>kierto on asteluku</translation>
     </message>
     <message>
+        <source>a round bead is at most half as deep as it is wide: make it wider or less deep, or choose the U profile</source>
+        <translation>pyöreä palko on enintään puolet leveydestään syvä: levennä tai madalla sitä tai valitse U-profiili</translation>
+    </message>
+    <message>
         <source>a round corner of the offset is not at a vertex of its chain</source>
         <translation>siirtymän pyöreä kulma ei ole sen ketjun kärkipisteessä</translation>
     </message>
@@ -24220,6 +24604,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a sheet body without an id</source>
         <translation>levykappale ilman tunnistetta</translation>
+    </message>
+    <message>
+        <source>a sheet cut on a lofted flange&apos;s sheet cuts its transition, which stays fixed: cuts in its flanges are not taken yet</source>
+        <translation>siirtymälaipan levyn levyleikkaus leikkaa sen siirtymää, joka pysyy kiinteänä: sen laippojen leikkauksia ei vielä oteta</translation>
+    </message>
+    <message>
+        <source>a sheet cut on a lofted flange&apos;s sheet opens no bends: its profiles lie on a flat facet</source>
+        <translation>siirtymälaipan levyn levyleikkaus ei avaa taivutuksia: sen profiilit ovat tasaisella fasetilla</translation>
     </message>
     <message>
         <source>a sheet feature</source>
@@ -24644,6 +25036,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a step moves along a direction, turns about an axis, or both</source>
         <translation>askel siirtää suuntaa pitkin, kiertää akselin ympäri tai molemmat</translation>
+    </message>
+    <message>
+        <source>a step of the drive made nothing</source>
+        <translation>vaihteen vaihe ei tehnyt mitään</translation>
     </message>
     <message>
         <source>a stored body: no body record names it</source>
@@ -25300,6 +25696,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a transform that cannot be read: %1</source>
         <translation>muunnos, jota ei voi lukea: %1</translation>
+    </message>
+    <message>
+        <source>a trapezoid bead this deep needs a larger width or steeper flanks: its crown has no width</source>
+        <translation>näin syvä puolisuunnikaspalko tarvitsee suuremman leveyden tai jyrkemmät kyljet: sen harjalla ei ole leveyttä</translation>
+    </message>
+    <message>
+        <source>a trapezoid bead&apos;s flank angle must be above 0 and at most 90 degrees</source>
+        <translation>puolisuunnikaspalon kylkikulman on oltava yli 0 ja enintään 90 astetta</translation>
     </message>
     <message>
         <source>a tread&apos;s side does not reach its inner circle</source>
@@ -25980,6 +26384,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>an arc needs three points</source>
         <translation>kaari tarvitsee kolme pistettä</translation>
+    </message>
+    <message>
+        <source>an arc of the bead&apos;s center line is tighter than half the bead&apos;s width: make the arc larger or the bead narrower</source>
+        <translation>palon keskiviivan kaari on jyrkempi kuin puolet palon leveydestä: suurenna kaarta tai kavenna palkoa</translation>
     </message>
     <message>
         <source>an arc or a circle</source>
@@ -26878,6 +27286,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>väärän pituinen kokonaislukuluettelo</translation>
     </message>
     <message>
+        <source>an interference check is not shown in the view: open it to run it</source>
+        <translation>päällekkäisyystarkistusta ei näytetä näkymässä: suorita se avaamalla se</translation>
+    </message>
+    <message>
         <source>an interior knot point of a B-spline</source>
         <translation>B-splinin sisäsolmupiste</translation>
     </message>
@@ -27508,6 +27920,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>based_on is only for create_print_profile</source>
         <translation>based_on on vain komennolle create_print_profile</translation>
+    </message>
+    <message>
+        <source>beads overlap: keep the center lines of beads on a face apart by their widths</source>
+        <translation>palot menevät päällekkäin: pidä tahkon palkojen keskiviivat leveyksiensä verran erillään</translation>
     </message>
     <message>
         <source>bearing_sizes takes a fit (bore or outside) with a diameter</source>
@@ -28486,6 +28902,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>rajoitteet ja mitat</translation>
     </message>
     <message>
+        <source>construction geometry</source>
+        <translation>apugeometria</translation>
+    </message>
+    <message>
         <source>construction sets</source>
         <translation>konstruktiojoukot</translation>
     </message>
@@ -28552,6 +28972,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>curves one way: %1; crossing curves: %2</source>
         <translation>käyrät yhteen suuntaan: %1; risteävät käyrät: %2</translation>
+    </message>
+    <message>
+        <source>cycloidal gears mesh when each one&apos;s addendum rolling circle is the other&apos;s dedendum rolling circle: this gear&apos;s circles are %1 and %2 mm across, its mate&apos;s %3 and %4 mm</source>
+        <translation>sykloidihammaspyörät rynnöstävät, kun kummankin pään vierintäympyrä on toisen tyven vierintäympyrä: tämän hammaspyörän ympyröiden halkaisijat ovat %1 ja %2 mm, vastapyörän %3 ja %4 mm</translation>
+    </message>
+    <message>
+        <source>cuts that reach the sheet&apos;s edge cross each other: make them one cut</source>
+        <translation>levyn reunaan ulottuvat leikkaukset leikkaavat toisensa: tee niistä yksi leikkaus</translation>
     </message>
     <message>
         <source>cylindrical interpolation</source>
@@ -28688,6 +29116,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>every chosen part is at the assembly&apos;s center with no joint to slide on</source>
         <translation>jokainen valittu osa on kokoonpanon keskipisteessä eikä sillä ole liitosta, jota pitkin liukua</translation>
+    </message>
+    <message>
+        <source>every gear&apos;s teeth must be a whole number of at least 5</source>
+        <translation>jokaisen hammaspyörän hammasluvun on oltava kokonaisluku, vähintään 5</translation>
     </message>
     <message>
         <source>explode text: %1</source>
@@ -34284,10 +34716,6 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>A setup uses the machine: choose another machine for it first.</source>
         <translation>Kiinnitys käyttää konetta: valitse sille ensin toinen kone.</translation>
-    </message>
-    <message>
-        <source>A sketch curve is named like c3.</source>
-        <translation>Luonnoskäyrän nimi on muotoa c3.</translation>
     </message>
     <message>
         <source>A sketch curve of the operation is gone.</source>
@@ -43584,14 +44012,6 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>kerros %1: ei kenttää %2 (sille annetaan %3)</translation>
     </message>
     <message>
-        <source>overlay %1 is none of overhang, thickness, draft or failed</source>
-        <translation>kerros %1 ei ole mikään arvoista overhang, thickness, draft tai failed</translation>
-    </message>
-    <message>
-        <source>overlay must be overhang, thickness, draft or failed, or an object with its type</source>
-        <translation>kentän overlay on oltava overhang, thickness, draft tai failed, tai objekti tyyppeineen</translation>
-    </message>
-    <message>
         <source>overlay.%1 must be a nonzero direction [x, y, z]</source>
         <translation>kentän overlay.%1 on oltava nollasta poikkeava suunta [x, y, z]</translation>
     </message>
@@ -43610,10 +44030,6 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>overlay.pull must be a nonzero direction</source>
         <translation>kentän overlay.pull on oltava nollasta poikkeava suunta</translation>
-    </message>
-    <message>
-        <source>overlay.type must be overhang, thickness, draft or failed</source>
-        <translation>kentän overlay.type on oltava overhang, thickness, draft tai failed</translation>
     </message>
     <message>
         <source>overlay.up must be a nonzero direction</source>
@@ -44620,6 +45036,18 @@ ament_package()
     <message>
         <source>only lines, arcs and conics can be extended</source>
         <translation>vain viivoja, kaaria ja kartioleikkauksia voi jatkaa</translation>
+    </message>
+    <message>
+        <source>overlay %1 is none of overhang, thickness, draft or failed</source>
+        <translation>kerros %1 ei ole mikään arvoista overhang, thickness, draft tai failed</translation>
+    </message>
+    <message>
+        <source>overlay must be overhang, thickness, draft or failed, or an object with its type</source>
+        <translation>kentän overlay on oltava overhang, thickness, draft tai failed, tai objekti tyyppeineen</translation>
+    </message>
+    <message>
+        <source>overlay.type must be overhang, thickness, draft or failed</source>
+        <translation>kentän overlay.type on oltava overhang, thickness, draft tai failed</translation>
     </message>
     <message>
         <source>p%1 is not the corner of two lines, arcs or conics (%2 curves end there)</source>
@@ -51512,10 +51940,6 @@ ament_package()
         <translation>siirtymälaipan levyn leikkaus kulkee sen paksuuden läpi kohtisuoraan siihen nähden: tämä on vino tai ei mene läpi</translation>
     </message>
     <message>
-        <source>a cut that reaches the edge of a lofted flange&apos;s sheet is not taken yet: its sheet takes holes and cut-outs inside its edges</source>
-        <translation>siirtymälaipan levyn reunaan ulottuvaa leikkausta ei vielä oteta: sen levy ottaa reiät ja aukot reunojensa sisäpuolella</translation>
-    </message>
-    <message>
         <source>a cut&apos;s edge lies off the sheet</source>
         <translation>leikkauksen särmä on levyn ulkopuolella</translation>
     </message>
@@ -51546,10 +51970,6 @@ ament_package()
     <message>
         <source>a lofted flange&apos;s sheet follows holes and cuts made by ordinary features, not other changes</source>
         <translation>siirtymälaipan levy seuraa tavallisten piirteiden tekemiä reikiä ja leikkauksia, ei muita muutoksia</translation>
-    </message>
-    <message>
-        <source>a lofted flange&apos;s sheet takes no other sheet metal features yet (flanges, bends, sheet cuts, unfolds): edit the lofted flange itself, or cut holes in it with Hole or a cutting Extrude</source>
-        <translation>siirtymälaipan levy ei vielä ota muita ohutlevypiirteitä (laippoja, taivutuksia, levyleikkauksia, levityksiä): muokkaa itse siirtymälaippaa tai leikkaa siihen reikiä Reiällä tai leikkaavalla pursotuksella</translation>
     </message>
     <message>
         <source>a move up to an object takes no other motion</source>
@@ -51640,10 +52060,6 @@ ament_package()
         <translation>kaareva 1/2-V-hitsi</translation>
     </message>
     <message>
-        <source>folds meet at a point of a profile here (the tip of a three-sided facet): bends of the rules&apos; bend radius would run into each other there. Fold the transition sharp, or join profiles whose facets all have four sides (two rectangles, two circles, two rounded rectangles)</source>
-        <translation>taitokset kohtaavat tässä profiilin pisteessä (kolmisivuisen fasetin kärjessä): sääntöjen taivutussäteen taivutukset törmäisivät siinä toisiinsa. Taita siirtymä teräväksi tai yhdistä profiilit, joiden kaikilla faseteilla on neljä sivua (kaksi suorakulmiota, kaksi ympyrää, kaksi pyöristettyä suorakulmiota)</translation>
-    </message>
-    <message>
         <source>free edges of %1</source>
         <translation>kohteen %1 vapaat särmät</translation>
     </message>
@@ -51674,6 +52090,10 @@ ament_package()
     <message>
         <source>give a kept analysis&apos; name or the picks and the clearance, not both</source>
         <translation>anna säilytetyn analyysin nimi tai poiminnat ja välys, ei molempia</translation>
+    </message>
+    <message>
+        <source>give a kept interference check&apos;s name or the bodies, not both</source>
+        <translation>anna säilytetyn päällekkäisyystarkistuksen nimi tai kappaleet, ei molempia</translation>
     </message>
     <message>
         <source>give a vector or geometry</source>
@@ -51764,8 +52184,28 @@ ament_package()
         <translation>se muuttaa levyä muuten kuin edestä sen paksuuden läpi menevillä rei&apos;illä ja leikkauksilla</translation>
     </message>
     <message>
+        <source>it parts the lofted flange&apos;s sheet in pieces: its sheet stays one piece</source>
+        <translation>se jakaa siirtymälaipan levyn paloiksi: sen levy pysyy yhtenä kappaleena</translation>
+    </message>
+    <message>
+        <source>it removes all of the lofted flange&apos;s sheet</source>
+        <translation>se poistaa koko siirtymälaipan levyn</translation>
+    </message>
+    <message>
         <source>its %1 does not evaluate: %2</source>
         <translation>sen %1 ei ole laskettavissa: %2</translation>
+    </message>
+    <message>
+        <source>its %1 is the replacement&apos;s %2 at the same place</source>
+        <translation>sen %1 on korvaajan %2 samassa paikassa</translation>
+    </message>
+    <message>
+        <source>its %1 is the replacement&apos;s %2 of the same name</source>
+        <translation>sen %1 on korvaajan samanniminen %2</translation>
+    </message>
+    <message>
+        <source>its %1 was on a component inside the replaced one; it stays, marked as broken, until it is given new geometry</source>
+        <translation>sen %1 oli korvatun komponentin sisällä olevassa komponentissa; se säilyy rikkinäiseksi merkittynä, kunnes sille annetaan uusi geometria</translation>
     </message>
     <message>
         <source>its anchor is fixed where its expressions put it now</source>
@@ -51872,6 +52312,10 @@ ament_package()
         <translation>sen muuttujan yksikkö %1 ei ole tämän tuonnin tuntema</translation>
     </message>
     <message>
+        <source>joint&apos;s depth into the end face&apos;s part</source>
+        <translation>liitoksen syvyys päätytahkon osaan</translation>
+    </message>
+    <message>
         <source>laid flat approximately by %1 triangles: lengths along its edges differ from the faces&apos; by up to %2 mm, across it by up to %3 mm</source>
         <translation>levitetty likimääräisesti %1 kolmiolla: pituudet sen särmiä pitkin eroavat tahkojen pituuksista enintään %2 mm, sen poikki enintään %3 mm</translation>
     </message>
@@ -51922,6 +52366,10 @@ ament_package()
     <message>
         <source>minimum distance</source>
         <translation>pienin etäisyys</translation>
+    </message>
+    <message>
+        <source>mount frame</source>
+        <translation>kiinnityskehys</translation>
     </message>
     <message>
         <source>moved gave no shape</source>
@@ -52040,8 +52488,16 @@ ament_package()
         <translation>otsapinnalla Y-akselin avulla</translation>
     </message>
     <message>
+        <source>one of its bodies is not in the design at the timeline marker: edit the check to choose its bodies again</source>
+        <translation>yksi sen kappaleista ei ole mallissa aikajanan merkin kohdalla: valitse kappaleet uudelleen muokkaamalla tarkistusta</translation>
+    </message>
+    <message>
         <source>only a Flat Pattern view has bend notes</source>
         <translation>vain levityksen kuvannolla on taivutusmerkinnät</translation>
+    </message>
+    <message>
+        <source>only a compound train has gaps between its stages</source>
+        <translation>vain monivaiheisella hammaspyörästöllä on välit vaiheidensa välissä</translation>
     </message>
     <message>
         <source>only a fillet weld&apos;s size measures its throat or its leg</source>
@@ -52180,6 +52636,14 @@ ament_package()
         <translation>sädetila (G8), mutta ohjelma kirjoittaa X:n halkaisijana</translation>
     </message>
     <message>
+        <source>replace_component needs one replacement: a path, a library part or another component (with)</source>
+        <translation>replace_component tarvitsee yhden korvaajan: polun, kirjasto-osan tai toisen komponentin (with)</translation>
+    </message>
+    <message>
+        <source>replace_component needs the occurrence or the component to replace, not both</source>
+        <translation>replace_component tarvitsee korvattavan esiintymän tai komponentin, ei molempia</translation>
+    </message>
+    <message>
         <source>retarget: %1 lost its parameter</source>
         <translation>uudelleenkohdistus: %1 menetti parametrinsa</translation>
     </message>
@@ -52216,8 +52680,16 @@ ament_package()
         <translation>usean piirteen nimi on %1: anna sen uid</translation>
     </message>
     <message>
+        <source>sketch curve</source>
+        <translation>luonnoskäyrä</translation>
+    </message>
+    <message>
         <source>sketch curve %1 of the %2 profile is unavailable</source>
         <translation>profiilin %2 luonnoskäyrä %1 ei ole käytettävissä</translation>
+    </message>
+    <message>
+        <source>sketch point</source>
+        <translation>luonnospiste</translation>
     </message>
     <message>
         <source>smoothing the noise with %1 neighbors needs as many points, %2 are left</source>
@@ -52372,6 +52844,10 @@ ament_package()
         <translation>profiilin %1 luonnos on kaarevalla tahkolla: siirtymälaipan profiilit ovat luonnostasoilla</translation>
     </message>
     <message>
+        <source>the %1 rolling circle&apos;s diameter must be greater than zero, got %2</source>
+        <translation>vierintäympyrän (%1) halkaisijan on oltava suurempi kuin nolla, annettiin %2</translation>
+    </message>
+    <message>
         <source>the %1 section&apos;s edges bound no one face: give the face to leave at right angles as the %2 condition&apos;s face</source>
         <translation>poikkileikkauksen %1 särmät eivät rajaa yhtä tahkoa: anna tahko, josta lähdetään kohtisuoraan, ehdon %2 tahkona</translation>
     </message>
@@ -52412,6 +52888,10 @@ ament_package()
         <translation>PLY-elementillä %1 on kohteita mutta ei ominaisuuksia</translation>
     </message>
     <message>
+        <source>the addendum rolling circle is too small to reach the tips: its diameter must be more than %1 mm, got %2</source>
+        <translation>pään vierintäympyrä on liian pieni ulottuakseen hampaiden kärkiin: sen halkaisijan on oltava yli %1 mm, annettiin %2</translation>
+    </message>
+    <message>
         <source>the alignment found no rigid motion</source>
         <translation>kohdistus ei löytänyt jäykkää liikettä</translation>
     </message>
@@ -52432,8 +52912,44 @@ ament_package()
         <translation>kohteen %1 ympärillä oleva kokoonpano kohteessa %2</translation>
     </message>
     <message>
+        <source>the backlash must not be negative</source>
+        <translation>hammasvälys ei saa olla negatiivinen</translation>
+    </message>
+    <message>
         <source>the base point must be finite, got %1</source>
         <translation>peruspisteen on oltava äärellinen, annettiin %1</translation>
+    </message>
+    <message>
+        <source>the bead does not fit on its face: it keeps clear of the face&apos;s edges, holes and bends by half its width (and by its run-out&apos;s foot at a run-out end), and lies inside the face</source>
+        <translation>palko ei mahdu tahkolleen: sen on pysyttävä tahkon reunoista, rei&apos;istä ja taivutuksista puolen leveytensä verran erillään (ulosajopäässä ulosajon juuren verran) ja oltava tahkon sisällä</translation>
+    </message>
+    <message>
+        <source>the bead does not meet its face: the sheet is not where its sketch is</source>
+        <translation>palko ei kohtaa tahkoaan: levy ei ole sen luonnoksen kohdalla</translation>
+    </message>
+    <message>
+        <source>the bead is too narrow for the sheet&apos;s thickness: its inner surface would fold over itself; make it wider or less deep</source>
+        <translation>palko on liian kapea levyn paksuuteen nähden: sen sisäpinta taittuisi itsensä päälle; levennä tai madalla sitä</translation>
+    </message>
+    <message>
+        <source>the bead would cut the sheet apart</source>
+        <translation>palko leikkaisi levyn kahtia</translation>
+    </message>
+    <message>
+        <source>the bead&apos;s bends do not fit in its section: make it wider or deeper, or its bend radius smaller</source>
+        <translation>palon taivutukset eivät mahdu sen poikkileikkaukseen: levennä tai syvennä sitä tai pienennä sen taivutussädettä</translation>
+    </message>
+    <message>
+        <source>the bead&apos;s center lines branch: more than two of its lines and arcs meet at a point</source>
+        <translation>palon keskiviivat haarautuvat: useampi kuin kaksi sen viivoista ja kaarista kohtaa samassa pisteessä</translation>
+    </message>
+    <message>
+        <source>the bead&apos;s run-out could not be made</source>
+        <translation>palon ulosajoa ei voitu tehdä</translation>
+    </message>
+    <message>
+        <source>the bead&apos;s section could not be made</source>
+        <translation>palon poikkileikkausta ei voitu tehdä</translation>
     </message>
     <message>
         <source>the bend line it was picked on is gone from the Flat Pattern of %1</source>
@@ -52446,6 +52962,18 @@ ament_package()
     <message>
         <source>the best fit stopped after %1 before it settled; the mesh may lie a little off</source>
         <translation>paras sovitus pysähtyi %1 jälkeen ennen asettumistaan; verkko voi olla hieman sivussa</translation>
+    </message>
+    <message>
+        <source>the bevel pair was not made as two gears</source>
+        <translation>kartiopyöräparia ei tehty kahtena hammaspyöränä</translation>
+    </message>
+    <message>
+        <source>the bevel pair&apos;s %1 is no number</source>
+        <translation>kartiopyöräparin %1 ei ole luku</translation>
+    </message>
+    <message>
+        <source>the bevel pair: %1</source>
+        <translation>kartiopyöräpari: %1</translation>
     </message>
     <message>
         <source>the blend curve</source>
@@ -52536,6 +53064,14 @@ ament_package()
         <translation>Boolen operaatio kohteen %1 kanssa: %2</translation>
     </message>
     <message>
+        <source>the bore must be greater than zero</source>
+        <translation>akselireiän on oltava suurempi kuin nolla</translation>
+    </message>
+    <message>
+        <source>the bore reaches the tooth roots of the smallest gear: make it smaller</source>
+        <translation>akselireikä ulottuu pienimmän hammaspyörän hampaiden pohjaan: pienennä sitä</translation>
+    </message>
+    <message>
         <source>the boundary curves do not close into a loop: the curves of %1 end at %2 with no curve going on</source>
         <translation>reunakäyrät eivät sulkeudu silmukaksi: kohteen %1 käyrät päättyvät kohdassa %2, eikä mikään käyrä jatku siitä</translation>
     </message>
@@ -52546,6 +53082,10 @@ ament_package()
     <message>
         <source>the boundary curves do not make one loop: they close into several</source>
         <translation>reunakäyrät eivät muodosta yhtä silmukkaa: ne sulkeutuvat useaksi silmukaksi</translation>
+    </message>
+    <message>
+        <source>the box joint&apos;s fingers (%1 mm) must be wider than twice the clearance</source>
+        <translation>sormiliitoksen sormien (%1 mm) on oltava leveämpiä kuin kaksi kertaa välys</translation>
     </message>
     <message>
         <source>the box&apos;s Face: %1</source>
@@ -52562,6 +53102,10 @@ ament_package()
     <message>
         <source>the cap on line %1 of the member did not come in: %2</source>
         <translation>rakenneosan viivan %1 kantta ei tuotu: %2</translation>
+    </message>
+    <message>
+        <source>the carrier&apos;s thickness must be greater than zero</source>
+        <translation>planeettakannattimen paksuuden on oltava suurempi kuin nolla</translation>
     </message>
     <message>
         <source>the cell size must be at least %1 mm, got %2</source>
@@ -52632,6 +53176,10 @@ ament_package()
         <translation>komponentti on poistunut</translation>
     </message>
     <message>
+        <source>the component is not a gear drive, nor placed in one</source>
+        <translation>komponentti ei ole hammaspyörävaihde eikä sijoitettu sellaiseen</translation>
+    </message>
+    <message>
         <source>the component itself is not an occurrence it can move</source>
         <translation>komponentti itse ei ole esiintymä, jota se voi siirtää</translation>
     </message>
@@ -52658,6 +53206,18 @@ ament_package()
     <message>
         <source>the corner gap is wider than the triangles at the seam: make it smaller or use fewer triangles</source>
         <translation>nurkan rako on leveämpi kuin kolmiot saumassa: pienennä sitä tai käytä vähemmän kolmioita</translation>
+    </message>
+    <message>
+        <source>the corner relief is too large here: its cut reaches past the facets and bends that meet in this point. Make it smaller, or use fewer facets</source>
+        <translation>nurkan vapautusleikkaus on tässä liian suuri: sen leikkaus ulottuu tässä pisteessä kohtaavien fasettien ja taivutusten ohi. Pienennä sitä tai käytä vähemmän fasetteja</translation>
+    </message>
+    <message>
+        <source>the corner relief must be positive, got %1</source>
+        <translation>nurkan vapautusleikkauksen on oltava positiivinen, annettiin %1</translation>
+    </message>
+    <message>
+        <source>the corner relief where these bends meet in a point is too small: they would run into each other before its cut. Make it at least %1 mm</source>
+        <translation>nurkan vapautusleikkaus näiden taivutusten kohtauspisteessä on liian pieni: ne törmäisivät toisiinsa ennen sen leikkausta. Tee siitä vähintään %1 mm</translation>
     </message>
     <message>
         <source>the crease table has no row for a fold of %1 mm board%2 %3 with the front %4 the fold</source>
@@ -52720,8 +53280,16 @@ ament_package()
         <translation>lyhennys: %1</translation>
     </message>
     <message>
+        <source>the cut parts the lofted flange&apos;s sheet in pieces: its sheet stays one piece</source>
+        <translation>leikkaus jakaa siirtymälaipan levyn paloiksi: sen levy pysyy yhtenä kappaleena</translation>
+    </message>
+    <message>
         <source>the cut runs across an opening of the mesh (%1), so it cannot be capped; Repair Mesh fills holes, or cut without a cap</source>
         <translation>leikkaus kulkee verkon aukon poikki (%1), joten sitä ei voi sulkea; Korjaa verkko täyttää aukot, tai leikkaa ilman sulkemista</translation>
+    </message>
+    <message>
+        <source>the cut&apos;s sketch does not lie on the front or the back of a flat facet of the lofted flange</source>
+        <translation>leikkauksen luonnos ei ole siirtymälaipan tasaisen fasetin etu- eikä takapinnalla</translation>
     </message>
     <message>
         <source>the cutting plane has no normal</source>
@@ -52772,6 +53340,10 @@ ament_package()
         <translation>tarran tahko: %1</translation>
     </message>
     <message>
+        <source>the dedendum rolling circle&apos;s diameter must be more than %1 mm and less than %2 mm for these teeth, got %3</source>
+        <translation>tyven vierintäympyrän halkaisijan on oltava näille hampaille yli %1 mm ja alle %2 mm, annettiin %3</translation>
+    </message>
+    <message>
         <source>the design has no bodies at the timeline marker</source>
         <translation>mallissa ei ole kappaleita aikajanan merkin kohdalla</translation>
     </message>
@@ -52786,6 +53358,10 @@ ament_package()
     <message>
         <source>the design to link has no occurrence %1</source>
         <translation>linkitettävässä mallissa ei ole esiintymää %1</translation>
+    </message>
+    <message>
+        <source>the design&apos;s root cannot replace a component</source>
+        <translation>mallin pääkomponentti ei voi korvata komponenttia</translation>
     </message>
     <message>
         <source>the detail must be from %1 to %2 cubes along the longest side, got %3</source>
@@ -52818,6 +53394,30 @@ ament_package()
     <message>
         <source>the draft angle must be from 0 to less than 90 degrees, got %1</source>
         <translation>päästökulman on oltava vähintään 0 ja alle 90 astetta, annettiin %1</translation>
+    </message>
+    <message>
+        <source>the drive cannot be made again while other features use its components: %1</source>
+        <translation>vaihdetta ei voi tehdä uudelleen, kun muut piirteet käyttävät sen komponentteja: %1</translation>
+    </message>
+    <message>
+        <source>the drive made no gear</source>
+        <translation>vaihde ei tehnyt yhtään hammaspyörää</translation>
+    </message>
+    <message>
+        <source>the drive&apos;s component takes no components of its own</source>
+        <translation>vaihteen komponenttiin ei voi lisätä omia komponentteja</translation>
+    </message>
+    <message>
+        <source>the drive&apos;s definition: %1</source>
+        <translation>vaihteen määrittely: %1</translation>
+    </message>
+    <message>
+        <source>the drive&apos;s type takes no %1</source>
+        <translation>vaihteen tyyppi ei ota kohdetta %1</translation>
+    </message>
+    <message>
+        <source>the edge does not lie on one flat facet of the lofted flange: a flange goes on a straight edge of a flat facet</source>
+        <translation>särmä ei ole siirtymälaipan yhdellä tasaisella fasetilla: laippa tulee tasaisen fasetin suoralle särmälle</translation>
     </message>
     <message>
         <source>the edit of %1 changes its operation: edit it on its own</source>
@@ -53052,6 +53652,10 @@ ament_package()
         <translation>kappaleen %1 tahkoa, jolla tapahtuma on, ei ole tai se ei ole tasomainen aikajanan merkin kohdalla</translation>
     </message>
     <message>
+        <source>the face of a bead is not developed</source>
+        <translation>palon tahkoa ei ole levitetty</translation>
+    </message>
+    <message>
         <source>the face of its profile as decoded</source>
         <translation>sen profiilin tahko purettuna</translation>
     </message>
@@ -53074,6 +53678,14 @@ ament_package()
     <message>
         <source>the face was made by %1 (%2), not from a dimension</source>
         <translation>pinnan teki piirre %1 (%2), ei mitta</translation>
+    </message>
+    <message>
+        <source>the face width must be greater than zero</source>
+        <translation>hammasleveyden on oltava suurempi kuin nolla</translation>
+    </message>
+    <message>
+        <source>the face width must be less than half the gears&apos; cone distance</source>
+        <translation>hammasleveyden on oltava alle puolet hammaspyörien kartioetäisyydestä</translation>
     </message>
     <message>
         <source>the face&apos;s axis has no direction</source>
@@ -53266,6 +53878,10 @@ ament_package()
     <message>
         <source>the faces&apos; outlines do not join into one: a face cut out of its surface must keep the whole edges it shares with the faces beside it</source>
         <translation>tahkojen ääriviivat eivät liity yhdeksi: pinnastaan leikatun tahkon on säilytettävä kokonaisina särmät, jotka se jakaa vieressään olevien tahkojen kanssa</translation>
+    </message>
+    <message>
+        <source>the facet leaves no room for the flange&apos;s edge</source>
+        <translation>fasetissa ei ole tilaa laipan särmälle</translation>
     </message>
     <message>
         <source>the faceted solid is not valid; no geometry was converted</source>
@@ -53804,6 +54420,10 @@ ament_package()
         <translation>ensimmäinen tiedosto %1 ei ole .usdc-kerros</translation>
     </message>
     <message>
+        <source>the first gear&apos;s teeth must be a whole number of at least 5</source>
+        <translation>ensimmäisen hammaspyörän hammasluvun on oltava kokonaisluku, vähintään 5</translation>
+    </message>
+    <message>
         <source>the first input: %1</source>
         <translation>ensimmäinen syöte: %1</translation>
     </message>
@@ -53880,6 +54500,14 @@ ament_package()
         <translation>kiinteä piste</translation>
     </message>
     <message>
+        <source>the flange adds no material to the lofted flange&apos;s sheet</source>
+        <translation>laippa ei lisää materiaalia siirtymälaipan levyyn</translation>
+    </message>
+    <message>
+        <source>the flange meets other walls of the sheet: on a lofted flange&apos;s sheet a flange stands on its own edge</source>
+        <translation>laippa kohtaa levyn muita seinämiä: siirtymälaipan levyllä laippa seisoo omalla särmällään</translation>
+    </message>
+    <message>
         <source>the flange must be larger than the outside diameter (%1 mm), got %2</source>
         <translation>laipan on oltava suurempi kuin ulkohalkaisija (%1 mm), annettiin %2</translation>
     </message>
@@ -53888,16 +54516,52 @@ ament_package()
         <translation>laipan on oltava ohuempi kuin laakerin leveys (%1 mm), annettiin %2</translation>
     </message>
     <message>
+        <source>the flange takes all of the lofted flange&apos;s sheet</source>
+        <translation>laippa vie koko siirtymälaipan levyn</translation>
+    </message>
+    <message>
+        <source>the flange would pass into a wall beside its edge: on a lofted flange&apos;s sheet a flange&apos;s ends stay free</source>
+        <translation>laippa menisi särmänsä vieressä olevaan seinämään: siirtymälaipan levyllä laipan päät jäävät vapaiksi</translation>
+    </message>
+    <message>
         <source>the flange&apos;s %1 has no value</source>
         <translation>laipan kohdalla %1 ei ole arvoa</translation>
+    </message>
+    <message>
+        <source>the flange&apos;s bend does not meet the lofted flange at its edge</source>
+        <translation>laipan taivutus ei kohtaa siirtymälaippaa sen särmällä</translation>
+    </message>
+    <message>
+        <source>the flange&apos;s bend or wall runs into the lofted flange beside its edge: shorten it, give it offsets, or fold it the other way</source>
+        <translation>laipan taivutus tai seinämä osuu siirtymälaippaan särmänsä vieressä: lyhennä sitä, anna sille siirtymät tai taita se toiseen suuntaan</translation>
+    </message>
+    <message>
+        <source>the flange&apos;s bends and walls make %1 solids</source>
+        <translation>laipan taivutukset ja seinämät muodostavat %1 solidia</translation>
     </message>
     <message>
         <source>the flange&apos;s corner</source>
         <translation>laipan nurkka</translation>
     </message>
     <message>
+        <source>the flange&apos;s edge is not on the lofted flange&apos;s sheet</source>
+        <translation>laipan särmä ei ole siirtymälaipan levyllä</translation>
+    </message>
+    <message>
+        <source>the flange&apos;s edge is not whole on its facet</source>
+        <translation>laipan särmä ei ole kokonaan fasetillaan</translation>
+    </message>
+    <message>
         <source>the flange&apos;s setback line leaves no material along its boundary</source>
         <translation>laipan sisäänvetoviiva ei jätä materiaalia sen reunalle</translation>
+    </message>
+    <message>
+        <source>the flange&apos;s setback or reliefs reach past the folds beside its edge: on a lofted flange&apos;s sheet a flange takes material from its own facet only; place it at the edge, or give it offsets</source>
+        <translation>laipan sisäänveto tai vapautusleikkaukset ulottuvat särmän vieressä olevien taitteiden yli: siirtymälaipan levyllä laippa ottaa materiaalia vain omasta fasetistaan; sijoita se särmälle tai anna sille siirtymät</translation>
+    </message>
+    <message>
+        <source>the flange&apos;s setback parts the lofted flange&apos;s sheet in pieces</source>
+        <translation>laipan sisäänveto jakaa siirtymälaipan levyn paloiksi</translation>
     </message>
     <message>
         <source>the flange&apos;s trim</source>
@@ -54036,6 +54700,10 @@ ament_package()
         <translation>ruutujen aikakoodien on kasvettava: %1 tulee arvon %2 jälkeen</translation>
     </message>
     <message>
+        <source>the gap between the stages must be greater than zero</source>
+        <translation>vaiheiden välisen välin on oltava suurempi kuin nolla</translation>
+    </message>
+    <message>
         <source>the gap must be at least zero and less than the face width, got %1</source>
         <translation>raon on oltava vähintään nolla ja pienempi kuin tahkon leveys, annettiin %1</translation>
     </message>
@@ -54090,6 +54758,10 @@ ament_package()
     <message>
         <source>the geometry it joins to is in a part of the linked design that is no longer linked; it keeps the place it had there</source>
         <translation>geometria, johon se liittyy, on linkitetyn mallin osassa, jota ei enää linkitetä; se säilyttää siellä olleen paikkansa</translation>
+    </message>
+    <message>
+        <source>the geometry kernel cannot read the cut&apos;s faces</source>
+        <translation>geometriaydin ei voi lukea leikkauksen tahkoja</translation>
     </message>
     <message>
         <source>the geometry kernel cannot read the result&apos;s faces</source>
@@ -54250,6 +54922,10 @@ ament_package()
     <message>
         <source>the helix angle must be at most 45 degrees, got %1 degrees</source>
         <translation>kierukkakulman on oltava enintään 45 astetta, annettiin %1 astetta</translation>
+    </message>
+    <message>
+        <source>the helix angle must be between 0 and 45 degrees</source>
+        <translation>kierukkakulman on oltava 0–45 astetta</translation>
     </message>
     <message>
         <source>the helix angle must not be negative (left_handed turns it), got %1</source>
@@ -54428,6 +55104,10 @@ ament_package()
         <translation>kohteen %1 reiät: %2</translation>
     </message>
     <message>
+        <source>the holes of the %1 pieces overlap: %2 mm along the face each with the clearance, their middles %3 mm apart</source>
+        <translation>%1 palan reiät ovat päällekkäin: kukin %2 mm tahkon suunnassa välyksen kanssa, keskikohtien väli %3 mm</translation>
+    </message>
+    <message>
         <source>the hub must be wider than the bore</source>
         <translation>navan on oltava akselireikää leveämpi</translation>
     </message>
@@ -54560,6 +55240,14 @@ ament_package()
         <translation>ilmentymä ei ole tämän lohkon</translation>
     </message>
     <message>
+        <source>the interference check lists a body more than once</source>
+        <translation>päällekkäisyystarkistuksessa on kappale useammin kuin kerran</translation>
+    </message>
+    <message>
+        <source>the interference check: %1</source>
+        <translation>päällekkäisyystarkistus: %1</translation>
+    </message>
+    <message>
         <source>the iso curves came back short</source>
         <translation>isokäyriä tuli liian vähän</translation>
     </message>
@@ -54676,8 +55364,16 @@ ament_package()
         <translation>liitetyllä seinällä %1 ei ole tyypin leveyttä</translation>
     </message>
     <message>
+        <source>the joint does not cut into any participant body</source>
+        <translation>liitos ei leikkaa yhteenkään osallistuvaan kappaleeseen</translation>
+    </message>
+    <message>
         <source>the joint does not hold at the marker: a later feature moved a side</source>
         <translation>liitos ei pidä merkin kohdalla: myöhempi piirre siirsi toista puolta</translation>
+    </message>
+    <message>
+        <source>the joint does not reach the other part</source>
+        <translation>liitos ei ulotu toiseen osaan</translation>
     </message>
     <message>
         <source>the joint has no free motion %1</source>
@@ -54692,16 +55388,72 @@ ament_package()
         <translation>liitos ei ole voimassa merkin kohdalla</translation>
     </message>
     <message>
+        <source>the joint needs a depth</source>
+        <translation>liitos tarvitsee syvyyden</translation>
+    </message>
+    <message>
+        <source>the joint needs a diameter</source>
+        <translation>liitos tarvitsee halkaisijan</translation>
+    </message>
+    <message>
+        <source>the joint needs a size it was not given</source>
+        <translation>liitos tarvitsee mitan, jota sille ei annettu</translation>
+    </message>
+    <message>
+        <source>the joint needs a thickness</source>
+        <translation>liitos tarvitsee paksuuden</translation>
+    </message>
+    <message>
+        <source>the joint needs a width</source>
+        <translation>liitos tarvitsee leveyden</translation>
+    </message>
+    <message>
+        <source>the joint needs two different parts</source>
+        <translation>liitos tarvitsee kaksi eri osaa</translation>
+    </message>
+    <message>
         <source>the joint would move parts by %1 (mm or radians) from where the file places them</source>
         <translation>liitos siirtäisi osia %1 (mm tai radiaania) tiedoston sijoittamista paikoista</translation>
+    </message>
+    <message>
+        <source>the joint&apos;s count must be a whole number from %1 to %2, got %3</source>
+        <translation>liitoksen määrän on oltava kokonaisluku väliltä %1–%2, annettiin %3</translation>
     </message>
     <message>
         <source>the joint&apos;s depth must be greater than zero</source>
         <translation>liitoksen syvyyden on oltava suurempi kuin nolla</translation>
     </message>
     <message>
+        <source>the joint&apos;s end face %1 must be planar</source>
+        <translation>liitoksen päätytahkon %1 on oltava tasomainen</translation>
+    </message>
+    <message>
+        <source>the joint&apos;s end face has no normal</source>
+        <translation>liitoksen päätytahkolla ei ole normaalia</translation>
+    </message>
+    <message>
+        <source>the joint&apos;s end face must be planar</source>
+        <translation>liitoksen päätytahkon on oltava tasomainen</translation>
+    </message>
+    <message>
         <source>the joint&apos;s frames do not hold where the file places the parts</source>
         <translation>liitoksen kehykset eivät pidä siellä, minne tiedosto sijoittaa osat</translation>
+    </message>
+    <message>
+        <source>the joint&apos;s holes do not go into the end face&apos;s part</source>
+        <translation>liitoksen reiät eivät mene päätytahkon osaan</translation>
+    </message>
+    <message>
+        <source>the joint&apos;s offset must be a length, got %1</source>
+        <translation>liitoksen siirtymän on oltava pituus, annettiin %1</translation>
+    </message>
+    <message>
+        <source>the joint&apos;s offset takes it past the end face&apos;s edge (by %1 mm)</source>
+        <translation>liitoksen siirtymä vie sen päätytahkon särmän yli (%1 mm)</translation>
+    </message>
+    <message>
+        <source>the joint&apos;s pieces (%1 mm) are thicker than the end face (%2 mm)</source>
+        <translation>liitoksen palat (%1 mm) ovat paksumpia kuin päätytahko (%2 mm)</translation>
     </message>
     <message>
         <source>the joints</source>
@@ -55012,6 +55764,10 @@ ament_package()
         <translation>viivat ovat yhdensuuntaiset</translation>
     </message>
     <message>
+        <source>the lines at a corner of the bead&apos;s center line are too short for its width</source>
+        <translation>palon keskiviivan nurkan viivat ovat liian lyhyitä sen leveyteen nähden</translation>
+    </message>
+    <message>
         <source>the lines do not share an end: a fillet rounds the corner where two lines meet</source>
         <translation>viivoilla ei ole yhteistä päätä: pyöristys pyöristää kulman, jossa kaksi viivaa kohtaa</translation>
     </message>
@@ -55054,10 +55810,6 @@ ament_package()
     <message>
         <source>the lofted flange&apos;s body could not be built: %1</source>
         <translation>siirtymälaipan kappaletta ei voitu rakentaa: %1</translation>
-    </message>
-    <message>
-        <source>the lofted flange&apos;s body could not be built: its smooth surface could not be made solid the thickness behind it</source>
-        <translation>siirtymälaipan kappaletta ei voitu rakentaa: sen sileää pintaa ei voitu tehdä umpeen paksuuden verran sen taakse</translation>
     </message>
     <message>
         <source>the lofted flange&apos;s chart has no rulings</source>
@@ -55536,6 +56288,10 @@ ament_package()
         <translation>mallinnetun kierteen profiili on ISO 68-1:n mukainen koon perushalkaisijoilla</translation>
     </message>
     <message>
+        <source>the module must be greater than zero</source>
+        <translation>moduulin on oltava suurempi kuin nolla</translation>
+    </message>
+    <message>
         <source>the module must be greater than zero, got %1</source>
         <translation>moduulin on oltava suurempi kuin nolla, annettiin %1</translation>
     </message>
@@ -55706,6 +56462,10 @@ ament_package()
     <message>
         <source>the number of elements must be a whole number of at least %1, got %2</source>
         <translation>elementtien määrän on oltava kokonaisluku ja vähintään %1, annettiin %2</translation>
+    </message>
+    <message>
+        <source>the number of planets must be a whole number of at least 1</source>
+        <translation>planeettapyörien määrän on oltava kokonaisluku, vähintään 1</translation>
     </message>
     <message>
         <source>the number of sections must be from 1 to %1, got %2</source>
@@ -56592,6 +57352,14 @@ ament_package()
         <translation>palat %1 ja %2</translation>
     </message>
     <message>
+        <source>the pinion&apos;s bore reaches its tooth roots: make it smaller</source>
+        <translation>pikkupyörän akselireikä ulottuu sen hampaiden pohjaan: pienennä sitä</translation>
+    </message>
+    <message>
+        <source>the pinion&apos;s teeth must be a whole number of at least 5</source>
+        <translation>pikkupyörän hammasluvun on oltava kokonaisluku, vähintään 5</translation>
+    </message>
+    <message>
         <source>the pitch circle holds fewer than %1 elements of %2 mm</source>
         <translation>jakoympyrälle mahtuu vähemmän kuin %1 elementtiä, joiden koko on %2 mm</translation>
     </message>
@@ -56758,6 +57526,26 @@ ament_package()
     <message>
         <source>the plane: %1</source>
         <translation>taso: %1</translation>
+    </message>
+    <message>
+        <source>the planets cannot be spaced evenly: the sun&apos;s and the ring&apos;s teeth together must divide by the number of planets</source>
+        <translation>planeettapyöriä ei voi sijoittaa tasavälein: aurinkopyörän ja sisähammaspyörän hammaslukujen summan on oltava jaollinen planeettapyörien määrällä</translation>
+    </message>
+    <message>
+        <source>the planets touch each other: use fewer planets, or smaller planets on a larger sun</source>
+        <translation>planeettapyörät koskettavat toisiaan: käytä vähemmän planeettapyöriä tai pienempiä planeettapyöriä suuremman aurinkopyörän ympärillä</translation>
+    </message>
+    <message>
+        <source>the planets&apos; bore must be greater than zero</source>
+        <translation>planeettapyörien akselireiän on oltava suurempi kuin nolla</translation>
+    </message>
+    <message>
+        <source>the planets&apos; bore reaches their tooth roots: make it smaller</source>
+        <translation>planeettapyörien akselireikä ulottuu niiden hampaiden pohjaan: pienennä sitä</translation>
+    </message>
+    <message>
+        <source>the planets&apos; teeth must be a whole number of at least 5</source>
+        <translation>planeettapyörien hammasluvun on oltava kokonaisluku, vähintään 5</translation>
     </message>
     <message>
         <source>the plastic rule %1 failed</source>
@@ -57066,6 +57854,10 @@ ament_package()
     <message>
         <source>the press pull distance must not be zero</source>
         <translation>työnnön/vedon etäisyys ei saa olla nolla</translation>
+    </message>
+    <message>
+        <source>the pressure angle must be between 10 and 35 degrees</source>
+        <translation>ryntökulman on oltava 10–35 astetta</translation>
     </message>
     <message>
         <source>the pressure angle must be between 10 and 35 degrees, got %1 degrees</source>
@@ -57576,20 +58368,44 @@ ament_package()
         <translation>vierintärata leikataan kappaleen tahkoon</translation>
     </message>
     <message>
+        <source>the rack&apos;s addendum rolling circle is too small to reach its tips: its diameter must be more than %1 mm, got %2</source>
+        <translation>hammastangon pään vierintäympyrä on liian pieni ulottuakseen hampaiden kärkiin: sen halkaisijan on oltava yli %1 mm, annettiin %2</translation>
+    </message>
+    <message>
+        <source>the rack&apos;s dedendum rolling circle is too small to reach its roots: its diameter must be more than %1 mm, got %2</source>
+        <translation>hammastangon tyven vierintäympyrä on liian pieni ulottuakseen hampaiden pohjaan: sen halkaisijan on oltava yli %1 mm, annettiin %2</translation>
+    </message>
+    <message>
         <source>the rack&apos;s height must be more than its teeth&apos;s depth (%1 mm), got %2</source>
         <translation>hammastangon korkeuden on oltava suurempi kuin hampaiden syvyys (%1 mm), annettiin %2</translation>
+    </message>
+    <message>
+        <source>the rack&apos;s height must be more than the depth of its teeth</source>
+        <translation>hammastangon korkeuden on oltava suurempi kuin sen hampaiden syvyys</translation>
     </message>
     <message>
         <source>the rack&apos;s length must be at least its teeth&apos;s pitch line (%1 mm), got %2</source>
         <translation>hammastangon pituuden on oltava vähintään hampaiden jakoviivan pituus (%1 mm), annettiin %2</translation>
     </message>
     <message>
+        <source>the rack&apos;s spaces close above their roots: make the dedendum rolling circle larger</source>
+        <translation>hammastangon hammasvälit sulkeutuvat pohjansa yläpuolella: suurenna tyven vierintäympyrää</translation>
+    </message>
+    <message>
         <source>the rack&apos;s teeth are pointed</source>
         <translation>hammastangon hampaat ovat teräviä</translation>
     </message>
     <message>
+        <source>the rack&apos;s teeth come to a point below their tips: make the addendum rolling circle larger</source>
+        <translation>hammastangon hampaat terävöityvät kärkiensä alapuolella: suurenna pään vierintäympyrää</translation>
+    </message>
+    <message>
         <source>the rack&apos;s teeth have no room for their root fillet</source>
         <translation>hammastangon hampailla ei ole tilaa pohjan pyöristykselle</translation>
+    </message>
+    <message>
+        <source>the rack&apos;s teeth must be a whole number of at least 1</source>
+        <translation>hammastangon hammasluvun on oltava kokonaisluku, vähintään 1</translation>
     </message>
     <message>
         <source>the radial clearance of %1 mm leaves the external thread no core (minor diameter %2 mm)</source>
@@ -57856,6 +58672,10 @@ ament_package()
         <translation>toistettu komponentti sisältäisi itsensä</translation>
     </message>
     <message>
+        <source>the replacement has no %1 that matches it by name or by place; it stays, marked as broken, until it is given new geometry</source>
+        <translation>korvaajalla ei ole kohdetta %1, joka vastaisi sitä nimeltä tai paikalta; se säilyy rikkinäiseksi merkittynä, kunnes sille annetaan uusi geometria</translation>
+    </message>
+    <message>
         <source>the replay</source>
         <translation>toisto</translation>
     </message>
@@ -57984,6 +58804,14 @@ ament_package()
         <translation>ripojen päästö tarvitsee päästökulman tai muovisäännön, josta se otetaan</translation>
     </message>
     <message>
+        <source>the ring gear&apos;s addendum rolling circle&apos;s diameter must be more than %1 mm and less than %2 mm, got %3</source>
+        <translation>sisähammaspyörän pään vierintäympyrän halkaisijan on oltava yli %1 mm ja alle %2 mm, annettiin %3</translation>
+    </message>
+    <message>
+        <source>the ring gear&apos;s dedendum rolling circle is too small to reach its roots: its diameter must be more than %1 mm, got %2</source>
+        <translation>sisähammaspyörän tyven vierintäympyrä on liian pieni ulottuakseen hampaiden pohjaan: sen halkaisijan on oltava yli %1 mm, annettiin %2</translation>
+    </message>
+    <message>
         <source>the ring gear&apos;s root fillet reaches its tip</source>
         <translation>sisähammaspyörän pohjan pyöristys ulottuu hampaan kärkeen</translation>
     </message>
@@ -57992,12 +58820,28 @@ ament_package()
         <translation>sisähammaspyörän hammasvälit sulkeutuvat ennen pohjahalkaisijaa</translation>
     </message>
     <message>
+        <source>the ring gear&apos;s spaces close before its root diameter: make the dedendum rolling circle larger</source>
+        <translation>sisähammaspyörän hammasvälit sulkeutuvat ennen pohjahalkaisijaa: suurenna tyven vierintäympyrää</translation>
+    </message>
+    <message>
+        <source>the ring gear&apos;s spaces close towards its tips: make the addendum rolling circle smaller</source>
+        <translation>sisähammaspyörän hammasvälit sulkeutuvat kärkiä kohti: pienennä pään vierintäympyrää</translation>
+    </message>
+    <message>
         <source>the ring gear&apos;s spaces have no room for a root fillet</source>
         <translation>sisähammaspyörän hammasväleissä ei ole tilaa pohjan pyöristykselle</translation>
     </message>
     <message>
         <source>the ring gear&apos;s teeth are pointed at their tips</source>
         <translation>sisähammaspyörän hampaat ovat kärjistään teräviä</translation>
+    </message>
+    <message>
+        <source>the ring gear&apos;s teeth come to a point inside their tip diameter: make the addendum rolling circle larger</source>
+        <translation>sisähammaspyörän hampaat terävöityvät kärkihalkaisijansa sisäpuolella: suurenna pään vierintäympyrää</translation>
+    </message>
+    <message>
+        <source>the ring&apos;s rim must be greater than zero</source>
+        <translation>sisähammaspyörän kehän on oltava suurempi kuin nolla</translation>
     </message>
     <message>
         <source>the root component cannot be filled with a copy</source>
@@ -58280,6 +59124,10 @@ ament_package()
         <translation>parin toinen hammaspyörä hammastuu ensimmäiseen: jätä sen mesh_with pois</translation>
     </message>
     <message>
+        <source>the second gear&apos;s teeth must be a whole number of at least 5</source>
+        <translation>toisen hammaspyörän hammasluvun on oltava kokonaisluku, vähintään 5</translation>
+    </message>
+    <message>
         <source>the second input: %1</source>
         <translation>toinen syöte: %1</translation>
     </message>
@@ -58468,6 +59316,10 @@ ament_package()
         <translation>kiinnitys %1 käyttää konetta, jota mallissa ei ole</translation>
     </message>
     <message>
+        <source>the shaft angle must be between 0 and 180 degrees</source>
+        <translation>akselikulman on oltava 0–180 astetta</translation>
+    </message>
+    <message>
         <source>the shaft angle must be between 0 and 180 degrees, got %1 degrees</source>
         <translation>akselikulman on oltava 0–180 astetta, annettiin %1 astetta</translation>
     </message>
@@ -58518,6 +59370,10 @@ ament_package()
     <message>
         <source>the sheet is laid flat approximately, by triangulation: sheet features do not change it, as its pattern is not the folded faces&apos; development</source>
         <translation>levy on levitetty likimääräisesti kolmioimalla: levypiirteet eivät muuta sitä, koska sen levitys ei ole taitettujen tahkojen levitys</translation>
+    </message>
+    <message>
+        <source>the sheet is too thick for the folds of its transition, or a fold turns back on itself</source>
+        <translation>levy on liian paksu siirtymänsä taitteille, tai jokin taite kääntyy itsensä päälle</translation>
     </message>
     <message>
         <source>the sheet lies behind the straight cut&apos;s sketch</source>
@@ -58950,6 +59806,10 @@ ament_package()
         <translation>lähteillä ei ole käyttökelpoista ankkurigeometriaa</translation>
     </message>
     <message>
+        <source>the spaces between the teeth close above their roots: make the dedendum rolling circle larger</source>
+        <translation>hampaiden välit sulkeutuvat pohjansa yläpuolella: suurenna tyven vierintäympyrää</translation>
+    </message>
+    <message>
         <source>the span of %1 mm is narrower than one member (%2 mm)</source>
         <translation>jänneväli %1 mm on kapeampi kuin yksi rakenneosa (%2 mm)</translation>
     </message>
@@ -59012,6 +59872,10 @@ ament_package()
     <message>
         <source>the ssh-keyscan set for MitCad (MITCAD_SSH_KEYSCAN) is not there: %1</source>
         <translation>MitCadille asetettua ssh-keyscan-ohjelmaa (MITCAD_SSH_KEYSCAN) ei ole: %1</translation>
+    </message>
+    <message>
+        <source>the start and end offsets (%1 and %2 mm) leave less than a piece&apos;s %3 mm of the end face (%4 mm)</source>
+        <translation>alku- ja loppusiirtymä (%1 ja %2 mm) jättävät päätytahkosta (%4 mm) vähemmän kuin palan %3 mm</translation>
     </message>
     <message>
         <source>the start and end offsets (%1 and %2 mm) leave less than a tenon&apos;s %3 mm of the end face (%4 mm)</source>
@@ -59148,6 +60012,18 @@ ament_package()
     <message>
         <source>the sub-assembly contains itself: it was left out</source>
         <translation>alikokoonpano sisältää itsensä: se jätettiin pois</translation>
+    </message>
+    <message>
+        <source>the sun&apos;s bore must be greater than zero</source>
+        <translation>aurinkopyörän akselireiän on oltava suurempi kuin nolla</translation>
+    </message>
+    <message>
+        <source>the sun&apos;s bore reaches its tooth roots: make it smaller</source>
+        <translation>aurinkopyörän akselireikä ulottuu sen hampaiden pohjaan: pienennä sitä</translation>
+    </message>
+    <message>
+        <source>the sun&apos;s teeth must be a whole number of at least 5</source>
+        <translation>aurinkopyörän hammasluvun on oltava kokonaisluku, vähintään 5</translation>
     </message>
     <message>
         <source>the support plane has no frame (its axes are parallel)</source>
@@ -59358,8 +60234,16 @@ ament_package()
         <translation>hampaat ovat teräviä ulkohalkaisijan (%1 mm) alapuolella: pienennä profiilinsiirtoa</translation>
     </message>
     <message>
+        <source>the teeth come to a point below their outside diameter: make the addendum rolling circle larger</source>
+        <translation>hampaat terävöityvät ulkohalkaisijansa alapuolella: suurenna pään vierintäympyrää</translation>
+    </message>
+    <message>
         <source>the teeth have no involute flank below their tip</source>
         <translation>hampailla ei ole evolventtikylkeä kärkensä alapuolella</translation>
+    </message>
+    <message>
+        <source>the teeth narrow to nothing above their roots: make the dedendum rolling circle smaller</source>
+        <translation>hampaat kapenevat olemattomiin pohjansa yläpuolella: pienennä tyven vierintäympyrää</translation>
     </message>
     <message>
         <source>the tenon (%1 × %2 mm) is larger than the end face (%3 × %4 mm)</source>
@@ -59596,6 +60480,10 @@ ament_package()
     <message>
         <source>the tolerance must be more than 0 and at most 10 mm, got %1 mm</source>
         <translation>toleranssin on oltava yli 0 ja enintään 10 mm, saatiin %1 mm</translation>
+    </message>
+    <message>
+        <source>the tongue (%1 mm) is thicker than the end face (%2 mm)</source>
+        <translation>pontti (%1 mm) on paksumpi kuin päätytahko (%2 mm)</translation>
     </message>
     <message>
         <source>the tool</source>
@@ -60482,6 +61370,10 @@ ament_package()
         <translation>tämän mallin geometriaydin ei pysty laskemaan mallin kopiota</translation>
     </message>
     <message>
+        <source>this drive is a copy of another one and cannot be edited: make it again</source>
+        <translation>tämä vaihde on toisen kopio eikä sitä voi muokata: tee se uudelleen</translation>
+    </message>
+    <message>
         <source>this extrusion (targets, tapers or thin walls)</source>
         <translation>tämä pursotus (kohteet, päästöt tai ohutseinämät)</translation>
     </message>
@@ -60504,6 +61396,14 @@ ament_package()
     <message>
         <source>this fold&apos;s bend has no radius</source>
         <translation>tämän taitoksen taivutuksella ei ole sädettä</translation>
+    </message>
+    <message>
+        <source>this kind of joint does not use the field %1</source>
+        <translation>tämäntyyppinen liitos ei käytä kenttää %1</translation>
+    </message>
+    <message>
+        <source>this kind of joint needs a rectangular end face</source>
+        <translation>tämäntyyppinen liitos tarvitsee suorakulmaisen päätytahkon</translation>
     </message>
     <message>
         <source>this kind of section is not supported</source>
@@ -61764,6 +62664,14 @@ ament_package()
     <message>
         <source>what it is pinned to cannot be read</source>
         <translation>sen kiinnityskohtaa ei voi lukea</translation>
+    </message>
+    <message>
+        <source>what the drive made: %1</source>
+        <translation>mitä vaihde teki: %1</translation>
+    </message>
+    <message>
+        <source>which side of a cut that reaches the sheet&apos;s edge was taken away could not be told</source>
+        <translation>ei voitu päätellä, kumpi levyn reunaan ulottuvan leikkauksen puoli poistettiin</translation>
     </message>
     <message>
         <source>wide flange</source>

@@ -25,6 +25,7 @@
 #include <cmath>
 #include <cstddef>
 #include <initializer_list>
+#include <vector>
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -33,6 +34,7 @@
 #include <QStringList>
 
 #include "../platform/SpaceMouseDevice.hpp"
+#include "SpaceMouseButtons.hpp"
 
 namespace mitcad {
 
@@ -225,7 +227,9 @@ inline bool spaceMouseHidIds(const QString& device, int& vendor, int& product) {
 // SpaceMouse Pro (product c62b) and the SpaceMouse Pro Wireless (c631 by
 // cable, c632 through its receiver, c638), vendor 046d or 256f, whose
 // lock key is the report's bit 26, button 27. A universal receiver (c652)
-// is left out: the device behind it may have no such key.
+// is left out: the device behind it may have no such key. The SpaceMouse
+// Enterprise (c633, mitcad#2642) numbers its keys as the Pro does (its
+// Rotation Toggle the same virtual key 27, SpaceMouseButtons.hpp).
 inline int spaceMouseLockKeyButton(int vendor, int product) {
   if (vendor != 0x046d && vendor != 0x256f) {
     return -1;
@@ -234,6 +238,7 @@ inline int spaceMouseLockKeyButton(int vendor, int product) {
   case 0xc62b:
   case 0xc631:
   case 0xc632:
+  case 0xc633:
   case 0xc638:
     return 26;
   default:
@@ -241,27 +246,63 @@ inline int spaceMouseLockKeyButton(int vendor, int product) {
   }
 }
 
-// A connected device's default button (mitcad#1910): its rotation lock key
-// runs Lock Rotation when the key's number is known
-// (spaceMouseLockKeyButton) and the settings have no entry for that button
-// yet (their list ends before it). Every other button, and a lock key the
-// user has bound or set to None, stays as it is. True when it changed the
-// settings.
-inline bool addSpaceMouseDeviceButtons(SpaceMouseSettings& settings, const QString& device) {
+// A button's command that a device brings by default.
+struct SpaceMouseDefaultButton {
+  int button = -1; // 0 the first
+  QString command;
+};
+
+// A device's labeled keys' default commands, by its HID ids, lowest button
+// first: its rotation lock key's Lock Rotation (mitcad#1910) and, on a
+// SpaceMouse Enterprise, its QuickView keys' standard views (mitcad#2642):
+// T/B Top (button 3), R/L Right (5), F/BK Front (6), each held the
+// opposite view (SpaceMouseButtons.hpp), and the held views' own numbers,
+// Left (4), Bottom (7) and Back (8), for a route that sends those instead
+// of a hold.
+inline std::vector<SpaceMouseDefaultButton> spaceMouseDeviceDefaultButtons(int vendor, int product) {
+  std::vector<SpaceMouseDefaultButton> defaults;
+  if (isSpaceMouseEnterprise(vendor, product)) {
+    defaults = {{2, QStringLiteral("view.top")},   {3, QStringLiteral("view.left")},
+                {4, QStringLiteral("view.right")}, {5, QStringLiteral("view.front")},
+                {6, QStringLiteral("view.bottom")}, {7, QStringLiteral("view.back")}};
+  }
+  const int key = spaceMouseLockKeyButton(vendor, product);
+  if (key >= 0) {
+    defaults.push_back({key, spaceMouseLockRotationCommand()});
+  }
+  return defaults;
+}
+
+// A connected device's default buttons (mitcad#1910, mitcad#2642): each
+// of its labeled keys (spaceMouseDeviceDefaultButtons) runs its default
+// command where the settings have no entry for that button yet (their
+// list ended before it); the list grows with empty entries (None) up to
+// it. Every other button, and a key the user has bound or set to None,
+// stays as it is. True when it changed the settings; `added` gets the
+// buttons it bound.
+inline bool addSpaceMouseDeviceButtons(SpaceMouseSettings& settings, const QString& device,
+                                       std::vector<int>* added = nullptr) {
   int vendor = 0;
   int product = 0;
   if (!spaceMouseHidIds(device, vendor, product)) {
     return false;
   }
-  const int key = spaceMouseLockKeyButton(vendor, product);
-  if (key < 0 || key >= 32 || settings.buttons.size() > key) {
-    return false;
+  const int entries = int(settings.buttons.size());
+  bool changed = false;
+  for (const SpaceMouseDefaultButton& entry : spaceMouseDeviceDefaultButtons(vendor, product)) {
+    if (entry.button < entries || entry.button >= 32) {
+      continue;
+    }
+    while (int(settings.buttons.size()) <= entry.button) {
+      settings.buttons.append(QString());
+    }
+    settings.buttons[entry.button] = entry.command;
+    if (added != nullptr) {
+      added->push_back(entry.button);
+    }
+    changed = true;
   }
-  while (settings.buttons.size() < key) {
-    settings.buttons.append(QString());
-  }
-  settings.buttons.append(spaceMouseLockRotationCommand());
-  return true;
+  return changed;
 }
 
 // The share of a full deflection that does nothing (the cap's rest noise).

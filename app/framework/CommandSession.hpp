@@ -363,6 +363,13 @@ public:
   // view's number of the click (OcctViewer::picked; 0 for a pick from
   // elsewhere): a click that clickedAt took is not taken again.
   void picked(const Selection& items, Qt::KeyboardModifiers modifiers, bool window, quint64 click = 0);
+  // Invert Selection (mitcad#2647) in the active selection input: it takes
+  // everything `shown` gives of the kinds its picks have (none picked yet:
+  // every kind it takes now) that it accepts and does not hold, up to its
+  // most, and drops what it held. `shown` lists what the view shows of
+  // given kinds (OcctViewer::shownItems, the main window's components).
+  // False, changing nothing, when no selection input takes picks now.
+  bool invertPicks(const std::function<Selection(SelectFilter)>& shown);
   // The host's selection filter context (CommandHost::commandScope)
   // changed: the active input picks through it as it is now (mitcad#217).
   void scopeChanged();

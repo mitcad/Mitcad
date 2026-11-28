@@ -25,3 +25,5 @@ mod print_service_tests;
 mod link_tree_tests;
 // A design of one component inserted as that component (mitcad#2429).
 mod single_component_tests;
+// Replace Component: a component swapped, its joints kept (mitcad#2640).
+mod replace_component_tests;

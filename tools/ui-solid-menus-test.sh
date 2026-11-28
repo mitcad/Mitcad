@@ -12,13 +12,13 @@
 # The modelling tabs' menus in their sections (mitcad#1778, mitcad#1975),
 # through the real UI, in the Docked and the Floating layout: SOLID's
 # MODIFY, ASSEMBLE, CONSTRUCT, INSPECT and INSERT, SURFACE's CREATE,
-# MODIFY and CONSTRUCT, SHEET METAL's CREATE, MODIFY and RULES and
+# MODIFY and CONSTRUCT, SHEET PARTS's CREATE, MODIFY and RULES and
 # MANAGE's MATERIALS, RULES and DESIGN as they open, every entry in its
 # place and a separator between two sections (app/COMMANDS.md,
 # "Sections"), so that a command registered out of its section's place
 # fails here; and each group's own buttons in the menu's order, as the
 # ribbon logs them when it makes the group ("Ribbon group SOLID/MODIFY
-# buttons: ..."). Surface and Sheet Metal show SOLID's CONSTRUCT group too
+# buttons: ..."). Surface and Sheet Parts show SOLID's CONSTRUCT group too
 # (a second place, mitcad#1975).
 # The Windows counterpart: tools/ui-windows-solid-menus-test.ps1.
 #
@@ -35,7 +35,7 @@ MODIFY="$MODIFY | Smooth Mesh | Combine Meshes | Offset Mesh | Align Mesh | Plan
 MODIFY="$MODIFY | - | Move/Copy | Align"
 MODIFY="$MODIFY | - | Joinery > [Dogbone | Mortise and Tenon]"
 MODIFY="$MODIFY | - | Material | Appearance"
-ASSEMBLE="New Component"
+ASSEMBLE="New Component | Replace Component…"
 ASSEMBLE="$ASSEMBLE | - | Joint | As-Built Joint | Joint Origin | Rigid Group | Constraint | Constraint Set"
 ASSEMBLE="$ASSEMBLE | - | Drive Joint | Motion Link | Contact Set | - | Let It Hang | - | Animate Joint | Motion Study… | Explode…"
 CONSTRUCT="Offset Plane | Plane at Angle | Tangent Plane | Midplane | Plane Through Two Edges"
@@ -58,7 +58,7 @@ SURFACE_CREATE="$SURFACE_CREATE | - | Patch | Ruled Surface | Boundary Surface |
 SURFACE_MODIFY="Trim | Untrim | Extend | - | Stitch | Unstitch | Reverse Normal | - | Match Surface | Fair Surface"
 SURFACE_MODIFY="$SURFACE_MODIFY | - | Thicken | Boundary Fill"
 SHEET_CREATE="Create Sketch | - | Face | Flange | Hem | Convert to Sheet Metal | Lofted Flange | - | Bend | Fold"
-SHEET_MODIFY="Sheet Cut | Perforate | - | Corner Relief | Corner Round | Corner Chamfer"
+SHEET_MODIFY="Sheet Cut | Perforate | Bead | - | Corner Relief | Corner Round | Corner Chamfer"
 SHEET_MODIFY="$SHEET_MODIFY | - | Unfold | Refold | Flat Pattern | Show Flat Pattern"
 SHEET_MODIFY="$SHEET_MODIFY | - | Export Flat Pattern… | Create Drawing of Flat Pattern… | Export Bend Table…"
 RULES="Sheet Rules | Edit Sheet Rules"
@@ -118,9 +118,9 @@ check_layout() {
   check_buttons "$layout" SURFACE/CREATE "sketch.create, surface.extrude, surface.patch"
   check_buttons "$layout" SURFACE/MODIFY "surface.trim, surface.thicken"
   check_buttons "$layout" SURFACE/CONSTRUCT "construct.offset_plane, construct.plane_angle, construct.midplane"
-  check_buttons "$layout" "SHEET METAL/CREATE" "sketch.create, sheet.face, sheet.flange, sheet.bend"
-  check_buttons "$layout" "SHEET METAL/MODIFY" "sheet.unfold, sheet.flat_pattern"
-  check_buttons "$layout" "SHEET METAL/RULES" "sheet.rules"
+  check_buttons "$layout" "SHEET PARTS/CREATE" "sketch.create, sheet.face, sheet.flange, sheet.bend"
+  check_buttons "$layout" "SHEET PARTS/MODIFY" "sheet.unfold, sheet.flat_pattern"
+  check_buttons "$layout" "SHEET PARTS/RULES" "sheet.rules"
   check_buttons "$layout" MANAGE/PARAMETERS "solid.parameters, manage.favorite_parameters"
   check_buttons "$layout" MANAGE/CONFIGURATIONS "solid.configurations"
   check_buttons "$layout" MANAGE/MATERIALS "solid.materials, solid.appearances"
@@ -134,9 +134,9 @@ check_layout() {
   check_menu "$layout" SURFACE/CREATE "$SURFACE_CREATE"
   check_menu "$layout" SURFACE/MODIFY "$SURFACE_MODIFY"
   check_menu "$layout" SURFACE/CONSTRUCT "$SURFACE_CONSTRUCT"
-  check_menu "$layout" "SHEET METAL/CREATE" "$SHEET_CREATE"
-  check_menu "$layout" "SHEET METAL/MODIFY" "$SHEET_MODIFY"
-  check_menu "$layout" "SHEET METAL/RULES" "$RULES"
+  check_menu "$layout" "SHEET PARTS/CREATE" "$SHEET_CREATE"
+  check_menu "$layout" "SHEET PARTS/MODIFY" "$SHEET_MODIFY"
+  check_menu "$layout" "SHEET PARTS/RULES" "$RULES"
   check_menu "$layout" MANAGE/MATERIALS "$MATERIALS"
   check_menu "$layout" MANAGE/RULES "$MANAGE_RULES"
   check_menu "$layout" MANAGE/DESIGN "$DESIGN"

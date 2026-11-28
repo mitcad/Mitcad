@@ -9,8 +9,9 @@ cmake_minimum_required(VERSION 3.24)
 # merge with it (no outlines left on it); the ribs up to the body or To Next
 # fail in words where they reach past the bowl; the reporter's Join of a tab
 # on the rim up to a rib's underside To Adjacent Faces fails in words that
-# name the part without an end, and up to the body it builds. Skipped when
-# the folder or the archive is not there.
+# name the part without an end, and up to the body it builds, its faces
+# merged after the Join (no failed merge in the boolean trace, mitcad#2623).
+# Skipped when the folder or the archive is not there.
 #
 # cmake -DCLI=<mitcad-cli> -DSCRIPTS=<tools/cli/tests> -DWORK=<folder> -P extrude-replace-reported-test.cmake
 
@@ -61,9 +62,22 @@ if(design STREQUAL "")
   message(FATAL_ERROR "the archive ${archive_id} holds no design ${design_id}")
 endif()
 
-execute_process(COMMAND "${CLI}" run "${SCRIPTS}/extrude_replace_reported674.json" --open "${design}"
+# With the boolean trace on (MITCAD_BOOLEAN_TRACE, a line per boolean on
+# standard error), so that a face merge after a boolean that fails and is
+# left out ("the merge failed", run_operation in geometry/src/boolean.cpp)
+# shows: OCCT's merge joins the faces of the reporter's Join up to the body
+# since port patch 2623 (mitcad#2623).
+execute_process(COMMAND "${CMAKE_COMMAND}" -E env MITCAD_BOOLEAN_TRACE=1
+                        "${CLI}" run "${SCRIPTS}/extrude_replace_reported674.json" --open "${design}"
                 RESULT_VARIABLE status OUTPUT_VARIABLE out ERROR_VARIABLE err)
 if(NOT status EQUAL 0)
-  message(FATAL_ERROR "extrude_replace_reported674 failed (${status}):\n${out}${err}")
+  string(REGEX REPLACE "boolean-trace:[^\n]*\n?" "" untraced "${err}")
+  message(FATAL_ERROR "extrude_replace_reported674 failed (${status}):\n${out}${untraced}")
 endif()
-message(STATUS "ok   the replaced rib ends merge with the rounding; the unended parts are named in words")
+string(REGEX MATCHALL "boolean-trace:[^\n]*the merge failed[^\n]*" failed_merges "${err}")
+if(failed_merges)
+  string(REPLACE ";" "\n" failed_merges "${failed_merges}")
+  message(FATAL_ERROR "the face merge after a boolean failed and was left out:\n${failed_merges}")
+endif()
+message(STATUS "ok   the replaced rib ends merge with the rounding, also after the Join up to the body; "
+               "the unended parts are named in words")

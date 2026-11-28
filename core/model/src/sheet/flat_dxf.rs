@@ -14,7 +14,7 @@ use std::f64::consts::TAU;
 
 use mitcad_vec3::vec2::distance as dist;
 
-use super::flat::{FlatBend, FlatLine};
+use super::flat::{FlatBead, FlatBend, FlatLine};
 use super::process::{OutputPreset, SheetProcess};
 use super::{BoundedCurve2Ext, MaterialRegion};
 use crate::expr::LengthUnit;
@@ -33,6 +33,9 @@ pub const BEND_TANGENT: &str = "BEND_TANGENT";
 /// A Lofted Flange's lines where its flat regions meet regions formed
 /// smooth (mitcad#2512).
 pub const FACET_LINE: &str = "FACET_LINE";
+/// Beads (mitcad#2645): the outline each leaves on its face and its centre
+/// lines, a form on the flat blank.
+pub const BEAD: &str = "BEAD";
 
 /// What a Flat Pattern drawing holds and how it is written.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -182,6 +185,18 @@ pub fn drawing_with_facets(
     facets: &[FlatLine],
     options: &FlatDxfOptions,
 ) -> Result<mitcad_dxf::Drawing, String> {
+    drawing_with_forms(regions, bends, facets, &[], options)
+}
+
+/// [`drawing_with_facets`] with the sheet's beads (mitcad#2645) on the
+/// layer [`BEAD`], which the drawing has when there are some.
+pub fn drawing_with_forms(
+    regions: &[MaterialRegion],
+    bends: &[FlatBend],
+    facets: &[FlatLine],
+    beads: &[FlatBead],
+    options: &FlatDxfOptions,
+) -> Result<mitcad_dxf::Drawing, String> {
     use mitcad_dxf::Layer;
 
     let preset = OutputPreset::of(options.process);
@@ -248,6 +263,12 @@ pub fn drawing_with_facets(
             },
         ));
     }
+    for bead in beads {
+        let name = format!("bead {}", bead.feature);
+        for piece in bead.outline.iter().chain(&bead.centerlines) {
+            curves.push((BEAD.to_owned(), name.clone(), piece.clone()));
+        }
+    }
     let mut drawing = crate::exchange::sketch_drawing(
         curves
             .iter()
@@ -269,6 +290,9 @@ pub fn drawing_with_facets(
     }
     if !facets.is_empty() {
         names.push(FACET_LINE);
+    }
+    if !beads.is_empty() {
+        names.push(BEAD);
     }
     drawing.layers = names
         .into_iter()

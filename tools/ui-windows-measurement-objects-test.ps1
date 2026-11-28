@@ -13,7 +13,7 @@
 #      AxisDistance1; its Annotations... (F8 here) opens the window.
 #   2. Body1's top rim shown again from its history row's menu (Show and
 #      Copy only) and kept with Dimension as Diameter1.
-#   3. Export Snapshot (F9 here) at 4 x the view, transparent: a PNG of
+#   3. Export Snapshot (F12 here) at 4 x the view, transparent: a PNG of
 #      four times the view's size with an alpha channel.
 #   4. Saved, opened again: both measured and drawn.
 # tools/ui-windows-annotations-test.ps1 edits them.
@@ -26,7 +26,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{ 'view.export_snapshot' = 'F9'; 'view.annotations' = 'F8'
+Ui-Init $App $Out $QtBin @{ 'view.export_snapshot' = 'F12'; 'view.annotations' = 'F8'
   'make.dimension' = 'Shift+F2' } -StepPause 0
 
 $cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
@@ -175,7 +175,7 @@ $width = 4 * $view[2]
 $height = 4 * $view[3]
 $png = Join-Path $work 'snapshot.png'
 Ui-Mark
-Ui-Step 'export snapshot (F9)'            { Ui-Key 'F9' }
+Ui-Step 'export snapshot (F12)'            { Ui-Key 'F12' }
 Ui-ExpectNew 'Snapshot dialog opened: size 2x, transparent off, annotations all (2 shown)' 'the dialog with its defaults'
 Ui-Step 'type the file' {
   Ui-FocusDialog '^Export Snapshot$'

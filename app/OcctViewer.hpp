@@ -601,7 +601,10 @@ public:
   CameraProjection cameraProjection() const;
   bool isPerspective() const;
   // The orientation cube's projection (mitcad#774); its size and place in
-  // the corner are the same in each. Logs "Orientation cube projection …"
+  // the corner are the same in each. Follow the View (mitcad#2641) draws
+  // it as Perspective while the camera is a perspective one and as
+  // Orthographic while it is an orthographic one (cubeInPerspective).
+  // Logs "Orientation cube projection …"
   // and the cube's places and outline again.
   void setCubeProjection(CubeProjection projection);
   CubeProjection cubeProjection() const { return m_cubeProjection; }
@@ -644,6 +647,15 @@ public:
   // fitted.
   void goHome();
   void setHome(const std::optional<CameraState>& home) { m_home = home; }
+  // A design read from a file was installed (MainWindow::installDocument,
+  // mitcad#2671, GitHub mitcad/Mitcad#763): the view goes at once, without
+  // a glide, to the document's home view (setHome) as goHome would, and the
+  // fits waiting for the next frame or for the design's first bodies are
+  // dropped, so that the first frame and the ones after it stay there.
+  // Logs "View: opened at the design's home view". False, and nothing
+  // changed, without a home view or with one that makes no view: the
+  // caller fits the design then.
+  bool openAtHome();
   // The orientation cube's corner of the view (widget pixels) at the cube's
   // size: the square its arrows and the home button stay in (190 at
   // 100 %), and its centre's distance from the corner (100 at 100 %).
@@ -1213,6 +1225,7 @@ public:
   void setSavedCamera(const occ::handle<Graphic3d_Camera>& camera) { m_savedCamera = camera; }
   // Fits what the view shows, on the next frame; with nothing to fit (an
   // empty design's origin is hidden), frames the origin (setOriginBox).
+  // A camera glide still running ends at its end first, so the fit holds.
   void fitAll();
   // A new, empty design (mitcad#1000): on the next frame, the view of the
   // origin planes' box at the same share of the view's height whatever the
@@ -1388,6 +1401,17 @@ public:
   // The same for what the filter's kinds take but its finer test refuses
   // (mitcad#474: the faces Create Sketch cannot sketch on).
   std::vector<std::pair<SelectionItem, QPoint>> refusedPickPoints(SelectFilter kinds);
+  // Invert Selection (mitcad#2647): every item of `kinds` that the view
+  // shows and could pick (faces, edges and vertices of the shown bodies,
+  // the bodies, sketch curves and points, profiles, datums), wherever it is
+  // in the view, each once, in a fixed order (by occurrence and owner, a
+  // body's faces, edges and vertices in its own order). Hidden and isolated
+  // items are not shown, so not listed; neither are the highlights' own
+  // objects nor what a command's preview draws unpickable. `asPicked` also
+  // applies the pick filter and its finer test as a window selection would
+  // (the kinds the filter takes, the scope's rows, a command input's test);
+  // without it only `kinds` decides. None while picking is suspended.
+  Selection shownItems(SelectFilter kinds, bool asPicked) const;
   // What the last click hit of the filter's kinds that the finer test
   // refused, when the click picked nothing (mitcad#474: Create Sketch says
   // why a face cannot take a sketch); once per click.
@@ -1688,7 +1712,15 @@ private:
   // failure (OCCT's or a standard one) is logged instead, "View operation
   // failed: <operation> (<step>): <type>: <message>", and the camera is put
   // back as it was. The step is the last m_viewStep the operation set.
-  void runViewOperation(const QString& operation, const std::function<void()>& run);
+  // True when it ran without a failure.
+  bool runViewOperation(const QString& operation, const std::function<void()>& run);
+  // setCamera's work: the camera for `state`, moved to smoothly (`glide`,
+  // when the navigation settings say so) or at once. False when the state
+  // makes no view (an eye on its target, no height) or the change failed.
+  bool placeCamera(const CameraState& state, bool glide);
+  // A camera animation still running ends now, at its end (settleCamera,
+  // fitAll: a fit made while it runs would be undone by its next steps).
+  void endCameraGlide();
   // The part of the view the floating cards leave free (the whole view when
   // there are no cards).
   QRectF freeArea() const;
@@ -1839,10 +1871,14 @@ private:
   // aspect" and "squashed" otherwise).
   void logRestoredCamera() const;
   void logOrientationCube();
-  // The cube's own perspective (mitcad#774) seen from where the camera
-  // looks from now: its presentation and picking made again when the
-  // direction changed. Nothing in the other projections.
-  void updateCubeEye();
+  // Whether the cube is drawn in its own perspective (mitcad#774): always
+  // in Perspective, never in Orthographic, and in Follow the View
+  // (mitcad#2641) when the camera's mono projection is a perspective one.
+  bool cubeInPerspective() const;
+  // The cube's own perspective (mitcad#774) on or off as
+  // cubeInPerspective gives, seen from where the camera looks from now: its
+  // presentation and picking made again when either changed (true then).
+  bool updateCubeEye();
   // The orientation cube's box as drawn, in widget pixels: its corners
   // through its own perspective (if any) and its transform persistence as
   // the renderer applies it (mitcad#766: an orthographic cube is the same
@@ -1925,6 +1961,15 @@ private:
   void nativeGesture(QNativeGestureEvent* event);
   // Ends the drag that a scroll is passed to the view as (pan or orbit).
   void endScrollDrag();
+  // Moves a trackpad orbit's drag part of the way to where its scroll has
+  // got to, by the time since the last step: called by each scroll event and
+  // each frame, so that the orbit glides rather than turning a whole scroll
+  // step at once.
+  void stepScrollGlide();
+  // Passes an orbit drag's position (device pixels) to OCCT's orbit with its
+  // fractions of a pixel, which UpdateMousePosition rounds away; false when
+  // no orbit is under way.
+  bool refineOrbit(const QPointF& device);
   // Rolls the view about its direction of sight (clockwise positive, as Qt's rotation
   // gesture counts).
   void rollView(double degrees);
@@ -2284,6 +2329,26 @@ private:
   // one begins, it ends or it pauses.
   bool m_scrollRefused = false;
   QPointF m_scrollPoint;
+  // Where a trackpad orbit's scroll has got to (device pixels): the drag
+  // (m_scrollPoint) glides there (stepScrollGlide); a pan's is the drag's.
+  QPointF m_scrollTarget;
+  QElapsedTimer m_scrollGlideClock;
+  // Where the cursor was as the scroll's drag began, and where and when the
+  // last trackpad orbit ended: an orbit taken up there soon after turns
+  // about the last one's point (m_scrollKeepsPivot, GravityPoint).
+  QPointF m_scrollStartAt;
+  QPointF m_scrollOrbitEndAt;
+  QElapsedTimer m_scrollOrbitEnded;
+  bool m_scrollKeepsPivot = false;
+  // The times of the last scroll event and of the last orbit's last one
+  // (QInputEvent::timestamp, ms): a momentum begun as a new scroll.
+  quint64 m_scrollStamp = 0;
+  quint64 m_scrollOrbitEndStamp = 0;
+  // A pan's or orbit's scroll steps (points, before the speed), logged as
+  // it ends: how fine the system's steps are.
+  int m_scrollSteps = 0;
+  double m_scrollStepMin = 0.0;
+  double m_scrollStepMax = 0.0;
   QTimer* m_scrollTimer = nullptr;
 
   // Display settings (U5).

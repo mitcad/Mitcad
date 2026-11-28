@@ -30,7 +30,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{ 'make.printers' = 'F8'; 'solid.materials' = 'F9' } -StepPause 0
+Ui-Init $App $Out $QtBin @{ 'make.printers' = 'F8'; 'solid.materials' = 'F12' } -StepPause 0
 if (-not $Cli) {
   $Cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
     ForEach-Object { Join-Path (Split-Path $script:UiApp) $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
@@ -109,7 +109,7 @@ Ui-StartApp 'my-library' @()
 
 Write-Host '--- 1. Materials without a design: My library and Built-in; a built-in material duplicated, renamed, its density changed, deleted'
 Ui-Mark
-Ui-Step 'Edit Materials (F9)'            { Ui-Key 'F9' }
+Ui-Step 'Edit Materials (F12)'            { Ui-Key 'F12' }
 Ui-ExpectNew 'Materials opened without a design' 'the Materials manager opened on the libraries'
 Ui-ExpectNew 'Materials loaded: ' 'its list filled when the items were read' 60
 Ui-ExpectNew 'Materials groups: My library 0 | Built-in ' 'My library and Built-in, no This design'

@@ -63,7 +63,14 @@ from its six-slot changer, the Air at a manual change position), turn
 the spindle with `M3 S` only (`M4` is not wired), blow air with
 `M7`/`M9`, dwell with `G4 P` in seconds, pause with `M600`, go to their
 clearance position with `G28` (not a homing move there), have no canned
-drilling cycles, and take `.cnc` files.
+drilling cycles, and take `.cnc` files; Estlcam's CNC controller
+(mitcad#2625; read from Estlcam's published requirements for programs
+from other CAM programs, no code taken) reads only G0 to G3 (one G code
+a line, the motion on every move line, arcs by I and J in the XY plane,
+helices but no whole turns), absolute coordinates in its one work zero,
+and the M codes `M00`, `M01`, `M03`, `M05`, `M06`, `M08` to `M11`; it
+skips every other code without a message, takes its units from its own
+settings, has no dwell and no end command, and opens `.nc` files.
 
 Sources: [FreeCAD's CAM operations](https://github.com/FreeCAD/FreeCAD/tree/main/src/Mod/CAM/Path/Op),
 [its post-processors](https://github.com/FreeCAD/FreeCAD/tree/main/src/Mod/CAM/Path/Post/scripts),
@@ -81,7 +88,8 @@ Sources: [FreeCAD's CAM operations](https://github.com/FreeCAD/FreeCAD/tree/main
 [Makera's supported codes](https://wiki.makera.com/en/supported-codes),
 [the Carvera firmware's G-codes](https://carvera-community.gitbook.io/docs/firmware/supported-commands/gcodes)
 and [M-codes](https://carvera-community.gitbook.io/docs/firmware/supported-commands/mcodes),
-[Makera's post-processors](https://github.com/MakeraInc/CarveraProfiles).
+[Makera's post-processors](https://github.com/MakeraInc/CarveraProfiles),
+[Estlcam's requirements for CNC programs](https://www.estlcam.de/steuerung_cnc_programme_en.php).
 
 ## Decisions
 
@@ -265,7 +273,11 @@ Three kinds (`ToolChanger`):
   tool and asks the operator itself; the Carvera and the Carvera Air
   write `M6 T`, which is the controller's own change either way (the
   Carvera's changer, the Air's stop at its change position, announced
-  with a comment), followed by the controller's measurement of the tool.
+  with a comment), followed by the controller's measurement of the tool;
+  Estlcam names the first tool in a comment (it is in the spindle when
+  the program starts) and changes every later one with `M06` after a
+  comment naming it: Estlcam goes to its change position, waits for the
+  operator and measures the tool when a length sensor is set up.
 - **Controller:** the controller's own changer: the dialect's tool
   change command alone (`T M6`, or `T` on RepRapFirmware). A **DIY
   changer configured in the controller** is this kind: a grblHAL tool
@@ -294,7 +306,8 @@ one (`G43 H` on Mach3, Mach4 and LinuxCNC by default; grbl's and
 grblHAL's `G43.1 Z` from the tool's length when the setting asks for it;
 RepRapFirmware and MillenniumOS apply the tool's offsets with the tool;
 the Carvera and the Carvera Air measure the tool in `M6` and set its
-offset themselves, so none is written even when asked for).
+offset themselves, so none is written even when asked for; so does
+Estlcam's `M06` with a tool length sensor, and it has no offset command).
 The rack's slots and the rack itself belong in the zones, so that
 operations keep clear of them; the changer's own moves are read back
 from the posted program and checked, the rack's zones (those a slot is
@@ -395,8 +408,10 @@ All operations work in the work coordinates, Z up, from planar outlines
 with islands). Heights: `top` and `bottom` of the cut, `step_down`
 (passes of equal depth, at most the step), `clearance` (rapids between
 features) and `retract` (rapids end here before a plunge). Flat-bottomed
-tools only (flat, bull nose) for the wall operations; the step down must
-fit the flutes and the depth the stick-out.
+tools only (flat, bull nose) for the wall operations, but for Contour on
+the line, which also takes a V-bit (an engraving cutter or a chamfer
+mill: its tip traces the outline, mitcad#2589; outside and inside refuse
+it); the step down must fit the flutes and the depth the stick-out.
 
 - **Facing:** rows back and forth along X across a rectangle, edge to
   edge with the tool's center on each edge, turning outside it; stepover
@@ -414,13 +429,19 @@ fit the flutes and the depth the stick-out.
   feed move at the floor when the link is short (two stepovers) and
   stays inside the pocket; otherwise the tool goes up to the retract
   height (nothing inside the pocket stands above the top) and over. It
-  comes in and leaves at the clearance height. Coverage:
-  loops a stepover apart leave nothing while the stepover is at most the
-  diameter, and at a corner of angle *a* they are `stepover / sin(a/2)`
-  apart along its bisector, so the default stepover (40 %) clears corners
-  down to about 47 degrees; when no further loop fits, loops at half the
-  radius follow until the middle is reached. The entry is the
-  operation's (below).
+  comes in and leaves at the clearance height. Coverage
+  (mitcad#2591): loops a stepover apart leave a flat floor while the
+  stepover is at most the width the tool's end cuts flat (`flat_width`:
+  a flat end mill's diameter, a bull nose's diameter less twice its corner
+  radius; wider loops leave ridges up to the corner radius high), and at a
+  corner of angle *a* they are `stepover / sin(a/2)` apart along its
+  bisector, so the default stepover (40 % of that width) clears corners
+  down to about 47 degrees; when no further loop fits, loops at a quarter
+  of that width follow until the middle is reached. A stepover wider than
+  the flat is refused in words that give the width, and a bull nose whose
+  corner radius is its whole radius is refused like a ball end mill (for
+  adaptive clearing too). The walls and islands keep the tool's outside
+  radius and the stock to leave. The entry is the operation's (below).
 - **Drilling:** points, nearest first, in one go, in pecks back to the
   retract height or in pecks that back off 0.5 mm to break the chip,
   written out as moves and recorded as one drilling cycle that a post
@@ -581,7 +602,9 @@ flat, ball and bull nose end mills.
   narrower than the tool and out of its inward corners too.
   Each level's pocket comes down from the level above, whose area holds
   it. Flat and bull nose end mills (a bull nose lies inside its
-  cylinder).
+  cylinder); the levels' loops are spaced for the diameter (40 % of it by
+  default), not for a bull nose's flat as a pocket's are, so a bull nose
+  leaves its floor ridges to the finishing.
 
 ## Post-processors
 
@@ -601,18 +624,18 @@ spin-up dwell), the coolant and the moves; at the end the spindle and
 coolant off, the safe height, the park position and the dialect's
 footer.
 
-| | grbl | grblHAL | RepRapFirmware | MillenniumOS | Mach3, Mach4 | LinuxCNC | Carvera, Carvera Air |
-|---|---|---|---|---|---|---|---|
-| Header | `G90 G94 G17`, `G21`, `G54` | as grbl | `G90`, `G21`, `G17`, `G54` | `G90 G21 G94`, `M4000` per tool, `G28`, `G6600 W` when asked, `G54` | `G90 G94 G91.1 G40 G49 G17`, `G21`, `G54` | `%`, `G17 G90 G94 G40 G49 G80`, `G21`, `G64 P<tol>`, `G54` | `G90 G94`, `G17`, `G21`, `G54` |
-| Tool change | M0 pause (manual), `T M6` (controller) | `T M6` | `M291` box (manual), `T` | `T` | `T M6` | `T M6` | `M6 T` (1 to 6 on the Carvera; the Air: a comment, then `M6 T`) |
-| Length offset | `G43.1 Z` when asked | `G43.1 Z` when asked | with the tool | with the tool | `G43 H` | `G43 H` | measured by `M6` |
-| Spindle | `S M3` | `S M3` | `M3 S` | `M3.9 S` (waits), `M5.9` | `S M3` | `S M3` | `M3 S` (no `M4`) |
-| Coolant | M8, M9 (no M7 in its standard build) | M7, M8, M9 | M7, M8, M9 | M7, M7.1 air, M8, M9 | M7, M8, M9 | M7, M8, M9 | M7 air, M9 (no flood, no mist) |
-| Dwell | `G4 P` s | `G4 P` s | `G4 S` s | (none needed) | `G4 P` s | `G4 P` s | `G4 P` s |
-| Canned drilling | none | `G98 G81/G83/G73`, `G80` | none | `G81/G83/G73` per hole | `G98 G81/G83/G73`, `G80` | `G98 G81/G83/G73`, `G80` | none |
-| Comments | `( )` | `( )` | `;` | `;` | `( )` | `( )` | `( )` |
-| End | `M30` | `M30` | `M0` | `G27`, `M0` | `M30` | `M2`, `%` | `G28` (clearance position), `M30` |
-| File | `.nc` | `.nc` | `.gcode` | `.gcode` | `.tap` | `.ngc` | `.cnc` |
+| | grbl | grblHAL | RepRapFirmware | MillenniumOS | Mach3, Mach4 | LinuxCNC | Carvera, Carvera Air | Estlcam |
+|---|---|---|---|---|---|---|---|---|
+| Header | `G90 G94 G17`, `G21`, `G54` | as grbl | `G90`, `G21`, `G17`, `G54` | `G90 G21 G94`, `M4000` per tool, `G28`, `G6600 W` when asked, `G54` | `G90 G94 G91.1 G40 G49 G17`, `G21`, `G54` | `%`, `G17 G90 G94 G40 G49 G80`, `G21`, `G64 P<tol>`, `G54` | `G90 G94`, `G17`, `G21`, `G54` | `G21` (skipped by Estlcam; a notice says which units to set) |
+| Tool change | M0 pause (manual), `T M6` (controller) | `T M6` | `M291` box (manual), `T` | `T` | `T M6` | `T M6` | `M6 T` (1 to 6 on the Carvera; the Air: a comment, then `M6 T`) | a comment, then `M06` (the first manual tool: a comment) |
+| Length offset | `G43.1 Z` when asked | `G43.1 Z` when asked | with the tool | with the tool | `G43 H` | `G43 H` | measured by `M6` | measured by `M06` (length sensor) |
+| Spindle | `S M3` | `S M3` | `M3 S` | `M3.9 S` (waits), `M5.9` | `S M3` | `S M3` | `M3 S` (no `M4`) | `M03 S` (no `M04`), `M05` |
+| Coolant | M8, M9 (no M7 in its standard build) | M7, M8, M9 | M7, M8, M9 | M7, M7.1 air, M8, M9 | M7, M8, M9 | M7, M8, M9 | M7 air, M9 (no flood, no mist) | `M08` flood, `M09` (no mist, no air) |
+| Dwell | `G4 P` s | `G4 P` s | `G4 S` s | (none needed) | `G4 P` s | `G4 P` s | `G4 P` s | (none: its own spindle start delay) |
+| Canned drilling | none | `G98 G81/G83/G73`, `G80` | none | `G81/G83/G73` per hole | `G98 G81/G83/G73`, `G80` | `G98 G81/G83/G73`, `G80` | none | none |
+| Comments | `( )` | `( )` | `;` | `;` | `( )` | `( )` | `( )` | `( )` |
+| End | `M30` | `M30` | `M0` | `G27`, `M0` | `M30` | `M2`, `%` | `G28` (clearance position), `M30` | (none) |
+| File | `.nc` | `.nc` | `.gcode` | `.gcode` | `.tap` | `.ngc` | `.cnc` | `.nc` |
 
 Settings (`PostSettings`): units (millimetres or inches), arcs on or off
 with a tolerance, line numbers (N10, N20, …), comments on or off, the
@@ -631,7 +654,9 @@ turn to every controller. An arc of less than half a turn whose end
 rounds to its start at the program's digits (3 decimals of a millimetre,
 4 of an inch) is therefore written as the line between its ends, or not
 at all when Z does not change either; a meant whole turn (a helix turn)
-stays one arc. The toolpaths keep such arcs out of the outlines they cut
+stays one arc, except for a controller that takes no whole turn
+(`PostProcessor::full_circles`, Estlcam): there it is two half turns, the
+first to the point halfway round and halfway down a helix. The toolpaths keep such arcs out of the outlines they cut
 in the first place: an outline's arc with a chord under 0.01 mm is cut
 as a line (`PathBuilder::segment`, used by the offset pocket, 3D
 roughing and every cut along a path).
@@ -671,7 +696,8 @@ command the controller does not have is refused in words (air blast and
 mist on grbl; a counter-clockwise spindle on MillenniumOS and the
 Carvera machines; flood and mist coolant on the Carvera machines; tool 0,
 their probe, on both and a tool number above 6 on the Carvera, whose
-changer has six slots).
+changer has six slots; on Estlcam a counter-clockwise spindle, mist
+coolant and air blast and a work offset other than G54).
 
 **Makera Carvera and Carvera Air** (mitcad#2349, `post/carvera.rs`):
 two dialects with the same G-code but for the tool change. `M6 T<n>`
@@ -687,6 +713,32 @@ problem there, so millimetres are the safer choice on that firmware.
 The optional 4th axis is not written: besides the A word its moves need
 the controller's `G92.4` to bring the axis back to 0 to 360 degrees, and
 the milling here is 2.5-axis.
+
+**Estlcam** (mitcad#2625, GitHub mitcad/Mitcad#751, `post/estlcam.rs`):
+the CNC controller program of Estlcam, which drives the machine through
+Estlcam's controller board and runs G-code files from other CAM
+programs. Its interpreter skips every code it does not know without a
+message, so the dialect writes only what it reads and refuses the rest
+in words. The moves are written as for every dialect (G0 to G3 with the
+motion on every line, one G code a line, I and J from the start point);
+a whole turn is two half turns, as Estlcam takes none. There are no
+work offsets and no machine coordinates: a setup with a work offset
+other than G54 is refused, and a machine's park position is not written
+(the program ends at the safe height, and a comment says so). The
+units are Estlcam's own setting: `G21` or `G20` is written for
+simulators (Estlcam skips it) and a notice, written even when comments
+are off, says which length and feed units Estlcam must be set to. The
+first tool of a manual change is named in a comment; every later change
+(and every change of a controller changer) is a comment with the tool's
+number and name, then `M06`, Estlcam's change at its change position
+with the measurement of the tool when a length sensor is set up, so no
+length offset is written. A tool a program-driven changer has no slot
+for waits with `M00`. The spindle is `M03 S` and `M05`; Estlcam has no
+`M04`, so a counter-clockwise spindle is refused. `M08` and `M09`
+switch Estlcam's first output, written for flood coolant; mist and air
+blast are refused. `G4` is skipped, so no spin-up dwell is written:
+Estlcam's own spindle start delay is set in its controller settings.
+Drilling is written as moves; there is no end command (`M30` is skipped).
 
 A new dialect is a struct implementing `PostProcessor` in
 `core/cam/src/post/`, listed in `dialects()`, with a golden test of the
@@ -889,6 +941,41 @@ lathe".
   the roughing's own contour, plus its larger stock to leave, plus how
   much bigger its nose is; the least of the roughings), and its
   fingerprint holds theirs.
+- **Limits along Z** (mitcad#2629, `TurnLimits`, `rough_within`,
+  `finish_within`): Turn Roughing and Turn Finishing may turn one stretch
+  of the side. `window` cuts the side's raw chain at the limits (the last
+  point at the one towards the face, the first at the one towards the
+  chuck) before the envelope or the plunge contour is made, so what lies
+  in front of the stretch does not bridge it. The stock beyond the limits
+  is taken as untouched, so the nose stays behind both: at the limit
+  towards the chuck the contour ends as at a shoulder and goes straight
+  out (no run-on by the nose radius); at the one towards the face it
+  starts on the stock's surface and goes down no steeper than the entry
+  angle (`plunge::reach` again, with the plunge angle, else the tool's
+  back angle less 2 degrees, else 90), coming in along Z at a rapid clear
+  of the stock. A roughing that goes down so is a plunging roughing
+  (`rough_pockets`, moves); one limited only towards the chuck stays a
+  G71. `too_deep_after_within` reads a limited roughing as leaving the
+  stock's surface beyond its limits (`roughed_contour`).
+- **The spun target** (mitcad#2629, `turning::spun`,
+  `LatheSetup::spun_target`): the section sees one plane through the
+  axis, so a feature off it (a boss, a flat, a lug a live tool mills)
+  would be turned away. With the spun target the profile is the bodies
+  spun about the axis: their meshes (in work coordinates, 0.005 mm) are
+  read per triangle at its corners' Z, the section's corners' Z (and just
+  either side) and every 0.25 mm between, the farthest from the axis (the
+  ends of the slice; the distance is convex, so the line between two
+  readings bounds the triangle from outside) and the nearest (the slice's
+  point nearest the axis). Triangles reaching more than twice the
+  deviation beyond the section add their readings, moved out (in, in the
+  bore) by the deviation, to the section's lines (arcs as chords within a
+  tenth of the deviation); the outside is the upper envelope over Z
+  (`upper`: a sweep over the readings' Z, the highest line between two of
+  them, where another overtakes it, and straight across at a jump), the
+  bore the lower one within its Z. Nothing beyond: the section's profile
+  is kept exactly. The stock is sized round the spun outside; the live
+  tools read the bodies themselves (`live_compute_operation`), so the
+  features stay theirs to mill.
 - **The stock** (mitcad#2550): around the bodies, a bar of the part's
   radius plus the side margin, from the top margin in front of the
   part's face to the bottom margin behind its back; or a bar of a given
@@ -1667,8 +1754,9 @@ api's rules: a message in words.
   operations (state: up to date, out of date, failed, suppressed); a
   double click edits the operation in its command panel.
 - Command panels pick faces, edges and sketch regions in the view, with
-  the tool from the library and the values of the operation; the
-  toolpath previews while editing.
+  the tool from the library (only the cutters the operation's generator
+  takes, mitcad#2590: `app/cam/CamToolFit.hpp`) and the values of the
+  operation; the toolpath previews while editing.
 - The **3D view** draws toolpaths: cuts in one color, plunges in
   another, rapids dashed, the tool at a chosen move; the machine's zones
   when the check finds something. Each shown setup's stock before any
@@ -1715,8 +1803,8 @@ The first round (branch `feature-1013-cam`, crate `core/cam`, ctest
 - `post`: the `PostProcessor` trait, `Output` (modal writer, units,
   arcs or lines, line numbers, comments), the driver `post`, and the
   dialects grbl, grblHAL, RepRapFirmware, MillenniumOS, Mach3, Mach4,
-  LinuxCNC, Makera Carvera and Carvera Air with golden G-code per
-  dialect.
+  LinuxCNC, Makera Carvera and Carvera Air, Estlcam with golden G-code
+  per dialect.
 
 The offsets use cavalier_contours 0.9 (MIT OR Apache-2.0) with
 static_aabb2d_index and ahash (MIT OR Apache-2.0) and zerocopy (BSD-2,

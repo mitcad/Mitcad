@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# The SOLID tab's MODIFY, SHEET METAL, SURFACE, ASSEMBLE and CONSTRUCT
+# The SOLID tab's MODIFY, SHEET PARTS, SURFACE, ASSEMBLE and CONSTRUCT
 # menus in their sections with separators, and each group's own
 # buttons, in both layouts (mitcad#1778); as
 # tools/ui-solid-menus-test.sh on Linux.

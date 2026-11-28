@@ -11,7 +11,8 @@
 // browser's Analysis folder, mitcad#41, mitcad#620), and while one is shown
 // the bodies stay cut at its plane, its overhangs and thin walls stay
 // colored over them, or a minimum distance's closest points stay joined
-// by a line.
+// by a line. OK keeps an Interference check too (mitcad#2664), not drawn:
+// opened from the folder, it runs again on its bodies.
 #include "Commands.hpp"
 
 #include <algorithm>
@@ -933,25 +934,106 @@ QJsonObject interferenceQuery(const CommandContext& context, const QJsonObject& 
   return context.queryObject(request);
 }
 
+// A kept Interference check (mitcad#2664): its bodies' places in the Bodies
+// selection that are not in the design at the timeline marker (a body
+// deleted since the check was kept).
+const QString kInterferenceBodies = QStringLiteral("bodies");
+
+QList<int> goneBodies(const Selection& items, const CommandContext& context) {
+  QStringList present;
+  for (const QJsonValue& value : context.queryArray(QStringLiteral("bodies"))) {
+    present << value.toObject().value(QStringLiteral("uid")).toString();
+  }
+  QList<int> gone;
+  for (int i = 0; i < items.size(); ++i) {
+    if (!present.contains(items[i].owner)) {
+      gone << i;
+    }
+  }
+  return gone;
+}
+
+// What the panel says while picks of Bodies are gone (mitcad#2664), in the
+// words of a feature's gone picks (CommandSession::markMissingPicks).
+QString goneBodiesText(qsizetype gone) {
+  return gone == 1 ? QObject::tr("A body of %1 is gone: remove it from the list").arg(QObject::tr("Bodies"))
+                   : QObject::tr("Some bodies of %1 are gone: remove them from the list").arg(QObject::tr("Bodies"));
+}
+
+// The bodies' uids, each once: a body picked in two occurrences of its
+// component is checked once, as the kept check keeps it (mitcad#2664).
+QJsonArray uniqueBodyUids(const Selection& items) {
+  QJsonArray bodies;
+  for (const QJsonValue& uid : bodyUids(items)) {
+    if (!bodies.contains(uid)) {
+      bodies.append(uid);
+    }
+  }
+  return bodies;
+}
+
+// The panel's bodies as a kept check's definition (each body once; none:
+// every body), or what is wrong.
+Built interferenceDefinition(const CommandState& state, const CommandContext& context) {
+  const Selection& items = state.items(kInterferenceBodies);
+  const QList<int> gone = goneBodies(items, context);
+  if (!gone.isEmpty()) {
+    return Built::failure(goneBodiesText(gone.size()), kInterferenceBodies);
+  }
+  const QJsonArray bodies = uniqueBodyUids(items);
+  QJsonObject definition{{QStringLiteral("type"), QStringLiteral("interference")}};
+  if (!bodies.isEmpty()) {
+    definition.insert(QStringLiteral("bodies"), bodies);
+  }
+  return Built::of(definition);
+}
+
 CommandDef interferenceCommand(const CommandContext& context) {
   CommandDef def;
   def.id = QStringLiteral("inspect.interference");
   def.name = QObject::tr("Interference");
   def.icon = QStringLiteral("interference");
-  def.tooltip = QObject::tr("Where bodies overlap, and by how much");
+  def.tooltip = QObject::tr("Where bodies overlap, and by how much; OK keeps the check to run again");
   def.keywords = {QStringLiteral("clash"), QStringLiteral("overlap"), QStringLiteral("collision")};
   def.changesNoDesign = true; // mitcad#2281
+  // OK keeps the check in the Analysis folder, not drawn; opened from
+  // there it runs again on its bodies (mitcad#2664).
+  def.keepsAnalysis = true;
   def.inputs = {
-      selectionInput(QStringLiteral("bodies"), QObject::tr("Bodies"), SelectKind::Body, 0, 0)
-          .withTooltip(QObject::tr("The bodies to check; none: all")),
+      selectionInput(kInterferenceBodies, QObject::tr("Bodies"), SelectKind::Body, 0, 0)
+          .withTooltip(QObject::tr("The bodies to check; none: all"))
+          // A kept check's gone bodies stay marked in the list until they
+          // are removed (mitcad#2664).
+          .withOnChange([](CommandState& state, const CommandContext& context) {
+            state.setMissingItems(kInterferenceBodies, goneBodies(state.items(kInterferenceBodies), context));
+          }),
   };
   def.enabled = [&context] { return context.queryArray(QStringLiteral("bodies")).size() > 1; };
+  def.build = [](const CommandState& state, const CommandContext& context) {
+    return interferenceDefinition(state, context);
+  };
+  // A kept check opened from the Analysis folder: its bodies, those gone
+  // since marked (CommandState::missingItems), or none for every body.
+  def.load = [](const QJsonObject& analysis, CommandState& state, const CommandContext& context) {
+    const Selection items = bodiesOf(analysis.value(QStringLiteral("bodies")).toArray());
+    state.setItems(kInterferenceBodies, items);
+    const QList<int> gone = goneBodies(items, context);
+    state.setMissingItems(kInterferenceBodies, gone);
+    if (!gone.isEmpty()) {
+      qDebug().noquote() << QStringLiteral("Interference Bodies: %1 of %2 pick(s) gone").arg(gone.size()).arg(items.size());
+    }
+  };
   def.inspect = [](const CommandState& state, const CommandContext& model) {
     Inspection result;
     QJsonObject request{{QStringLiteral("query"), QStringLiteral("interference")}};
-    const Selection& bodies = state.items(QStringLiteral("bodies"));
+    const Selection& bodies = state.items(kInterferenceBodies);
+    // A kept check's body that is gone (mitcad#2664): said, not checked.
+    if (const QList<int> gone = goneBodies(bodies, model); !gone.isEmpty()) {
+      result.error = goneBodiesText(gone.size());
+      return result;
+    }
     if (!bodies.isEmpty()) {
-      request.insert(QStringLiteral("bodies"), bodyUids(bodies));
+      request.insert(QStringLiteral("bodies"), uniqueBodyUids(bodies));
     }
     const QJsonObject answer = interferenceQuery(model, request);
     const QJsonArray pairs = answer.value(QStringLiteral("pairs")).toArray();

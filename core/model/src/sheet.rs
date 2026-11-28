@@ -32,6 +32,8 @@ pub mod process;
 // The material charts the kernel's sheet operations take and give, below
 // the model (mitcad#777).
 pub use mitcad_model_base::sheet_charts::*;
+// Beads: ribs pressed into a panel along sketch lines (mitcad#2645).
+pub mod bead;
 
 pub const TOLERANCE: f64 = 1.0e-7;
 pub const ALGORITHM_VERSION: u32 = 2;
@@ -110,6 +112,21 @@ pub enum SheetOverlayKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         source: Option<BodyUid>,
     },
+    /// A bead (mitcad#2645): a rib pressed into one flat panel, in the
+    /// panel's chart, made again wherever the panel lies (unfolded too).
+    /// The sheet keeps its developed form: the Flat Pattern draws the bead
+    /// as a form on its own layer. `removed` is the volume it removed
+    /// less the volume it added when it was made; a rebuild that changes
+    /// another volume (a later cut or material in its way) is refused.
+    Bead(bead::SheetBead),
+}
+
+impl SheetOverlayKind {
+    /// Whether the sheet keeps its developed form with it: a bead lies in
+    /// its panel's chart and is drawn on the Flat Pattern.
+    pub fn develops(&self) -> bool {
+        matches!(self, SheetOverlayKind::Bead(_))
+    }
 }
 
 /// A corner gap of the sheet (mitcad#2098): two panels cut apart where
@@ -253,6 +270,8 @@ impl SheetState {
                 SheetOverlayKind::Change { placement, .. } => {
                     *placement = transform.after(placement);
                 }
+                // In its panel's chart, which moves with the charts.
+                SheetOverlayKind::Bead(_) => {}
             }
         }
         next
@@ -285,7 +304,8 @@ impl SheetState {
         what: &str,
         words: &FeatureWords<'_>,
     ) -> Option<(String, String)> {
-        let o = self.overlays.first()?;
+        // A bead keeps the developed form (mitcad#2645).
+        let o = self.overlays.iter().find(|o| !o.kind.develops())?;
         let feature = (words.name)(o.feature);
         let shown = match (&o.kind, (words.edges)(o.feature)) {
             (SheetOverlayKind::Straight { .. }, _) => format!(
@@ -302,7 +322,9 @@ impl SheetState {
                  sheet's faces, which cannot be flattened; only corners through the thickness \
                  unfold"
             ),
-            (SheetOverlayKind::Change { .. }, EdgeChange::Other) => format!(
+            // A bead is never found above.
+            (SheetOverlayKind::Change { .. }, EdgeChange::Other)
+            | (SheetOverlayKind::Bead(_), _) => format!(
                 "{what} needs the sheet's developed form, but {feature} repeats a fillet or \
                  chamfer on edges of the sheet's faces, which cannot be flattened; only corners \
                  through the thickness unfold"
@@ -316,7 +338,9 @@ impl SheetState {
                 "{what} needs the sheet's developed form, which {} does not have (a straight cut through a bend or an inclined panel)",
                 o.feature
             ),
-            SheetOverlayKind::Change { .. } => format!("{shown} (the overlay of {})", o.feature),
+            SheetOverlayKind::Change { .. } | SheetOverlayKind::Bead(_) => {
+                format!("{shown} (the overlay of {})", o.feature)
+            }
         };
         Some((shown, detail))
     }
@@ -979,6 +1003,11 @@ pub(crate) fn footprint<K: crate::kernel::Kernel>(
         }
         // Fill Cavity (mitcad#1818): material joined to its body.
         F::FillCavity(d) => {
+            bodies.push(d.body);
+            None
+        }
+        // A bead pressed into a sheet (mitcad#2645).
+        F::SheetBead(d) => {
             bodies.push(d.body);
             None
         }

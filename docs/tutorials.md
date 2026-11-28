@@ -89,12 +89,68 @@ A tutorials repository is fetched as a library is, at most 200 MB.
 The pages are plain HTML, CSS and JavaScript, with pictures, audio and
 video as files of the folder. They are shown by MitCad's web browser
 component (the Chromium Embedded Framework). The pages refer to each
-other and to their assets by relative paths. A page may link to the web.
-A web page, and any page outside the tutorial's folder, gets no bridge.
+other and to their assets by relative paths. A page may link to the web:
+the pane does not follow the link, but MitCad asks the user, naming the
+site, and opens it in the user's own web browser. The pane shows only
+the tutorial's own pages; a link to a page outside the tutorial's folder
+is not followed ([What a page cannot do](#what-a-page-cannot-do)).
 
 MitCad writes what a page logs as `console.log("mitcad:tutorial:<text>")`
-into its own log as `Tutorial page says: <text>`. Use it for your own
-checks and for the tests.
+into its own log as `Tutorial page says: <text>`, at most 300 characters,
+with line breaks and other control characters written as escapes (`\n`).
+Use it for your own checks and for the tests.
+
+## The strict policy
+
+The tutorial's files are given to its pages with a content security
+policy: scripts, styles, pictures, media and fonts only from the
+tutorial's folder or inline (pictures, media and fonts also as `data:`
+and `blob:` addresses), never from an address and never by `eval`; no
+frames, objects, workers, forms or `<base>`. A request for anything
+outside the folder (the web or another local file) is refused.
+
+## What a page cannot do
+
+Anyone can publish a tutorial, so MitCad treats every page as someone
+else's (mitcad#2615):
+
+- **It stays in its folder.** A navigation to anything outside the
+  tutorial's folder is refused, whether a script or a link asks; the
+  page opens no window or tab. A link to the web (`http`, `https`) the
+  user clicks is offered to the user's own browser after a question that
+  names its site; nothing else leaves the pane.
+- **No dialogs or permissions.** No file dialog, no `alert`, `confirm`
+  or `prompt`, no camera, microphone, location or other permission. A
+  page that asks to be kept open (`beforeunload`) is left anyway.
+- **No WebGL and no WebRTC**, and a browsing profile of its own in
+  memory: no cookies, storage or cache shared with Component from Web,
+  with another tutorial or with a later start.
+- **Its own design only.** A tutorial starts in an empty design of its
+  own, never in the user's design. `mitcad.query` and `mitcad.state().design`
+  read only that design, or the starting design `mitcad.openDesign` opened
+  in its place; when another design is opened in the tutorial's window,
+  the tutorial ends and its pane closes.
+- **Limited calls.** At most 20 bridge calls a second, at most 4 of the
+  same call waiting for their answers (a `Promise.all` of two queries is
+  fine), none larger than 4 MB, one events
+  listener per page; `mitcad.openDesign` opens only a design the manifest
+  lists in `designs`, at most 100 MB, one at a time and at most 20 times
+  while the tutorial is open.
+- **Pictures over the target only.** A demonstration's pictures are drawn
+  only over the step's target and 64 pixels around it.
+- **No outward commands from other sources.** A step of a tutorial from
+  another source than MitCad's public repository cannot show or allow a
+  command that sends the design or data out of MitCad, changes MitCad's
+  settings or account, or runs code (export, publish, cloud, feedback,
+  account, settings and preferences, orders, sync and remote designs,
+  scripts and macros, the web, quitting); the step is refused with the
+  reason.
+- **Its source is shown.** The pane names where the tutorial comes from
+  under its title (*From github.com/mitcad/tutorials*).
+
+The web browser component keeps these rules from the version that has
+them; a MitCad with an older component shows no tutorials until the
+component has updated itself.
 
 ## The bridge
 
@@ -109,18 +165,22 @@ The tutorial's own pages get `window.mitcad`. Its calls return promises.
 | `mitcad.query(request)` | Reads the design: `{"query": "sketch"}`, `{"query": "feature", "name": "Extrude1"}` or `{"query": "bodies"}` ([Reading the design](#reading-the-design)). Resolves to the answer; rejects with the reason in words. |
 | `mitcad.setProgress(progress)` | Records where the user is: `{"step": 3, "steps": 8}` (`steps` may be left out) or `{"done": true}` ([Progress](#progress)). Resolves to the progress recorded. |
 | `mitcad.place(side)` | Moves the pane: `"left"`, `"right"` or `"centre"` (`"center"` too) ([Placement](#placement)). Resolves to `{"place": <side>}` as the move starts; rejects any other side. |
-| `mitcad.openDesign(path)` | Opens a starting design of the tutorial (a `.mitcad` path in its folder) as a copy of its own in the local data folder's `tutorial-designs/<id>`. The user's unsaved changes are asked about first, as File › Open asks. |
+| `mitcad.openDesign(path)` | Opens a starting design of the tutorial (a `.mitcad` path in its folder that its manifest lists in `designs`) as a copy of its own in the local data folder's `tutorial-designs/<id>`, in the tutorial's window in place of its design. The user's unsaved changes are asked about first, as File › Open asks. One at a time, at most 20 times while the tutorial is open. |
 | `mitcad.leave()` | Leaves the tutorial, as Leave Tutorial does. |
+| `mitcad.call("show_tutorials")` | Leaves the tutorial, as Leave Tutorial does, and shows the tutorials list (Help › Tutorials…), where its card shows its progress: a lesson's Back to Tutorials at its end ([Progress](#progress)). Only by name, so it works with every web browser component; a MitCad without it rejects the call. |
 | `mitcad.demonstrate(demonstration)` | Plays the page's input demonstration over the step's target ([Demonstrations](#demonstrations)), replacing one playing. Resolves to the guide's state; rejects with the reason when no step is shown or the demonstration is not valid. |
 | `mitcad.stopDemonstration()` | Stops the demonstration playing. Resolves to `{"stopped": true}`, or `false` when none played. |
 | `mitcad.shortcut(command)` | A command's keys as the user has them now ([The user's keys and gestures](#the-users-keys-and-gestures)). Rejects when MitCad has no such command. |
 | `mitcad.navigation()` | The view's orbit, pan and zoom gestures of the user's navigation scheme, for the mouse and the trackpad each on its own ([The user's keys and gestures](#the-users-keys-and-gestures)). |
 | `mitcad.on(event, listener)`, `mitcad.off(event, listener)` | Listens to the guide's events ([Events](#events)); `"*"` listens to all. |
-| `mitcad.call(name, args)` | The calls above by name (`start_step`, `end_step`, `release_hold`, `state`, `query`, `set_progress`, `place` with `{"side": <side>}`, `open_design`, `leave`, `demonstrate`, `stop_demonstration`, `shortcut` with `{"command": <id>}`, `navigation`). |
+| `mitcad.call(name, args)` | The calls above by name (`start_step`, `end_step`, `release_hold`, `state`, `query`, `set_progress`, `place` with `{"side": <side>}`, `open_design`, `leave`, `show_tutorials`, `demonstrate`, `stop_demonstration`, `shortcut` with `{"command": <id>}`, `navigation`). |
 
 The bridge gives no file access and makes no model edits. The user makes
 every change in MitCad. A page cannot run a command; it shows a step, and
-the user takes it. It reads only the design of the tutorial's window.
+the user takes it. It reads only the tutorial's own design: the empty
+design it started in, or the starting design it opened there; once
+another design is opened in its window, the tutorial ends
+([What a page cannot do](#what-a-page-cannot-do)).
 
 ```html
 <script>
@@ -148,7 +208,7 @@ the design of the tutorial's window only, and only these three queries:
 | Request | Answer |
 |---|---|
 | `{"query": "sketch"}`, `{"query": "sketch", "name": "Sketch1"}` | The open sketch, or the one named (its name in the Browser): `uid`, `name`, `open` (whether it is the open one), `plane` (`"xy"`, `"xz"`, `"yz"`, a construction plane's uid, or `{"face", "body"}` for a sketch on a face), `origin` and `normal` (where its plane is in the design, in mm; `normal` `[0, 0, 1]` for a sketch facing up), `solved`, `error`, `dof` (the degrees of freedom left), `fully_constrained` (true when it solved with none left), `dimensions` (each one's `id`, `type`: `length`, `distance`, `diameter`, `angle`, …, `value` in mm or radians, `driven`, `parameter`: its name such as `d1`), `curves` (the curves that make profiles, counted by type: `{"line": 4}`), `construction_curves` (how many), `profiles` (each closed region's `area` in mm², `centroid` and `perimeter` in mm). |
-| `{"query": "feature", "name": "Extrude1"}`, `{"query": "feature", "type": "extrude"}`, `{"query": "feature"}` | The feature named (in the timeline), or the last one before the timeline marker, of the `type` when given (`extrude`, `revolve`, `hole`, `fillet`, `sketch`, …): `uid`, `name`, `type`, `suppressed`, `status` (`ok`, `warning`, `error`, `suppressed`, `rolled_back`), `error`, `rolled_back` (after the marker), `operation` (`new_body`, `join`, `cut`, `intersect`, …) and `extent` (an extrude's `{"type": "distance", "distance": 10}`, `{"type": "through_all"}`, …) where the feature has them, and `def`: its whole definition ([commands.md](../core/model-api/src/commands.md#feature-definitions)) with the values in mm and radians. |
+| `{"query": "feature", "name": "Extrude1"}`, `{"query": "feature", "type": "extrude"}`, `{"query": "feature"}` | The feature named (in the timeline), or the last one before the timeline marker, of the `type` when given (`extrude`, `revolve`, `hole`, `fillet`, `sketch`, …): `uid`, `name`, `type`, `suppressed`, `status` (`ok`, `warning`, `error`, `suppressed`, `rolled_back`), `error`, `rolled_back` (after the marker), `operation` (`new_body`, `join`, `cut`, `intersect`, …) and `extent` (an extrude's `{"type": "distance", "distance": 10}`, `{"type": "through_all"}`, …) where the feature has them, and `def`: its definition ([commands.md](../core/model-api/src/commands.md#feature-definitions)) with the values in mm and radians, cut to what a lesson checks (mitcad#2615): numbers, `true` and `false`, short words without spaces or path separators (an operation, an extent's type, a plane, a face's reference) and the objects and lists of them, four levels deep at most; no field of a name, path, file, address, source, link or text. |
 | `{"query": "bodies"}` | The bodies at the timeline marker: `count`, `solids` (how many of them are solids), and `bodies`, each one's `uid`, `name`, `kind` (`solid`, `sheet`, `mesh` or `empty`), `solid`, `volume` (mm³), `visible`, and `component` for a component's body. |
 
 A request may say which design it means, `"design": "<name>"`; it must
@@ -211,20 +271,34 @@ starts the tutorial from the beginning again. The card's action is
 *Start*, *Continue* while the tutorial is in progress and *Start Again*
 once it is done; Start Again, and *Start Over* in the card's context menu,
 forget the progress first. Every start opens the tutorial's first page
-(`start`) in an empty design of its own.
+(`start`) in an empty design of its own. Continue opens it in the design
+it was left in when a window still shows that design (the window brought
+forward, its Start page left; the pane is opened again there), so that
+what the user made is there; when the tutorial is still open in a window,
+Continue brings that window forward. Otherwise Continue, too, opens the
+first page in an empty design of its own.
 
 The page then finds the progress in `mitcad.state().progress`:
 `{"state": "not_started"}`, `{"state": "in_progress", "step": 3,
-"steps": 8}` or `{"state": "done"}`. A page that continues uses it: the
-example below marks the steps before it as done and offers to go on there
-or to start over. A tutorial whose steps need what the user built earlier
-can open a starting design of that point with `mitcad.openDesign`.
+"steps": 8}` or `{"state": "done"}`. A page that continues uses it, and
+goes on at a step the design is ready for, not only at the step number:
+leaving ends the step shown, a panel or a sketch the user had open may be
+closed since, and the design may be a new one. The example tutorial
+(`docs/examples/tutorials`, its `sketch-extrude`) reads the window's mode
+and the design ([Reading the design](#reading-the-design)): with the
+Extrude panel open it goes on at the distance, in an open sketch at the
+rectangle, with a sketch that has a closed profile at Extrude (and says
+that a panel open when the user left was closed), with neither from the
+sketch; it says which and why, marks the steps before it done, and
+offers Continue at that step or Start over. A tutorial whose steps need
+what the user built earlier can also open a starting design of that point
+with `mitcad.openDesign`.
 
 ```js
 mitcad.state().then(state => {
   const saved = state.progress;
   if (saved && saved.state === "in_progress") {
-    offerToContinue(saved.step);   // the page's own
+    offerToContinue(saved.step);   // the page's own: reads the design first
   } else {
     show(0);
   }
@@ -233,6 +307,12 @@ mitcad.state().then(state => {
 mitcad.setProgress({step: index + 1, steps: steps.length});
 mitcad.setProgress({done: true});
 ```
+
+At its end a page says that the lesson is complete and shows the way
+back: the example's *Back to Tutorials* calls `mitcad.call("show_tutorials")`,
+which leaves the tutorial and shows the tutorials list, where its card
+says Done (a MitCad without it rejects the call; the page then leaves as
+Leave Tutorial does, and Help › Tutorials… shows the list).
 
 `mitcad.setProgress` came with MitCad's Start page tutorials;
 `mitcad.call("set_progress", …)` does the same, and a MitCad without it
@@ -298,7 +378,7 @@ finds the target and outlines it, and places the callout beside it.
 | `text` | The callout's text, at most 400 characters. Required. |
 | `target` | One of: `{"command": <id>}` (its button where one is shown; the ids are in [app/COMMANDS.md](../app/COMMANDS.md)), `{"input": <key>}` (an input of the open command's panel, by the key ui_state lists), `{"browser": <name>}` (a Browser row by its name), `{"view": true}` or `{"view": <kind or kinds>}` (the 3D view, picks of those kinds), `{"workspace_selector": true}` (the toolbar's workspace selector), `{"workspace": <name>}` (a workspace by its name: its entry in the selector's list while the list is open, else the selector), `{"tab": <name>}` (a toolbar tab by its name; another workspace's tab: the selector), `{"timeline": true}` (the timeline, a place to point at), `{"plane": <plane>}` (the view, where the plane to sketch on is picked; only that plane takes a sketch during the step, [Sketch input steps](#sketch-input-steps)), `{"field": <key>}` (a drawing tool's value box, such as a rectangle's `width`, while the tool shows it). |
 | `done` | What completes the step, one of: `{"command": <id>}` (the command finished with OK, or an action ran), `{"started": <id>}` (its panel opened), `{"input": <key>, "value": <text>}` (the value typed into the open panel's input, and left for a moment; a length's "mm" may be left out), `{"pick": true}` or `{"pick": <kind or kinds>}` (a new pick of those kinds), `{"mode": <mode>}` (the window is in that mode: `idle`, `pick_plane`, `sketch`, `command`; a sketch opened is `sketch`, a sketch finished `idle`), `{"navigate": <action>}` (the user orbited, panned or zoomed the view: `orbit`, `pan`, `zoom`; see [Navigation steps](#navigation-steps)), `{"opened": "workspace_selector"}` (the selector's list opened), `{"chosen": <workspace>}` (the workspace shown, with the selector's list closed: at once when it is shown already as the step starts, else once the user chose it), `{"activated": <tab>}` (the tab shown: at once when it is shown already), `{"plane": <plane>}` (a sketch made on that plane), `{"point": <place or places, or [x, y]>}` (the next point of a sketch's drawing tool placed there), `{"field": <key>, "value": <text>}` (the value typed into the drawing tool's value box); the last three are in [Sketch input steps](#sketch-input-steps). Optional: a step without `done` stays until the page ends it (`mitcad.endStep()`, a page's Continue), Escape or Leave Tutorial. |
-| `allow` | More command ids the step allows. |
+| `allow` | More command ids the step allows. A tutorial from another source than MitCad's public repository cannot name an outward command here or as its target ([What a page cannot do](#what-a-page-cannot-do)). |
 | `navigation` | View navigation: the wheel, the mouse buttons and keys the navigation scheme binds, the orientation cube, and the camera commands (`view.home`, `view.fit`, the standard views, the projection, the arrow keys' turns `view.turn_left`, `view.turn_right`, `view.turn_up`, `view.turn_down`). Default `true`; a `navigate` step needs it. |
 | `hold` | `true`: once the step is done, the input stays held while the page shows what comes next ([After a step with hold](#after-a-step-with-hold)). Default `false`. |
 
@@ -314,10 +394,10 @@ MitCad finds each in the layout shown (Floating, Docked, and the Docked
 toolbar of macOS) and outlines it; a workspace's entry is outlined in the
 selector's list itself, which lies over the window. The workspaces are
 `Design`, `Make`, `Render` and `Drawing`; the tabs `Start`, `Solid`,
-`Surface`, `Sheet Metal`, `Build`, `3D Print`, `Laser`, `CNC`, `Manage`
+`Surface`, `Sheet Parts`, `Build`, `3D Print`, `Laser`, `CNC`, `Manage`
 and the modes' `Sketch`, `Drawing`, `Cut Sheet` and `Render`. A name is
 written as the toolbar shows it in English or in MitCad's language, or as
-the toolbar's key (`DESIGN`, `SHEET METAL`, `MAKE_PRINT`); case does not
+the toolbar's key (`DESIGN`, `SHEET PARTS`, `MAKE_PRINT`); case does not
 matter. A name MitCad does not have is refused with the list. The step's
 state and its events carry the toolbar's key (`{"chosen": "DESIGN"}`). A
 layout without a workspace selector (the title bar's tabs of the macOS
@@ -565,6 +645,10 @@ A frame:
 | `anchor` | `[x, y]`: the picture's point put at that place, as parts of its size; default `[0, 0]`, its top left (a pointer's tip). `[0.5, 0.5]` centres it. |
 | `ms` | How long it is shown, 1 to 20000 milliseconds; default 500. |
 | `move` | `true`: it glides from the previous frame's place to its own meanwhile; default `false`. |
+
+The pictures are drawn only over the target's rectangle and 64 pixels
+around it (mitcad#2615): a picture, or the part of it, outside that is
+not shown, so that a page cannot cover or relabel another control.
 
 A target that is not shown (a Browser row scrolled away, a panel closed)
 hides the demonstration until it is shown again. The guide's state

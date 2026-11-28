@@ -79,12 +79,22 @@ struct Feedback {
   // Include the logs (mitcad#1896): this session's and the previous
   // session's log files.
   bool includeLogs = false;
+  // The screenshot is for the developers only (Send Feedback on a Region,
+  // mitcad#2616): a delivery that can keep a part private keeps it so,
+  // unless the organization's setting says otherwise.
+  bool screenshotPrivate = false;
 };
+
+// How the form starts: as Help › Send Feedback (the window's screenshot,
+// off), or with a region the user dragged over (Send Feedback on a Region,
+// mitcad#2616: the kind Bug, the region's screenshot on and private, the
+// crop's reset back to the region, the description with the keyboard).
+enum class FeedbackStart { Window, Region };
 
 // Help > Send Feedback: the kind, a summary, a description, an optional
 // contact address, diagnostics (on), a screenshot of the window (off;
-// croppable) and Include the design (off; offered while a design is open,
-// mitcad#1795). Preview builds the report and shows ReportPreviewDialog;
+// croppable; with FeedbackStart::Region the region's, on) and Include the
+// design (off; offered while a design is open, mitcad#1795). Preview builds the report and shows ReportPreviewDialog;
 // the form closes when that sends.
 class FeedbackDialog : public QDialog {
   Q_OBJECT
@@ -92,8 +102,9 @@ class FeedbackDialog : public QDialog {
 public:
   // `preview` shows the report's preview for what the form holds and
   // returns whether it was sent; `designOpen` offers Include the design.
+  // `start`: Region for Send Feedback on a Region (see FeedbackStart).
   FeedbackDialog(const QImage& screenshot, bool designOpen, std::function<bool(const Feedback&)> preview,
-                 QWidget* parent);
+                 QWidget* parent, FeedbackStart start = FeedbackStart::Window);
 
   Feedback feedback() const;
 
@@ -101,6 +112,7 @@ private:
   void preview();
 
   std::function<bool(const Feedback&)> m_preview;
+  FeedbackStart m_start = FeedbackStart::Window;
   QComboBox* m_kind = nullptr;
   QLineEdit* m_summary = nullptr;
   QPlainTextEdit* m_description = nullptr;

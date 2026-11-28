@@ -143,7 +143,7 @@ Write-Host "ok   $($nails.Count) nails at their junctions, flush"
 Ui-Step 'Close (Escape)'                 { Ui-Key 'Escape' }
 # The cut list by frame (mitcad#522).
 Ui-Mark
-Ui-Step 'Cut List (F9)'                  { Ui-Key 'F9' }
+Ui-Step 'Cut List (Shift+F12)'           { Ui-Key 'Shift+F12' }
 Ui-FocusDialog '^Cut List$'
 Ui-ExpectNew 'Cut list row: ' "the cut list's rows"
 foreach ($name in @('Wall 1', 'Wall 2', 'Wall 3', 'Roof 1')) {

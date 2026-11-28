@@ -58,6 +58,12 @@ pub mod print_library;
 // The live queries that run as model jobs, off the window's UI thread
 // (mitcad#2540).
 pub mod query_jobs;
+// The generated API reference for users and integrators (mitcad#2606):
+// HTML and Markdown pages from the reference, the schemas and the names.
+pub mod api_reference;
+// What each query is for, a sentence or two (mitcad#2636): the API
+// reference's query pages and model_reference's `purpose`.
+pub mod query_purposes;
 
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -1187,6 +1193,8 @@ fn bounded_response(response: Value) -> Value {
     }
 }
 
+#[cfg(test)]
+mod api_reference_tests;
 #[cfg(test)]
 mod guide_tests;
 #[cfg(test)]

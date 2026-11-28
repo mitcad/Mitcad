@@ -130,6 +130,27 @@ void setBrowserRowSpacing(BrowserRowSpacing spacing) {
   }
 }
 
+// The active component's highlight (mitcad#2618).
+namespace {
+const char* const kHighlightActiveSetting = "browser/highlightActiveComponent";
+} // namespace
+
+bool browserHighlightActive() {
+  return QSettings().value(QLatin1String(kHighlightActiveSetting), false).toBool();
+}
+
+void setBrowserHighlightActive(bool on) {
+  const QString key = QLatin1String(kHighlightActiveSetting);
+  if (QSettings().contains(key) && browserHighlightActive() == on) {
+    return;
+  }
+  const bool changed = browserHighlightActive() != on;
+  QSettings().setValue(key, on);
+  if (changed) {
+    emit BrowserPreferencesNotifier::instance().highlightActiveChanged();
+  }
+}
+
 BrowserPreferencesNotifier& BrowserPreferencesNotifier::instance() {
   static BrowserPreferencesNotifier notifier;
   return notifier;

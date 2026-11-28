@@ -22,9 +22,9 @@ source "$(dirname "$0")/ui-test-lib.sh"
 SHOT=${1:-}
 
 # Shortcuts of our own, as the Keyboard Shortcuts window saves them: Shift+C
-# for Chamfer, F9 for Keyboard Shortcuts itself.
+# for Chamfer, F12 for Keyboard Shortcuts itself.
 mkdir -p "$XDG_CONFIG_HOME/Mitcad"
-printf '[shortcuts]\nsolid.chamfer=Shift+C\ntools.shortcuts=F9\n' > "$XDG_CONFIG_HOME/Mitcad/Mitcad.conf"
+printf '[shortcuts]\nsolid.chamfer=Shift+C\ntools.shortcuts=F12\n' > "$XDG_CONFIG_HOME/Mitcad/Mitcad.conf"
 
 # expect_count "text" n description: the log has n lines with the text.
 expect_count() {
@@ -80,7 +80,7 @@ ui_step "cancel (Esc)"                     ui_key Escape
 
 echo "--- Keyboard Shortcuts (mitcad#720): Command Search F3 in Sketch, Fit Point Spline S"
 ui_mark
-ui_step "Keyboard Shortcuts (F9)"          ui_key F9
+ui_step "Keyboard Shortcuts (F12)"          ui_key F12
 ui_expect_new "Keyboard Shortcuts opened" "the window opened"
 ui_focus_dialog '^Keyboard Shortcuts$'
 ui_step "find Command Search"              xdotool type --delay 40 "Command Search"
@@ -112,7 +112,7 @@ ui_focus_main
 
 echo "--- Keyboard Shortcuts: OK refuses F3 for the spline too"
 ui_mark
-ui_step "Keyboard Shortcuts (F9)"          ui_key F9
+ui_step "Keyboard Shortcuts (F12)"          ui_key F12
 ui_focus_dialog '^Keyboard Shortcuts$'
 ui_step "find Fit Point Spline"            xdotool type --delay 40 "Fit Point Spline"
 ui_step "to its row (Down)"                ui_key Down

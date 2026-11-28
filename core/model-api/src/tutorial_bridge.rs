@@ -10,7 +10,8 @@
 //!   plane, degrees of freedom, dimensions, curves and profiles;
 //! - `feature`: one by `name`, else the last one before the timeline
 //!   marker (of a `type` when given): its type, status, operation, extent
-//!   and definition with the values in mm and radians;
+//!   and definition with the values in mm and radians, cut to what a lesson
+//!   checks (no names, paths, files, addresses or texts, mitcad#2615);
 //! - `bodies`: their count, how many are solids, and each one's kind and
 //!   volume.
 //!
@@ -305,6 +306,7 @@ fn feature<K: Kernel>(
         .map_params(&mut |_: &str, id: &ParamId| Ok::<_, ()>(params.value(*id).unwrap_or(f64::NAN)))
         .ok()
         .and_then(|valued| serde_json::to_value(valued).ok())
+        .and_then(|full| lesson_value(&full, 0))
         .unwrap_or(Value::Null);
     let mut value = json!({
         "uid": uid,
@@ -322,6 +324,61 @@ fn feature<K: Kernel>(
     }
     value["def"] = def;
     Ok(value)
+}
+
+/// How deep, how long and how many: the definition a lesson reads.
+const LESSON_DEPTH: usize = 4;
+const LESSON_WORD: usize = 64;
+const LESSON_LIST: usize = 64;
+
+/// A feature's definition as a lesson checks it (mitcad#2615): numbers,
+/// true and false, short words (an operation, an extent's type, a plane, a
+/// face's or edge's reference) and the objects and short lists of them. No
+/// text with spaces or path separators, no field of a name, path, file,
+/// address, source, link or text, and nothing deeper than four levels: a
+/// tutorial page, which may come from anyone, reads the geometry's values
+/// and not a linked file's path, a text feature's words or an import's
+/// source. `None` for a value left out.
+fn lesson_value(value: &Value, depth: usize) -> Option<Value> {
+    match value {
+        Value::Null | Value::Bool(_) | Value::Number(_) => Some(value.clone()),
+        Value::String(text) => (text.chars().count() <= LESSON_WORD
+            && !text.contains(['/', '\\'])
+            && !text.chars().any(char::is_whitespace))
+        .then(|| value.clone()),
+        Value::Array(items) => (depth < LESSON_DEPTH && items.len() <= LESSON_LIST).then(|| {
+            Value::Array(
+                items
+                    .iter()
+                    .filter_map(|item| lesson_value(item, depth + 1))
+                    .collect(),
+            )
+        }),
+        Value::Object(fields) => (depth < LESSON_DEPTH).then(|| {
+            Value::Object(
+                fields
+                    .iter()
+                    .filter(|(key, _)| !private_field(key))
+                    .filter_map(|(key, field)| {
+                        lesson_value(field, depth + 1).map(|kept| (key.clone(), kept))
+                    })
+                    .collect::<Map<String, Value>>(),
+            )
+        }),
+    }
+}
+
+/// A field a lesson never reads: one whose name has a word of a name, a
+/// path, a file, an address, a source, a link or a text (`file_path`,
+/// `linked_design`; not `profiles`).
+fn private_field(key: &str) -> bool {
+    const PRIVATE: [&str; 16] = [
+        "name", "names", "path", "paths", "file", "files", "filename", "url", "urls", "source",
+        "sources", "link", "links", "linked", "text", "texts",
+    ];
+    key.to_ascii_lowercase()
+        .split(['_', '-', '.'])
+        .any(|word| PRIVATE.contains(&word))
 }
 
 /// The bodies at the timeline marker: their count, the solids among them,
@@ -350,4 +407,48 @@ fn bodies<K: Kernel>(doc: &Document<K>) -> Result<Value, ApiError> {
         .collect();
     let solids = bodies.iter().filter(|b| b["solid"] == json!(true)).count();
     Ok(json!({"count": bodies.len(), "solids": solids, "bodies": bodies}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{lesson_value, private_field};
+    use serde_json::json;
+
+    #[test]
+    fn a_lesson_reads_the_values_and_not_paths_names_or_texts() {
+        let def = json!({
+            "type": "extrude",
+            "operation": "cut",
+            "extent": {"type": "distance", "distance": 10.0},
+            "profiles": ["F2:side(c1[c4,c2])"],
+            "direction": [0.0, 0.0, 1.0],
+            "taper": 0.0,
+            "flip": false,
+            "file_path": "/home/someone/designs/secret.step",
+            "linked_design": "Customer housing",
+            "label": "Customer housing rev B",
+            "source": "C:\\work\\part.mitcad",
+            "font": "Sans",
+            "deep": {"a": {"b": {"c": {"d": 1}}}}
+        });
+        let read = lesson_value(&def, 0).unwrap();
+        assert_eq!(read["operation"], "cut");
+        assert_eq!(read["extent"]["distance"], json!(10.0));
+        assert_eq!(read["profiles"], json!(["F2:side(c1[c4,c2])"]));
+        assert_eq!(read["direction"], json!([0.0, 0.0, 1.0]));
+        assert_eq!(read["flip"], json!(false));
+        assert_eq!(read["font"], "Sans");
+        // Paths, names and texts with spaces are left out.
+        for key in ["file_path", "linked_design", "label", "source"] {
+            assert!(read.get(key).is_none(), "{key}: {read}");
+        }
+        // Nothing deeper than four levels.
+        assert!(read["deep"]["a"]["b"].get("c").is_none(), "{read}");
+        // A word with a path separator, and a long one.
+        assert!(lesson_value(&json!("designs/a.mitcad"), 0).is_none());
+        assert!(lesson_value(&json!("x".repeat(65)), 0).is_none());
+        assert!(
+            private_field("fileName") && private_field("source_url") && !private_field("profile")
+        );
+    }
 }

@@ -1,5 +1,6 @@
 [
   {"comment":"SPDX-License-Identifier: MIT"},
-  {"comment":"An empty sketch F1 on XY for tools/ui-scripts/sketch-slot-dimensions.mitcad-ui (mitcad#1225)."},
+  {"comment":"Two empty sketches on XY for tools/ui-scripts/sketch-slot-dimensions.mitcad-ui: F1 (Sketch1) for a Center to Center Slot (mitcad#1225), F2 (Sketch2) for an Overall Slot (mitcad#2622)."},
+  {"cmd":"sketch.create"},
   {"cmd":"sketch.create"}
 ]

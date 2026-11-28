@@ -5,10 +5,12 @@
 # slot drawn level keeps its centre line horizontal. The saved design is
 # checked by sketch-slot-dimensions-check.json: 2 degrees of freedom (its
 # place) are left, and dimensions that move its first end's centre keep
-# its length. The wrapper replaces ENTER_SKETCH with the frontend's
-# ordinary timeline activation on the empty F1 fixture. Every click and
-# move stays within x -20..10, y 10..16 mm, on the grid and clear of the
-# sketch's axes.
+# its length. An Overall Slot in the second sketch F2 keeps its typed
+# overall length as a dimension between the far sides of its end arcs
+# (mitcad#2622). The wrappers replace ENTER_SKETCH and ENTER_SKETCH2 with
+# the frontend's ordinary timeline activation of the empty F1 and F2 of
+# the fixture. Every click and move of the first slot stays within
+# x -20..10, y 10..16 mm, on the grid and clear of the sketch's axes.
 # Run by tools/ui-sketch-slot-dimensions-test.sh (Linux) and
 # tools/ui-windows-sketch-slot-dimensions-test.ps1 (Windows).
 wait-idle
@@ -47,6 +49,38 @@ expect-model-parameter d1 8 model
 expect-model-parameter d2 30 model
 expect-profiles 1
 screenshot '${MITCAD_TEST_WORK}/slot-dimensions.png'
+command sketch.finish
+wait-log '^Sketch finished'
+
+# An Overall Slot drawn at an angle with a typed length of 100 and width
+# of 30 (mitcad#2622): the width is an end arc's diameter (d3) and the
+# typed length the overall length itself (d4), between the far sides of
+# the end arcs, not the distance of the end centres. The slot runs at 45
+# degrees. Clicks and moves stay within x -30..-10, y -20..-10 mm, clear
+# of the axes and of the first slot, on multiples of 10 mm: the layout
+# grid's step follows the zoom (1, 5 or 10 mm), and grid snapping must not
+# turn the direction (a move to (-26, -18) became (-30, -20) on a 10 mm
+# grid).
+ENTER_SKETCH2
+expect-log '^Editing sketch F2 \(Sketch2\)'
+capture-undo-depth overall
+command sketch.slot_overall
+sketch-click -20 -10
+sketch-move -30 -20
+type 100
+expect-sketch-field-dimension length length 100
+key Return
+sketch-move -10 -20
+type 30
+expect-sketch-field-dimension width length 30
+mark
+key Return
+wait-log '^Added slot, width 30 mm \[c1, c2, c3, c4\], dimensions d3 = 30 mm, d4 = 100 mm$'
+key Escape
+expect-model-parameter d3 30 model
+expect-model-parameter d4 100 model
+expect-undo-depth ${overall} 1
+screenshot '${MITCAD_TEST_WORK}/overall-slot-dimensions.png'
 command sketch.finish
 wait-log '^Sketch finished'
 command file.save

@@ -38,21 +38,21 @@ cat >> "$UI_OUT/docked.mitcad-ui" <<'DRIVER'
 # (`least`, mitcad#1590).
 fit-main-frame 916 394 least
 expect-main-frame 916 394 least
-expect-ribbon-labels Start Solid Surface 'Sheet Metal' Build '3D Print' Laser CNC Manage
+expect-ribbon-labels Start Solid Surface 'Sheet Parts' Build '3D Print' Laser CNC Manage
 expect-projects-layout ${MITCAD_TEST_PROJECT_COUNT}
 focus-widget projectsTree
 key Home Right
 expect-projects-layout ${MITCAD_TEST_PROJECT_COUNT}
 key End
 expect-projects-layout ${MITCAD_TEST_PROJECT_COUNT}
-expect-ribbon-labels Start Solid Surface 'Sheet Metal' Build '3D Print' Laser CNC Manage
+expect-ribbon-labels Start Solid Surface 'Sheet Parts' Build '3D Print' Laser CNC Manage
 screenshot ${MITCAD_TEST_SHOTS}/short-frame.png
 # Below the width of all group captions: the toolbar panel puts the groups
 # that do not fit even collapsed into its page's » menu (it has no Classic
 # scroll arrows); every caption in sight whole, with its group's menu.
 fit-main-frame 500 394 least
 expect-main-frame 500 394 least
-expect-ribbon-labels Start Solid Surface 'Sheet Metal' Build '3D Print' Laser CNC Manage
+expect-ribbon-labels Start Solid Surface 'Sheet Parts' Build '3D Print' Laser CNC Manage
 screenshot ${MITCAD_TEST_SHOTS}/ribbon-overflow.png
 DRIVER
 for chrome in floating docked; do

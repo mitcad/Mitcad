@@ -4,7 +4,8 @@
 // Textures in the shaded view (mitcad#2186): a body whose appearance, or a
 // face's, has a texture is drawn with its base colour image, as the
 // rendered view lays it (docs/rendering.md, Materials): along each face's
-// grain (render/GrainProjection.hpp), in the body's own coordinates by
+// grain (render/GrainProjection.hpp; each placed body from its own part
+// of the images, its grain offset, mitcad#2605), in the body's own coordinates by
 // planar or box projection, one repeat its size in mm, turned by its
 // rotation. The image is lit as the body's colour is (OCCT's shading
 // multiplies the lit white by the texture), mipmapped and repeated; the
@@ -127,11 +128,19 @@ inline occ::handle<Graphic3d_Texture2D> viewTexture(const QString& file) {
 // modes, its lines and its picking as FineEdges<AIS_Shape>. `looks[0]` is
 // the body's own look, the others its face groups'; `faceLook` gives a
 // face's (by its TShape) look index, faces not in it the body's.
+// `grainOffset` (mm) is the placed body's offset into the images laid
+// along the grain (render::grainOffset of its key, mitcad#2605), the
+// rendered view's for the same body.
 class TexturedBody : public FineEdges<AIS_Shape> {
 public:
   TexturedBody(std::vector<ViewLook> looks, std::unordered_map<const TopoDS_TShape*, std::size_t> faceLook,
-               std::shared_ptr<const ViewEdges> edges, const TopoDS_Shape& shape)
-      : FineEdges<AIS_Shape>(std::move(edges), shape), m_looks(std::move(looks)), m_faceLook(std::move(faceLook)) {}
+               std::shared_ptr<const ViewEdges> edges, const TopoDS_Shape& shape,
+               const std::array<double, 2>& grainOffset = {0.0, 0.0})
+      : FineEdges<AIS_Shape>(std::move(edges), shape), m_looks(std::move(looks)), m_faceLook(std::move(faceLook)),
+        m_grainOffset(grainOffset) {}
+
+  // The offset into the grain images it draws with (for the tests).
+  const std::array<double, 2>& grainOffset() const { return m_grainOffset; }
 
   // How many of its face groups are drawn textured (for the log).
   std::size_t texturedLooks() const {
@@ -268,9 +277,10 @@ private:
         double a = p.X();
         double b = p.Y();
         if (look.projection == ViewProjection::Grain) {
+          // With the body's grain offset (mitcad#2605), as the renderer's.
           const std::array<double, 2> g = render::grainPoint(axes, {p.X(), p.Y(), p.Z()});
-          a = g[0];
-          b = g[1];
+          a = g[0] + m_grainOffset[0];
+          b = g[1] + m_grainOffset[1];
         } else if (look.projection == ViewProjection::Box) {
           const double nx = std::abs(normal.X());
           const double ny = std::abs(normal.Y());
@@ -323,6 +333,7 @@ private:
 
   std::vector<ViewLook> m_looks;
   std::unordered_map<const TopoDS_TShape*, std::size_t> m_faceLook;
+  std::array<double, 2> m_grainOffset;
 };
 
 } // namespace mitcad

@@ -7,7 +7,7 @@
 # Run by tools/ui-language-test.sh.
 expect-ever '^Language: xx [(]--language[)]$' 30
 wait-idle
-expect-ribbon-labels '[Štárt ··]' '[Šólíd ··]' '[Šúrfáçé ··]' '[Šhéét Métál ···]' '[Búíld ··]' '[3D Príñt ··]' '[Lášér ··]' '[ÇÑÇ ··]' '[Máñágé ··]'
+expect-ribbon-labels '[Štárt ··]' '[Šólíd ··]' '[Šúrfáçé ··]' '[Šhéét Pártš ···]' '[Búíld ··]' '[3D Príñt ··]' '[Lášér ··]' '[ÇÑÇ ··]' '[Máñágé ··]'
 command tools.search
 focus-widget commandSearchInput
 type preferences

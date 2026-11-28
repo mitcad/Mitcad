@@ -99,6 +99,15 @@ inline int spacedBrowserRowHeight(BrowserRowSpacing spacing, int standard, int c
   return base;
 }
 
+// The active component's header row tinted in its component's colour
+// (mitcad#2618, GitHub mitcad/Mitcad#670, Preferences > Display >
+// "Highlight the active component in the Browser"; settings
+// "browser/highlightActiveComponent"), off by default: a cue to which
+// component new features go into. Every window's Browser follows a change at
+// once (BrowserPanel::setHighlightActive); Restore Defaults turns it off.
+bool browserHighlightActive();
+void setBrowserHighlightActive(bool on);
+
 // Tells the windows' Browsers that the preference changed.
 class BrowserPreferencesNotifier : public QObject {
   Q_OBJECT
@@ -117,6 +126,9 @@ signals:
   // The rows' spacing changed (mitcad#2513), read again with
   // browserRowSpacing().
   void rowSpacingChanged();
+  // The active component's highlight was turned on or off (mitcad#2618),
+  // read again with browserHighlightActive().
+  void highlightActiveChanged();
 };
 
 } // namespace mitcad

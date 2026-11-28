@@ -18,3 +18,5 @@ mod seat_tests;
 mod mortise_tenon_tests;
 // Laser sheet joints and the flat pack (mitcad#1939).
 mod laser_sheet_tests;
+// Wood Joint (mitcad#2604).
+mod wood_joint_tests;

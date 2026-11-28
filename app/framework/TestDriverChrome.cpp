@@ -53,7 +53,7 @@ void TestDriver::testRibbonLabels(const QStringList& expected) {
     }
     for (QToolButton* button : ribbon->findChildren<QToolButton*>()) {
       if (!button->objectName().startsWith(QLatin1String("ribbonMenu_"))) continue;
-      // These captions are ordinary words (Create, Sheet Metal, ...), not
+      // These captions are ordinary words (Create, Sheet Parts, ...), not
       // file formats or user names. Check the actual text used by painting.
       // An acronym that is the group's name (CNC, mitcad#1013) is written
       // in capitals as a word is, not shouted: the allowed ones are listed

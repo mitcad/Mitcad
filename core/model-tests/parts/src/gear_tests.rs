@@ -229,3 +229,220 @@ fn gears_mesh_with_gears_and_racks() {
     );
     assert!((values["outside_diameter"].as_f64().unwrap() - 64.0).abs() < 1.0e-9);
 }
+
+fn gear_values(doc: &Document<MockKernel>, uid: FeatureUid) -> Value {
+    serde_json::from_str(
+        &doc.query(&json!({"query": "gear_values", "uid": uid}).to_string())
+            .unwrap(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn cycloid_gears_mesh_with_cycloid_gears_racks_and_rings() {
+    let mut doc = Document::new(MockKernel::default());
+    // A cycloid spur gear (mitcad#2607): 20 teeth of module 2, the default
+    // rolling circles 7.5 modules across.
+    let pinion = add(
+        &mut doc,
+        json!({"type": "gear", "kind": "spur", "tooth_form": "cycloid", "plane": "xy", "module": 2,
+               "teeth": 20, "face_width": 10, "operation": "new_body"}),
+    )
+    .unwrap();
+    assert_eq!(status(&doc, pinion), FeatureStatus::Ok);
+    let (min, max) = bounds(&doc, "F1.b0");
+    assert!(near(max[0], 22.0) && near(min[0], -22.0), "{min:?} {max:?}");
+    let values = gear_values(&doc, pinion);
+    assert_eq!(values["tooth_form"], json!("cycloid"), "{values}");
+    assert!(values.get("pressure_angle").is_none(), "{values}");
+    assert!(values.get("error").is_none(), "{values}");
+    for (key, expected) in [
+        ("pitch_diameter", 40.0),
+        ("outside_diameter", 44.0),
+        ("root_diameter", 35.0),
+        ("addendum_rolling_diameter", 15.0),
+        ("dedendum_rolling_diameter", 15.0),
+    ] {
+        assert!(
+            (values[key].as_f64().unwrap() - expected).abs() < 1.0e-9,
+            "{key}: {values}"
+        );
+    }
+    assert_eq!(
+        values["computed"],
+        json!(["addendum_rolling_diameter", "dedendum_rolling_diameter"]),
+        "{values}"
+    );
+    assert!(values["section_area"].as_f64().unwrap() > 0.0, "{values}");
+
+    // A 30-tooth cycloid gear meshes along the y axis, 50 mm away.
+    let gear = add(
+        &mut doc,
+        json!({"type": "gear", "kind": "spur", "tooth_form": "cycloid", "module": 2, "teeth": 30,
+               "face_width": 10, "mesh_with": {"gear": pinion, "angle": "90 deg"},
+               "operation": "new_body"}),
+    )
+    .unwrap();
+    assert_eq!(status(&doc, gear), FeatureStatus::Ok);
+    let (min, max) = bounds(&doc, "F2.b0");
+    assert!(near((min[1] + max[1]) / 2.0, 50.0), "{min:?} {max:?}");
+    let values = gear_values(&doc, gear);
+    assert!(
+        (values["centre_distance"].as_f64().unwrap() - 50.0).abs() < 1.0e-9,
+        "{values}"
+    );
+    // A cycloid rack below the pinion, its reference line 20 mm from the
+    // axis.
+    let rack = add(
+        &mut doc,
+        json!({"type": "gear", "kind": "rack", "tooth_form": "cycloid", "module": 2, "teeth": 10,
+               "height": 12, "face_width": 10, "mesh_with": {"gear": pinion, "angle": "-90 deg"},
+               "operation": "new_body"}),
+    )
+    .unwrap();
+    assert_eq!(status(&doc, rack), FeatureStatus::Ok);
+    let (_, max) = bounds(&doc, "F3.b0");
+    assert!(near(max[1], -18.0), "{max:?}");
+    // A cycloid ring of 60 teeth and a pinion of 20 inside it: 40 mm apart.
+    let ring = add(
+        &mut doc,
+        json!({"type": "gear", "kind": "ring", "tooth_form": "cycloid", "plane": "xy",
+               "center": [300, 0], "module": 2, "teeth": 60, "rim": 5, "face_width": 10,
+               "operation": "new_body"}),
+    )
+    .unwrap();
+    assert_eq!(status(&doc, ring), FeatureStatus::Ok);
+    let inside = add(
+        &mut doc,
+        json!({"type": "gear", "kind": "spur", "tooth_form": "cycloid", "module": 2, "teeth": 20,
+               "face_width": 10, "mesh_with": {"gear": ring}, "operation": "new_body"}),
+    )
+    .unwrap();
+    assert_eq!(status(&doc, inside), FeatureStatus::Ok);
+    let values = gear_values(&doc, inside);
+    assert!(
+        (values["centre_distance"].as_f64().unwrap() - 40.0).abs() < 1.0e-9,
+        "{values}"
+    );
+    let values = gear_values(&doc, ring);
+    assert!(
+        (values["inside_diameter"].as_f64().unwrap() - 116.0).abs() < 1.0e-9,
+        "{values}"
+    );
+
+    // Saved and opened again: the same form.
+    let saved = doc.to_json();
+    assert!(saved.contains("cycloid"));
+    let mut loaded = Document::from_json(&saved, MockKernel::default()).unwrap();
+    loaded.recompute();
+    assert_eq!(status(&loaded, gear), FeatureStatus::Ok);
+    assert_eq!(
+        loaded.feature(gear).unwrap().def,
+        doc.feature(gear).unwrap().def
+    );
+    // An involute gear's definition has no tooth form or rolling circles:
+    // it is written as before.
+    let involute = add(
+        &mut doc,
+        json!({"type": "gear", "kind": "spur", "plane": "xy", "center": [0, -200], "module": 2,
+               "teeth": 20, "face_width": 10, "operation": "new_body"}),
+    )
+    .unwrap();
+    let feature: Value = serde_json::from_str(
+        &doc.query(&json!({"query": "feature", "uid": involute}).to_string())
+            .unwrap(),
+    )
+    .unwrap();
+    let written = feature["def"].to_string();
+    assert!(feature["def"]["kind"] == json!("spur"), "{feature}");
+    assert!(!written.contains("tooth_form"), "{written}");
+    assert!(!written.contains("rolling"), "{written}");
+}
+
+#[test]
+fn cycloid_gears_refuse_what_their_teeth_do_not_have() {
+    let mut doc = Document::new(MockKernel::default());
+    let pinion = add(
+        &mut doc,
+        json!({"type": "gear", "kind": "spur", "tooth_form": "cycloid", "plane": "xy", "module": 2,
+               "teeth": 20, "face_width": 10, "operation": "new_body"}),
+    )
+    .unwrap();
+    // An involute gear does not mesh with it.
+    let message = rejected(
+        &mut doc,
+        json!({"type": "gear", "kind": "spur", "module": 2, "teeth": 30, "face_width": 10,
+               "mesh_with": {"gear": pinion}, "operation": "new_body"}),
+    );
+    assert!(
+        message.contains("only with a gear with cycloidal teeth"),
+        "{message}"
+    );
+    // Nor does one whose addendum circle is not the pinion's dedendum circle.
+    let message = rejected(
+        &mut doc,
+        json!({"type": "gear", "kind": "spur", "tooth_form": "cycloid", "module": 2, "teeth": 30,
+               "face_width": 10, "addendum_rolling_diameter": 12, "mesh_with": {"gear": pinion},
+               "operation": "new_body"}),
+    );
+    assert!(
+        message.contains("the other's dedendum rolling circle"),
+        "{message}"
+    );
+    // A ring too close to its pinion's size fouls it.
+    let ring = add(
+        &mut doc,
+        json!({"type": "gear", "kind": "ring", "tooth_form": "cycloid", "plane": "xy",
+               "center": [300, 0], "module": 2, "teeth": 30, "rim": 5, "face_width": 10,
+               "operation": "new_body"}),
+    )
+    .unwrap();
+    let message = rejected(
+        &mut doc,
+        json!({"type": "gear", "kind": "spur", "tooth_form": "cycloid", "module": 2, "teeth": 20,
+               "face_width": 10, "mesh_with": {"gear": ring}, "operation": "new_body"}),
+    );
+    assert!(
+        message.contains("by at least the two rolling circles"),
+        "{message}"
+    );
+    // No pressure angle, no profile shift, no bevel gear; an involute gear
+    // has no rolling circles.
+    for (extra, expected) in [
+        (
+            json!({"tooth_form": "cycloid", "pressure_angle": "25 deg"}),
+            "has no pressure angle",
+        ),
+        (
+            json!({"tooth_form": "cycloid", "profile_shift": 0.2}),
+            "has no profile shift",
+        ),
+        (
+            json!({"addendum_rolling_diameter": 15}),
+            "has no rolling circles",
+        ),
+        // Too few teeth for the default circles.
+        (
+            json!({"tooth_form": "cycloid", "teeth": 8}),
+            "dedendum rolling circle",
+        ),
+    ] {
+        let mut gear = json!({"type": "gear", "kind": "spur", "plane": "xy", "center": [0, 200],
+                              "module": 2, "teeth": 20, "face_width": 10,
+                              "operation": "new_body"});
+        for (key, value) in extra.as_object().unwrap() {
+            gear[key] = value.clone();
+        }
+        let message = rejected(&mut doc, gear);
+        assert!(message.contains(expected), "{message}");
+    }
+    let message = rejected(
+        &mut doc,
+        json!({"type": "gear", "kind": "bevel", "tooth_form": "cycloid", "plane": "xy",
+               "module": 2, "teeth": 20, "face_width": 8, "operation": "new_body"}),
+    );
+    assert!(
+        message.contains("a bevel gear has involute teeth"),
+        "{message}"
+    );
+}

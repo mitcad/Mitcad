@@ -2569,10 +2569,12 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
             )));
         }
     }
-    // One shown at a time: the first shown one.
+    // One shown at a time: the first shown one. An interference check is
+    // never shown (mitcad#2664): a file that leaves its `visible` out does
+    // not hide the shown one with it.
     let mut shown = false;
     for analysis in &mut state.analyses {
-        analysis.visible = analysis.visible && !shown;
+        analysis.visible = analysis.visible && analysis.def.is_drawn() && !shown;
         shown = shown || analysis.visible;
     }
     settle_unitless_slots(&mut state, &mut warnings);

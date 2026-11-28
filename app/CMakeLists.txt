@@ -52,6 +52,9 @@ qt_add_executable(mitcad
   browser/PolicyDialog.hpp
   browser/ReorientDialog.cpp
   browser/ReorientDialog.hpp
+  # Replace Component (mitcad#2640).
+  browser/ReplaceComponentDialog.cpp
+  browser/ReplaceComponentDialog.hpp
   # Convert to Features: a placed library part to its own features (mitcad#1815).
   browser/ConvertToFeatures.cpp
   browser/ConvertToFeatures.hpp
@@ -357,6 +360,12 @@ qt_add_executable(mitcad
   report/ReportDialogs.hpp
   report/ReportText.cpp
   report/ReportText.hpp
+  # Send Feedback on a Region (mitcad#2616): the overlay and the region's
+  # picture from the screens.
+  report/FeedbackRegion.cpp
+  report/FeedbackRegion.hpp
+  report/RegionPicker.cpp
+  report/RegionPicker.hpp
   # Component libraries and the community library (mitcad#64, mitcad#63).
   files/Libraries.cpp
   files/Libraries.hpp
@@ -1266,7 +1275,9 @@ target_sources(mitcad PRIVATE
   webbrowser/ComponentWebFiles.hpp
   webbrowser/MainWindowComponentWeb.cpp
   webbrowser/BrowserDiagnostics.cpp
-  webbrowser/BrowserDiagnostics.hpp)
+  webbrowser/BrowserDiagnostics.hpp
+  webbrowser/TutorialPageRules.cpp
+  webbrowser/TutorialPageRules.hpp)
 add_subdirectory(webbrowser)
 # In-app tutorials (mitcad#2012, docs/tutorials.md): the guide step shown in
 # a design window (one engine for a tutorial page's bridge and live MCP's
@@ -1970,6 +1981,7 @@ target_sources(mitcad PRIVATE sketch/SketchPreferences.cpp sketch/SketchPreferen
 target_sources(mitcad PRIVATE
   platform/SpaceMouseDevice.hpp
   platform/SpaceMouseDriverReports.hpp
+  view/SpaceMouseButtons.hpp
   view/SpaceMouseCamera.hpp
   view/SpaceMouseController.cpp
   view/SpaceMouseController.hpp
@@ -2552,6 +2564,9 @@ target_sources(mitcad PRIVATE
   cam/MainWindowCamStock.cpp
   cam/MainWindowCamTurning.cpp
   view/CamStockOverlay.cpp)
+# The cutters a milling operation's panel offers and starts with
+# (mitcad#2590): the ones its toolpath's generator takes.
+target_sources(mitcad PRIVATE cam/CamToolFit.cpp cam/CamToolFit.hpp)
 # Live MCP's input tools (mitcad#1735, docs/mcp.md "Clicks, keys and
 # dialogs"): ui_click and ui_type post mouse and key events to the window,
 # ui_dialog opens a window ui_command refuses for viewing, reads it and
@@ -3061,3 +3076,11 @@ target_sources(mitcad PRIVATE drawings/CutSheetCutting.cpp drawings/NestFlatPatt
 # widgets over the view when the window shows and the Start page is left.
 target_sources(mitcad PRIVATE framework/GraphicsEnvironment.cpp framework/GraphicsEnvironment.hpp
                framework/PaintWatch.cpp framework/PaintWatch.hpp)
+# Wood Joint in the Build tab's Connect group (mitcad#2604): a woodworking joint
+# between two parts by its Type (wood_joint features; Mortise and Tenon and
+# Dogbone through their own commands' inputs).
+target_sources(mitcad PRIVATE commands/WoodJointCommands.cpp)
+# Invert Selection in the Edit menu and the view's context menu (mitcad#2647,
+# app/COMMANDS.md "Invert Selection"): the selection's kinds shown and not
+# selected, in a command the active input's picks.
+target_sources(mitcad PRIVATE MainWindowInvertSelection.cpp)

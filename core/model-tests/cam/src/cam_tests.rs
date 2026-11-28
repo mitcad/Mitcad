@@ -7,7 +7,9 @@
 //! (and up to date again by its undo), the G-code in millimetres and
 //! inches, a pocket on a round face whose arcs stay arcs, refusals in
 //! words, the design file's `cam` section read back (and read tolerantly;
-//! one that cannot be read opens the design without its CAM, mitcad#2581)
+//! one that cannot be read opens the design without its CAM, mitcad#2581,
+//! and a design recovered from autosave takes it over from its file,
+//! mitcad#2587)
 //! and the machine library's files; a setup's eye kept in the design and
 //! undone; inputs picked in each placement of a component placed twice
 //! outlined where that placement puts them; values that name a parameter
@@ -771,6 +773,102 @@ fn a_cam_section_that_cannot_be_read_opens_the_design_without_it() {
         Document::from_json("{\"format\": ", MockKernel::default()),
         Err(FileError::Syntax(_))
     ));
+}
+
+/// A design recovered from autosave (mitcad#2587) is read from text that
+/// has neither the CAM section that could not be read nor the fields of a
+/// newer MitCad: it takes them over from the file it will be saved over, so
+/// that saving over that file is flagged as the design opened from it is.
+#[test]
+fn a_recovered_design_takes_what_its_file_has_not_read_from_the_file() {
+    let mut doc = machined();
+    command(&mut doc, json!({"cmd": "cam_generate"}));
+    let mut file: Value = serde_json::from_str(&doc.to_json()).unwrap();
+    file["cam"]["setups"][0]["operations"][1]["id"] = json!(2);
+    file["future_notes"] = json!([]);
+    let dir = unique_temp_dir("recovered-unreadable-cam");
+    let path = dir.join("design.mitcad");
+    let other = dir.join("copy.mitcad");
+    let text = file.to_string();
+    std::fs::write(&path, &text).unwrap();
+
+    // Only the top level and the CAM section are read.
+    let found = mitcad_model::file::fields_not_read(&text).unwrap();
+    assert_eq!(found.file, None);
+    assert_eq!(found.fields, ["future_notes"]);
+    assert_eq!(
+        found.unreadable_cam.as_deref(),
+        Some("two setups or operations have the same id")
+    );
+    let readable = mitcad_model::file::fields_not_read(&doc.to_json()).unwrap();
+    assert_eq!(readable.not_read(), Vec::<String>::new());
+    assert!(matches!(
+        mitcad_model::file::fields_not_read("{\"format\": \"mitcad\", \"version\": 99}"),
+        Err(FileError::Version(_))
+    ));
+    assert!(matches!(
+        mitcad_model::file::fields_not_read("{\"format\": "),
+        Err(FileError::Syntax(_))
+    ));
+
+    // The autosaved text of the design opened from the file has neither.
+    let opened = Document::load_design(&path, MockKernel::default()).unwrap();
+    assert_eq!(
+        opened.fields_dropped_by_saving(&path),
+        ["cam", "future_notes"]
+    );
+    let recovered = Document::from_json(&opened.to_json(), MockKernel::default()).unwrap();
+    assert!(recovered.fields_dropped_by_saving(&path).is_empty());
+
+    // Taken over from the file: a save over it drops them, flagged first;
+    // another file's save drops nothing.
+    let kept = recovered.keep_fields_not_read(&path).unwrap();
+    assert_eq!(kept.not_read(), ["cam", "future_notes"]);
+    assert_eq!(recovered.unknown_fields(), kept);
+    assert_eq!(
+        recovered.fields_dropped_by_saving(&path),
+        ["cam", "future_notes"]
+    );
+    assert!(recovered.fields_dropped_by_saving(&other).is_empty());
+    let answer = query(
+        &recovered,
+        json!({"query": "unknown_fields", "path": path.display().to_string()}),
+    );
+    assert_eq!(answer["fields"], json!(["cam", "future_notes"]));
+    assert_eq!(
+        answer["unreadable"],
+        json!([{"field": "cam", "reason": "two setups or operations have the same id"}])
+    );
+    assert_eq!(
+        answer["message"],
+        "saving over this design drops its CAM (machines, setups and operations), which this \
+         MitCad could not read, and the field `future_notes` that a newer MitCad wrote"
+    );
+    recovered.save_file(&other, FileFormat::Single).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), text, "Save As");
+    recovered.save_file(&path, FileFormat::Single).unwrap();
+    let written = file_value(&path);
+    assert!(written.get("cam").is_none());
+    assert!(written.get("future_notes").is_none());
+    assert_eq!(written["features"], file["features"]);
+    assert!(recovered.fields_dropped_by_saving(&path).is_empty());
+
+    // A path without a file keeps nothing; a file that is no design is an
+    // error, and what was kept stays.
+    let again = Document::from_json(&text, MockKernel::default()).unwrap();
+    assert_eq!(again.unknown_fields().not_read(), ["cam", "future_notes"]);
+    let missing = dir.join("missing.mitcad");
+    assert_eq!(
+        again.keep_fields_not_read(&missing).unwrap().not_read(),
+        Vec::<String>::new()
+    );
+    assert!(again.fields_dropped_by_saving(&missing).is_empty());
+    let broken = dir.join("broken.mitcad");
+    std::fs::write(&broken, "{\"format\": ").unwrap();
+    let before = recovered.keep_fields_not_read(&other).unwrap();
+    assert!(recovered.keep_fields_not_read(&broken).is_err());
+    assert_eq!(recovered.unknown_fields(), before);
+    remove_temp(&dir);
 }
 
 #[test]

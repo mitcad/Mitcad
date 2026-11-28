@@ -11,7 +11,7 @@ pub mod pocket;
 use serde::{Deserialize, Serialize};
 
 use crate::CamError;
-use crate::tool::{Cutting, Tool};
+use crate::tool::{Cutting, Tool, ToolShape};
 
 pub use contour::{ContourOp, Side, contour};
 pub use drill::{DrillOp, drill};
@@ -126,9 +126,22 @@ pub enum Direction {
 
 /// What every milling operation needs of its tool and speeds.
 pub(crate) fn check_mill(tool: &Tool, cutting: &Cutting, depths: &Depths) -> Result<(), CamError> {
+    check_cutter(tool, cutting, depths, false)
+}
+
+/// [`check_mill`], with a V-bit (an engraving cutter or a chamfer mill)
+/// also taken when `v_bit`: its tip traces a line, as Contour on the line
+/// does (mitcad#2589).
+pub(crate) fn check_cutter(
+    tool: &Tool,
+    cutting: &Cutting,
+    depths: &Depths,
+    v_bit: bool,
+) -> Result<(), CamError> {
     tool.validate().map_err(CamError::new)?;
     cutting.validate().map_err(CamError::new)?;
-    if !tool.shape.flat_bottom() {
+    let traces = v_bit && matches!(tool.shape, ToolShape::VBit { .. });
+    if !tool.shape.flat_bottom() && !traces {
         return Err(CamError::new(
             "The operation needs a flat or bull nose end mill; this tool's end is not flat.",
         ));

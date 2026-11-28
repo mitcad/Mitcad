@@ -6043,6 +6043,14 @@ pub use surface_analyses::{
     EnvironmentAnalysis, IsocurveAnalysis, MAX_ISOCURVES, MAX_ZEBRA_STRIPES, SurfaceTarget,
     ZebraAnalysis, check_isocurve_count, check_limit, check_zebra_settings,
 };
+// Replace Component: a component swapped for another design, library part
+// or component, its joints re-pointed (mitcad#2640).
+mod replace_component;
+pub use replace_component::{
+    ReplaceMatch, ReplaceOptions, ReplaceWith, ReplacedComponent, ReplacedReference,
+};
+// Interference checks kept in the document (mitcad#2664).
+pub use analyses::InterferenceAnalysis;
 
 /// Results taken from a document for its result store
 /// ([`Document::take_results_to_write`], mitcad#1796), written by

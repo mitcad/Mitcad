@@ -50,7 +50,7 @@ struct LayoutEntry {
 
 // A toolbar group and a tab of them.
 struct LayoutGroup {
-  QString key; // "CREATE", "SHEET METAL"
+  QString key; // "CREATE", "SHEET PARTS"
   std::vector<LayoutEntry> entries;
 };
 struct LayoutTab {

@@ -39,7 +39,7 @@ use crate::datum::DatumPlane;
 use crate::features::OccurrencePath;
 use crate::features::geom_ref::GeomRef;
 use crate::fingerprint::Fingerprint;
-use crate::ids::{BodyUid, ComponentUid, EntityUid, OccurrenceUid};
+use crate::ids::{BodyUid, ComponentUid, OccurrenceUid};
 use crate::joints::path_component;
 use crate::kernel::Kernel;
 use crate::topo::TopoName;
@@ -628,8 +628,7 @@ impl<K: Kernel> Document<K> {
                         .ok_or_else(|| "A sketch of the operation is gone or failed.".to_owned())?;
                     let mut segs = Vec::new();
                     for name in curves {
-                        let uid = EntityUid::parse_curve(name)
-                            .map_err(|_| "A sketch curve is named like c3.".to_owned())?;
+                        let uid = crate::cam::curve_input_uid(name)?;
                         let curve =
                             output.solved.curves.get(&uid).ok_or_else(|| {
                                 "A sketch curve of the operation is gone.".to_owned()

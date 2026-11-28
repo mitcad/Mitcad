@@ -39,3 +39,6 @@ mod minimum_distance_tests;
 mod surface_analysis_tests;
 // Curvature combs of sketch curves and edges (mitcad#2520).
 mod curvature_comb_tests;
+// Interference checks kept in the document and run again by their name
+// (mitcad#2664).
+mod interference_analysis_tests;

@@ -1,0 +1,11 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The holder of tools/ui-scripts/replace-component.mitcad-ui (mitcad#2640), run in the folder of Bracket.mitcad: Bracket linked (its base feature F1) and placed twice, Bracket:2 at x = 50, and Joint1 from a face of Bracket:1 to the origin."},
+  {"cmd": "insert_component", "path": "Bracket.mitcad"},
+  {"cmd": "copy_occurrence", "occurrence": "Bracket:1", "transform": {"translation": [50, 0, 0]}},
+  {"cmd": "add_joint", "kind": "rigid",
+    "a": {"occurrence": "Bracket:1", "geometry": {"body": "F1.b0", "face": "F1:import(0)"}},
+    "b": {"geometry": {"point": [0, 0, 0]}}},
+  {"expect": {"bodies": 1, "instances": 2, "world_volume": 1000}},
+  {"expect": {"query": {"query": "components"}, "result": {"active": "C0"}}}
+]

@@ -8,7 +8,8 @@
 # still selects a face; Preferences > Display's stereo depth and
 # convergence reach the view at once, are saved with OK and put back on
 # Cancel; off, the camera is in its projection from before; Orthographic
-# ends it; the focal lengths of the perspective camera and Anaglyph 3D
+# ends it; the orientation cube following the view drawn as the projection
+# Anaglyph 3D goes back to (mitcad#2641); the focal lengths of the perspective camera and Anaglyph 3D
 # (mitcad#1717) with the model's height at the target kept.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-view-anaglyph-test.ps1 -App build\dev\mitcad.exe -Cli build\dev\tools\cli\mitcad-cli.exe [-Out dir] [-QtBin dir]
@@ -26,6 +27,8 @@ $design = Join-Path $work 'block.mitcad'
 if ($LASTEXITCODE -ne 0) { Ui-Fail 'the block was not made' }
 $env:MITCAD_TEST_WORK = $work
 $env:MITCAD_TEST_STEP_MS = '100'
+# The orientation cube's outline and projection logged (mitcad#2641).
+$env:MITCAD_LOG_ORIENTATION_CUBE = '1'
 $env:MITCAD_TEST_INPUT = Join-Path $PSScriptRoot 'ui-scripts/view-anaglyph.mitcad-ui'
 Ui-StartApp 'view-anaglyph' @('--ui=qt', '--no-mcp', '--open', $design)
 $null = $script:UiProcess.Handle

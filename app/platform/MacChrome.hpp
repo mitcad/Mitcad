@@ -74,6 +74,13 @@ bool captureOwnWindows(const QString& path, QRectF* capturedBounds = nullptr);
 bool chooseTestPopup(const QString& title, const std::function<void()>& open,
                      const std::function<bool()>& qtPopupVisible, QString& error,
                      const std::function<void()>& nativeClosed = {});
+// Send Feedback on a Region (mitcad#2616): whether the screen may be read
+// (the Screen Recording permission, CGPreflightScreenCaptureAccess). When it
+// may not, the first call of a run asks the system
+// (CGRequestScreenCaptureAccess, whose prompt the system shows once at
+// most; never in a UI test's run, MITCAD_TEST_INPUT); later calls only
+// check. True on other platforms.
+bool screenCaptureAllowed();
 #else
 inline void setThreadQuality(ThreadQuality) {}
 inline void initializeComputeThreads() {}
@@ -87,6 +94,7 @@ inline bool chooseTestPopup(const QString&, const std::function<void()>& open,
   open();
   return false;
 }
+inline bool screenCaptureAllowed() { return true; }
 #endif
 
 #ifdef MITCAD_MAC_UI

@@ -96,6 +96,11 @@ mod plunge_tests;
 // posted and the G71 kept for a roughing without a plunge (mitcad#2549).
 #[cfg(test)]
 mod rough_plunge_tests;
+// Operation limits along Z and the spun target of a mill-turn setup
+// (mitcad#2629).
+#[cfg(test)]
+mod limits_tests;
+pub mod spun;
 
 pub use check::{
     ProgramCheck, ReadMove, TurnPlacement, check_lathe, check_program, check_program_with,
@@ -110,6 +115,8 @@ pub use ops::{
     FaceOp, FinishOp, GrooveOp, PartOp, RoughOp, ThreadOp, TurnSide, face, finish, groove,
     part_off, rough, thread,
 };
+// Operation limits along Z (mitcad#2629).
+pub use ops::{TurnLimits, finish_within, rough_within};
 pub use post::LinuxCncTurning;
 // Manual G-code blocks (mitcad#2506).
 pub use post::manual_refusal;

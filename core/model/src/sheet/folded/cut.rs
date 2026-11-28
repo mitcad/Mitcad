@@ -748,6 +748,10 @@ pub(crate) fn cut<K: Kernel>(
     d: &SheetCutDef<f64>,
     ctx: &mut EvalContext<'_, K>,
 ) -> Result<FeatureOutput<K::Shape>, String> {
+    // A Lofted Flange's sheet (mitcad#2575): cut through a flat facet.
+    if super::lofted::is_lofted(ctx, d.body) {
+        return super::lofted::sheet_cut(d, ctx);
+    }
     let (state, rules) = read(ctx, d.body)?;
     if d.profiles.is_empty() {
         return Err("no profiles selected".into());
@@ -868,7 +872,14 @@ pub(crate) fn straight_cut_on<K: Kernel>(
     extent: Option<&crate::features::sheet_cut::SheetCutExtent<f64>>,
 ) -> Result<FeatureOutput<K::Shape>, String> {
     use crate::features::sheet_cut::SheetCutExtent;
-    let (mut state, rules) = read(ctx, body)?;
+    // A Lofted Flange's sheet (mitcad#2575) follows the cut as it follows
+    // an ordinary feature's, or refuses it in words: it keeps no overlay.
+    let lofted = super::lofted::is_lofted(ctx, body);
+    let (mut state, rules) = if lofted {
+        read_any(ctx, body)?
+    } else {
+        read(ctx, body)?
+    };
     let current = ctx.body(body)?;
     let end = match extent {
         Some(SheetCutExtent::Distance { distance }) => {
@@ -933,6 +944,14 @@ pub(crate) fn straight_cut_on<K: Kernel>(
             .volume)
     };
     overlay.removed = volume(&current)? - volume(&result)?;
+    if lofted {
+        let mut next = super::lofted::rederived(ctx, state, rules.thickness, &current, &result)
+            .map_err(super::lofted::refusal)?;
+        next.shape_generation.clear();
+        output.changes.push(BodyChange::Set(body, result));
+        output.sheets.insert(body, SheetChange::Set(next));
+        return Ok(output);
+    }
     let warnings = ctx.warnings.len();
     let derived =
         crate::sheet::rederive::rederive_from(ctx, state.clone(), &rules, &current, &result);
@@ -1225,6 +1244,12 @@ pub(crate) fn with_overlays<K: Kernel>(
             .volume)
     };
     for overlay in &state.overlays {
+        // A bead is pressed again where its panel lies now (mitcad#2645),
+        // with checks of its own.
+        if let SheetOverlayKind::Bead(bead) = &overlay.kind {
+            shape = super::bead::remade(ctx, state, overlay, bead, shape)?;
+            continue;
+        }
         let tools: Vec<(BooleanOp, K::Shape)> = match &overlay.kind {
             SheetOverlayKind::Straight { .. } => {
                 vec![(BooleanOp::Cut, straight_tool(ctx, overlay)?)]
@@ -1240,6 +1265,7 @@ pub(crate) fn with_overlays<K: Kernel>(
                     .chain(added.into_iter().map(|s| (BooleanOp::Join, s)))
                     .collect()
             }
+            SheetOverlayKind::Bead(_) => Vec::new(),
         };
         let before = volume(ctx, &shape)?;
         for (operation, tool) in tools {

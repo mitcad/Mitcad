@@ -6,7 +6,7 @@
 # tools/ui-image-references-test.sh does on Linux, on a 60 x 60 x 3 plate
 # mitcad-cli makes and a 200 x 100 pixel grey BMP file that states 4000
 # pixels per metre (0.25 mm each). The command search cannot open in
-# session 0: Image Reference (F8) and Calibrate Image Reference (F9) come
+# session 0: Image Reference (F8) and Calibrate Image Reference (F12) come
 # from shortcuts of the test's.
 #   1. Image Reference on the plate's top face, the file chosen with
 #      Choose Image... in the file dialog (mitcad#2474: the panel's "Choose
@@ -35,7 +35,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{ 'insert.image_reference' = 'F8'; 'insert.calibrate_image_reference' = 'F9' } -StepPause 0
+Ui-Init $App $Out $QtBin @{ 'insert.image_reference' = 'F8'; 'insert.calibrate_image_reference' = 'F12' } -StepPause 0
 $cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
   ForEach-Object { Join-Path (Split-Path $script:UiApp) $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $cli) { Ui-Fail "no mitcad-cli.exe beside $($script:UiApp)" }
@@ -136,7 +136,7 @@ Ui-ExpectLog 'Browser Root/Images/Image1 at' 'listed in the Images folder'
 
 Write-Host '--- 2. Calibrate: 160 pixels are 80 mm'
 Ui-Mark
-Ui-Step 'Calibrate Image Reference (F9)' { Ui-Key 'F9' }
+Ui-Step 'Calibrate Image Reference (F12)' { Ui-Key 'F12' }
 Ui-ExpectNew 'Calibrate Image1 started' 'calibration started'
 Ui-ExpectNew 'Calibrate Image1 right at' 'the image''s places logged'
 Ui-Step 'the first point'                { Ui-ClickLogged 'Calibrate Image1 left' }
@@ -170,7 +170,7 @@ Ui-Mark
 Ui-Step 'Image1''s light bulb off'       { Ui-ClickLogged 'Browser eye Root/Images/Image1' }
 Ui-ExpectNew 'Visibility Root/Images/Image1: hidden' 'hidden'
 Ui-ExpectNew 'Image references drawn: none' 'not drawn'
-Ui-Step 'Calibrate Image Reference (F9)' { Ui-Key 'F9' }
+Ui-Step 'Calibrate Image Reference (F12)' { Ui-Key 'F12' }
 Ui-ExpectNew 'Show an image reference first.' 'a hidden image is not calibrated'
 Ui-Step 'save (Ctrl+S)'                  { Ui-Key 'ctrl+s' }
 Ui-ExpectNew 'Saved ' 'saved' 30

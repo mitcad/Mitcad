@@ -560,6 +560,52 @@ pub(super) fn tracing() -> bool {
     *ON.get_or_init(|| std::env::var_os("MITCAD_DRAWING_TRACE").is_some())
 }
 
+/// Whether the trace asks for each view's lines too (`MITCAD_DRAWING_TRACE`
+/// naming `strokes`, mitcad#2539): one `drawing-trace: stroke` line per
+/// line as the kernel projected it (`kernel`), as the view shows it after
+/// its threads, detail circle and breaks (`shown`) and as the sheet draws
+/// it at the view's scale, its details smaller than the pen simplified
+/// (`sheet`), each in the view's millimetres, so that a line missing on
+/// the sheet is traced to where it was lost.
+fn tracing_strokes() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("MITCAD_DRAWING_TRACE").is_ok_and(|v| v.contains("strokes")))
+}
+
+fn trace_strokes(view: u32, stage: &str, edges: &[mitcad_model::drawing::ViewEdge]) {
+    use mitcad_model::drawing::{ViewCurve, ViewSpline};
+    for edge in edges {
+        let points: Vec<P2> = match &edge.curve {
+            ViewCurve::Line(a, b) => vec![*a, *b],
+            ViewCurve::Arc {
+                center,
+                radius,
+                start,
+                end,
+            } => (0..=16)
+                .map(|k| {
+                    let t = start + (end - start) * f64::from(k) / 16.0;
+                    [center[0] + radius * t.cos(), center[1] + radius * t.sin()]
+                })
+                .collect(),
+            ViewCurve::Polyline(points) | ViewCurve::Spline(ViewSpline { points, .. }) => {
+                points.clone()
+            }
+        };
+        let text: Vec<String> = points
+            .iter()
+            .map(|p| format!("{:.4},{:.4}", p[0], p[1]))
+            .collect();
+        eprintln!(
+            "drawing-trace: stroke {stage} view={view} seen={} kind={:?} source={} points={}",
+            u8::from(edge.visible),
+            edge.kind,
+            edge.source.map_or(-1, |s| s as i64),
+            text.join(";")
+        );
+    }
+}
+
 thread_local! {
     /// The kernel's projections made on this thread and their
     /// milliseconds, for the trace's line per sheet.
@@ -1871,6 +1917,9 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                     });
                 }
                 let mut projection = projection?;
+                if tracing_strokes() {
+                    trace_strokes(view.id, "kernel", &projection.edges);
+                }
                 // The threads of its bodies by convention, before a
                 // detail's circle or a break cuts the lines; a Flat
                 // Pattern's blank has none drawn.
@@ -1924,6 +1973,17 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                 }
                 let map = view_map(sheet, view);
                 let shown_projection = clip::without_bands(&projection, &map.breaks);
+                if tracing_strokes() {
+                    trace_strokes(view.id, "shown", &shown_projection.edges);
+                    trace_strokes(
+                        view.id,
+                        "sheet",
+                        &mitcad_model_drawing::convention::simplified(
+                            &shown_projection.edges,
+                            map.scale,
+                        ),
+                    );
+                }
                 let shading_shown = shading
                     .as_ref()
                     .map(|s| clip::polygons_without_bands(s, &map.breaks))

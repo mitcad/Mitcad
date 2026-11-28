@@ -395,10 +395,11 @@ impl<K: Kernel> Document<K> {
         if options.folds {
             bends.extend(crate::sheet::folded::triangulated::fold_bends(pattern));
         }
-        let drawing = crate::sheet::flat_dxf::drawing_with_facets(
+        let drawing = crate::sheet::flat_dxf::drawing_with_forms(
             &pattern.regions,
             &bends,
             &pattern.facet_lines,
+            &pattern.beads,
             &options,
         )
         .map_err(|e| {

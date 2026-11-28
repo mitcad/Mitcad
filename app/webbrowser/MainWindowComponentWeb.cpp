@@ -48,6 +48,7 @@
 #include "BrowserModuleLoad.hpp"
 #include "ComponentBrowserHost.hpp"
 #include "ComponentWebFiles.hpp"
+#include "TutorialPageRules.hpp"
 
 namespace mitcad {
 namespace {
@@ -58,6 +59,9 @@ struct LoadedModule {
   CreateComponentBrowserFunction create = nullptr;
   // The tutorial pane's page (mitcad#2012).
   CreateTutorialPageFunction createTutorial = nullptr;
+  // The rules the module keeps for tutorial pages (mitcad#2615,
+  // TutorialPageRules.hpp); 0 for a module from before them.
+  int tutorialGuards = 0;
   QString folder;
   QString version;
 };
@@ -109,6 +113,11 @@ CreateComponentBrowserFunction loadBrowserModule(const BrowserComponentInfo& com
   }
   loaded.create = create;
   loaded.createTutorial = createTutorial;
+  // Not part of the interface: a component of the same interface built
+  // before mitcad#2615 has no such entry and shows no tutorials.
+  const auto guards = reinterpret_cast<tutorialrules::TutorialPageGuardsFunction>(
+      library->resolve(tutorialrules::kTutorialPageGuardsSymbol));
+  loaded.tutorialGuards = guards != nullptr ? guards() : 0;
   loaded.folder = component.folder;
   loaded.version = component.version;
   qInfo().noquote() << QStringLiteral("Component from Web: loaded %1 (component %2, CEF %3)")
@@ -208,6 +217,18 @@ QString browserProfileFolder() {
 CreateTutorialPageFunction loadTutorialPageModule(const BrowserComponentInfo& component, QString* folder,
                                                   QString* error) {
   if (loadBrowserModule(component, error) == nullptr) {
+    return nullptr;
+  }
+  // Tutorial pages only on a module that keeps their rules (mitcad#2615):
+  // an older one let a page leave its folder and click for the user.
+  if (loadedModule().tutorialGuards < tutorialrules::kTutorialPageGuards) {
+    qWarning().noquote() << QStringLiteral("Tutorials: the web browser component %1 keeps tutorial rules %2, not %3")
+                                .arg(loadedModule().version)
+                                .arg(loadedModule().tutorialGuards)
+                                .arg(tutorialrules::kTutorialPageGuards);
+    *error = QCoreApplication::translate(
+        "MainWindow", "This web browser component is too old to show tutorials safely. MitCad updates it by "
+                      "itself when a newer one is available; start MitCad again later and open the tutorial then.");
     return nullptr;
   }
   *folder = loadedModule().folder;

@@ -69,7 +69,10 @@
 // (the Command key on macOS), shift, alt, meta, joined with +.
 //
 // Input (waits until the app computes nothing; steps for the main window
-// wait while a modal dialog is open):
+// wait while a modal dialog is open). While a widget has grabbed the mouse
+// or the keyboard (QWidget::grabMouse, grabKeyboard: Send Feedback on a
+// Region's overlay, mitcad#2616), the mouse steps' events, or the keys,
+// go to it, as Qt delivers the platforms' input:
 //   key <key>...            a key press and release for the widget with the
 //                           focus of the target window (see focus-dialog),
 //                           or for the open popup menu. <key> is a portable
@@ -135,6 +138,14 @@
 //                           fails, unless `refused` expects the refusal,
 //                           matching <regex>
 //   guide-end               the guide step shown ended ("ended")
+//   mcp-tool <tool> <json> [refused <regex>]  a live MCP tool (docs/mcp.md)
+//                           called in the design's window with those
+//                           arguments, as an agent's request reaches it
+//                           without the bridge (mitcad#2587; in
+//                           TestDriverCommands.cpp), once no modal dialog
+//                           is open; logs "TestDriver: mcp-tool <tool>:
+//                           <result>". A refusal fails the step, unless
+//                           `refused` expects it, matching <regex>
 //   capture-toolbar-height <var>  the toolbar's height as laid out (the
 //                           Floating panel, the Docked toolbar) into ${var}
 //   leave-start-page        the Start page left by a click: on the design's

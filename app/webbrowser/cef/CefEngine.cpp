@@ -30,6 +30,8 @@
 #include "webbrowser/BrowserDiagnostics.hpp"
 #include "include/cef_app.h"
 #include "include/cef_command_line.h"
+#include "include/cef_request_context_handler.h"
+#include "include/cef_values.h"
 #include "include/cef_version.h"
 #if defined(__APPLE__)
 #include "include/wrapper/cef_library_loader.h"
@@ -129,7 +131,8 @@ public:
     // work at all, the GPU is used wherever it can be, and the pages are
     // the supplier sites the user chose (app/COMMANDS.md, "Component from
     // Web", The browser). Not "disable-gpu" by default, which leaves only
-    // SwiftShader (and without this switch no WebGL at all).
+    // SwiftShader (and without this switch no WebGL at all). A tutorial's
+    // page has no WebGL at all (CefView::createBrowser, mitcad#2615).
     commandLine->AppendSwitch("enable-unsafe-swiftshader");
     // A WebGL context lost on the GPU (the GPU process ended or reset) does
     // not block WebGL for the page's site for the rest of the run (mitcad#1906,
@@ -522,6 +525,45 @@ bool gpuFailed() { return engine().diag.softwareNext; }
 bool engineRunning() { return engine().running; }
 
 CefRefPtr<CefRequestContext> requestContext() { return engine().context; }
+
+namespace {
+
+// A tutorial's request context's preferences, set once it is ready.
+class TutorialContextHandler : public CefRequestContextHandler {
+public:
+  void OnRequestContextInitialized(CefRefPtr<CefRequestContext> context) override {
+    const auto set = [&context](const char* name, CefRefPtr<CefValue> value) {
+      CefString error;
+      if (!context->SetPreference(CefString(name), value, error)) {
+        qInfo().noquote() << QStringLiteral("Tutorial page: the preference %1 was not set: %2")
+                                 .arg(QString::fromLatin1(name), QString::fromStdString(error.ToString()));
+      }
+    };
+    // No prefetching, preconnecting or DNS prefetching (2: never).
+    CefRefPtr<CefValue> never = CefValue::Create();
+    never->SetInt(2);
+    set("net.network_prediction_options", never);
+    // WebRTC tells no local address and uses no UDP of its own.
+    CefRefPtr<CefValue> proxied = CefValue::Create();
+    proxied->SetString(CefString("disable_non_proxied_udp"));
+    set("webrtc.ip_handling_policy", proxied);
+  }
+
+private:
+  IMPLEMENT_REFCOUNTING(TutorialContextHandler);
+};
+
+} // namespace
+
+CefRefPtr<CefRequestContext> tutorialRequestContext() {
+  if (!engine().running) {
+    return nullptr;
+  }
+  // No cache path: in memory, as an incognito profile.
+  CefRequestContextSettings settings;
+  settings.persist_session_cookies = false;
+  return CefRequestContext::CreateContext(settings, new TutorialContextHandler());
+}
 
 void pumpSoon() {
   if (g_pump != nullptr) {

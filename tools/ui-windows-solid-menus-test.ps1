@@ -9,7 +9,7 @@
 # in the build VM (tools/ui-windows-lib.ps1 says how the input is posted),
 # in the Docked and the Floating layout, as tools/ui-solid-menus-test.sh
 # does on Linux: SOLID's MODIFY, ASSEMBLE, CONSTRUCT, INSPECT and INSERT,
-# SURFACE's CREATE, MODIFY and CONSTRUCT, SHEET METAL's CREATE, MODIFY and
+# SURFACE's CREATE, MODIFY and CONSTRUCT, SHEET PARTS's CREATE, MODIFY and
 # RULES and MANAGE's MATERIALS, RULES and DESIGN as they open, every entry
 # in its place and a separator ("-") between two sections
 # (app/COMMANDS.md, "Sections"), so that a command registered out of its
@@ -56,7 +56,7 @@ $menus = [ordered]@{
     ' | - | Move/Copy | Align' +
     ' | - | Joinery > [Dogbone | Mortise and Tenon]' +
     ' | - | Material | Appearance'
-  'SOLID/ASSEMBLE' = ('New Component' +
+  'SOLID/ASSEMBLE' = ('New Component | Replace Component...' +
     ' | - | Joint | As-Built Joint | Joint Origin | Rigid Group | Constraint | Constraint Set' +
     ' | - | Drive Joint | Motion Link | Contact Set | - | Let It Hang | - | Animate Joint | Motion Study... | Explode...').Replace('...', $e)
   'SOLID/CONSTRUCT' = $construct
@@ -69,11 +69,11 @@ $menus = [ordered]@{
   'SURFACE/MODIFY' = 'Trim | Untrim | Extend | - | Stitch | Unstitch | Reverse Normal | - | Match Surface | Fair Surface' +
     ' | - | Thicken | Boundary Fill'
   'SURFACE/CONSTRUCT' = $construct + ' | - | New Construction Set | Deactivate Construction Set'
-  'SHEET METAL/CREATE' = 'Create Sketch | - | Face | Flange | Hem | Convert to Sheet Metal | Lofted Flange | - | Bend | Fold'
-  'SHEET METAL/MODIFY' = ('Sheet Cut | Perforate | - | Corner Relief | Corner Round | Corner Chamfer' +
+  'SHEET PARTS/CREATE' = 'Create Sketch | - | Face | Flange | Hem | Convert to Sheet Metal | Lofted Flange | - | Bend | Fold'
+  'SHEET PARTS/MODIFY' = ('Sheet Cut | Perforate | Bead | - | Corner Relief | Corner Round | Corner Chamfer' +
     ' | - | Unfold | Refold | Flat Pattern | Show Flat Pattern' +
     ' | - | Export Flat Pattern... | Create Drawing of Flat Pattern... | Export Bend Table...').Replace('...', $e)
-  'SHEET METAL/RULES' = $rules
+  'SHEET PARTS/RULES' = $rules
   'MANAGE/MATERIALS' = 'Edit Materials... | Edit Appearances...'.Replace('...', $e)
   'MANAGE/RULES' = $rules + ' | - | Plastic Rules'
   'MANAGE/DESIGN' = 'Recompute All | Units... | - | Design Properties...'.Replace('...', $e)
@@ -88,9 +88,9 @@ $buttons = [ordered]@{
   'SURFACE/CREATE' = 'sketch.create, surface.extrude, surface.patch'
   'SURFACE/MODIFY' = 'surface.trim, surface.thicken'
   'SURFACE/CONSTRUCT' = 'construct.offset_plane, construct.plane_angle, construct.midplane'
-  'SHEET METAL/CREATE' = 'sketch.create, sheet.face, sheet.flange, sheet.bend'
-  'SHEET METAL/MODIFY' = 'sheet.unfold, sheet.flat_pattern'
-  'SHEET METAL/RULES' = 'sheet.rules'
+  'SHEET PARTS/CREATE' = 'sketch.create, sheet.face, sheet.flange, sheet.bend'
+  'SHEET PARTS/MODIFY' = 'sheet.unfold, sheet.flat_pattern'
+  'SHEET PARTS/RULES' = 'sheet.rules'
   'MANAGE/PARAMETERS' = 'solid.parameters, manage.favorite_parameters'
   'MANAGE/CONFIGURATIONS' = 'solid.configurations'
   'MANAGE/MATERIALS' = 'solid.materials, solid.appearances'

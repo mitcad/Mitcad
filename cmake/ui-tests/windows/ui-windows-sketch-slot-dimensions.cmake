@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 # A Center to Center Slot's typed length and width become its
-# dimensions, so that only its place is free (mitcad#1225); the Linux
+# dimensions, so that only its place is free (mitcad#1225), and an Overall
+# Slot's typed length its overall length (mitcad#2622); the Linux
 # test's shared input script and mitcad-cli's check.
 add_test(NAME app.ui-windows-sketch-slot-dimensions
   COMMAND powershell -NoProfile -ExecutionPolicy Bypass

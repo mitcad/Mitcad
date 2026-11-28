@@ -36,7 +36,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{ 'solid.material' = 'F8'; 'solid.appearance' = 'F9'; 'solid.materials' = 'F7' } -StepPause 0
+Ui-Init $App $Out $QtBin @{ 'solid.material' = 'F8'; 'solid.appearance' = 'F12'; 'solid.materials' = 'F7' } -StepPause 0
 
 $cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
   ForEach-Object { Join-Path (Split-Path $script:UiApp) $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
@@ -210,7 +210,7 @@ Write-Host '--- 3. The Appearance tool: a body, then a face'
 Ui-Mark
 Ui-Step 'click Body2'                    { Ui-ClickLogged 'Browser Root/Bodies/Body2' }
 Ui-ExpectNew 'Browser selected: Root/Bodies/Body2' 'Body2 selected'
-Ui-Step 'Appearance (F9)'                { Ui-Key 'F9' }
+Ui-Step 'Appearance (F12)'                { Ui-Key 'F12' }
 Ui-ExpectNew 'Panel Appearance input value at' 'the picker button is logged'
 Picker-Choose 'Panel Appearance input value' 'Appearance' 'Paint - Red'
 Ui-Mark
@@ -218,7 +218,7 @@ Ui-Step 'OK (Enter)'                     { Ui-Key 'Return' }
 Ui-ExpectNew 'Appearance paint_red for 1 body(ies)' 'Body2 is red'
 Ui-Step 'Escape (clear the selection)'   { Ui-Key 'Escape' }
 Ui-Mark
-Ui-Step 'Appearance (F9)'                { Ui-Key 'F9' }
+Ui-Step 'Appearance (F12)'                { Ui-Key 'F12' }
 Ui-ExpectNew 'Panel Appearance input faces at' 'the Faces input is logged'
 Ui-Step 'the Faces input'                { Ui-ClickLogged 'Panel Appearance input faces' }
 Ui-Step 'pick Body2''s top face'         { Ui-ClickPick 'face F2.b0/F2:top' }
@@ -353,7 +353,7 @@ Ui-Mark
 Ui-Step 'click Body2'                    { Ui-ClickLogged 'Browser Root/Bodies/Body2' }
 Ui-ExpectNew 'Browser selected: Root/Bodies/Body2' 'Body2 selected'
 Ui-Mark
-Ui-Step 'Appearance (F9)'                { Ui-Key 'F9' }
+Ui-Step 'Appearance (F12)'                { Ui-Key 'F12' }
 Ui-ExpectNew 'Panel Appearance tile value: Paint - Red (Library)' 'the tool starts with Body2''s Paint - Red'
 Ui-ExpectNew 'Panel Appearance input value at' 'the picker button is logged'
 Picker-Edit 'Panel Appearance input value' 'Appearance' ('Edit Appearances' + $ellipsis)

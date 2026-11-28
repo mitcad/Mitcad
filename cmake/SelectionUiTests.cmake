@@ -487,3 +487,31 @@ if(BUILD_TESTING AND TARGET mitcad AND TARGET mitcad-cli AND Python3_Interpreter
     set_property(TEST "${tutorials_hints_ui_test}" APPEND PROPERTY ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
   endif()
 endif()
+
+# A tutorial left and continued (mitcad#2610, GitHub mitcad/Mitcad#758):
+# the example tutorial left after its sketch, and left during its Extrude
+# with the panel then closed; each time Help › Tutorials… shows its card in
+# progress, Continue goes on in the design it was left in (no new design)
+# and its page offers the step that design is ready for, Extrude, whose
+# part is then finished. After the first one's end, Back to Tutorials shows
+# the card Done, and Start Again starts it from its first step in a design
+# of its own. Two runs of the application, each stopped after 300 s
+# (ui-tutorials-test.py's RUN_TIMEOUT). Linux and Windows; only where the
+# web browser component is built.
+if(BUILD_TESTING AND TARGET mitcad AND TARGET mitcad-cli AND Python3_Interpreter_FOUND
+   AND selection_ui_platform AND selection_ui_web_browser AND NOT APPLE)
+  set(tutorials_resume_ui_test "app.ui-${selection_ui_platform}-tutorials-resume")
+  selection_ui_command_prefix(497)
+  add_test(NAME "${tutorials_resume_ui_test}"
+    COMMAND ${selection_ui_prefix} "${Python3_EXECUTABLE}"
+            "${CMAKE_SOURCE_DIR}/tools/ui-tutorials-test.py" resume
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
+            "${CMAKE_BINARY_DIR}/ui-${selection_ui_platform}-tutorials-resume"
+            "$<TARGET_FILE_DIR:Qt6::Core>" "${selection_ui_web_browser}"
+            "${CMAKE_SOURCE_DIR}/docs/examples/tutorials")
+  set_tests_properties("${tutorials_resume_ui_test}" PROPERTIES TIMEOUT 660 ${selection_ui_alone}
+    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+  if(selection_ui_platform STREQUAL "linux")
+    set_property(TEST "${tutorials_resume_ui_test}" APPEND PROPERTY ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
+  endif()
+endif()

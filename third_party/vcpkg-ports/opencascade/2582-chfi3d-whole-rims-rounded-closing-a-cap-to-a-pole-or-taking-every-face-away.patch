@@ -1,0 +1,253 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: whole circular rims rounded with a radius that closes a cap to a
+pole or takes every face of the body away (mitcad#2582).
+
+The cases: a cylinder of radius 5 and height 10 whose end rim is rounded
+with 5 (a hemisphere on the cylinder's lower half), then its other rim with
+5 (a ball of 5); an annulus 40 across with a bore of 20, 10 high, its four
+rims rounded with 5 at once (a torus of radii 15 and 5, no face of the
+annulus left). The first two failed or gave an invalid solid, the third
+failed; MitCad built them 0.1 % smaller with a sliver of a face left.
+Four faults:
+
+- ChFi3d_KParticular: a plane/cylinder rounding at a convex circle whose
+  cylinder has the ball's radius was sent to the walk (mitcad#1412: a short
+  arc between a lid's top and an earlier vertical rounding, which the walk
+  takes with the edges beside it, the ball standing still over them). On a
+  closed spine whose edges are all arcs of that one circle (the whole rim)
+  the plane's face is a cap inside the circle, and ChFiKPart's
+  plane/cylinder sphere, its contact on the plane the cap's centre, is the
+  blend. The walk ran to that centre and gave a contact of no length on the
+  plane, which the topological build made an inner wire of the cap, kept
+  whole beside the hemisphere (an invalid solid). The spine's arcs are on
+  the circle within ChFiKPart_IsCoaxialPair's Precision::Confusion and the
+  radius within KParticular's own 1e-6.
+- ChFi3d_ContactsAlongFaceEdges (0014, 0140): a contact along an edge of
+  its face (the second rim's sphere touching the cylinder left between the
+  rims, as high as the radius, along the first hemisphere's edge) was
+  skipped where the other contact is a point with no curve (the sphere's
+  pole); the cylinder came out as a face of no area. That point is now the
+  blend surface's at the other contact's p-curve.
+- ChFi3d_FilDS: a SurfData whose contacts on both sides are lines another
+  blend rides on (ChFi3d_Builder::ApplyRides sets the face index of each
+  such side to 0, the face taken away) had the transitions of its curves
+  composed with no face, an orientation left from initialisation: on the
+  annulus the outer bottom quarter of the torus came out reversed, split
+  along its seam into two faces of no area. The transitions are now
+  composed with the orientation of the face of the spine's edges that holds
+  the side's contact (side 1's, else side 2's), the face the transition was
+  computed on; where no such face is found, as before.
+- TopOpeBRepBuild_Builder::SplitSolid: where no part of the solid's faces
+  is kept, the faces of the data structure's surfaces were added as
+  elements only, and the solid builder grows its shells from start
+  elements: no shell was made and ChFi3d reported Failure_NoResult. In that
+  case only they are the start elements. Only fillets and chamfers put
+  surfaces into the data structure.
+
+Upstream: new.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 2582.
+diff --git a/src/ModelingAlgorithms/TKBool/TopOpeBRepBuild/TopOpeBRepBuild_Builder.cxx b/src/ModelingAlgorithms/TKBool/TopOpeBRepBuild/TopOpeBRepBuild_Builder.cxx
+index a8c5c95b..145051b2 100644
+--- a/src/ModelingAlgorithms/TKBool/TopOpeBRepBuild/TopOpeBRepBuild_Builder.cxx
++++ b/src/ModelingAlgorithms/TKBool/TopOpeBRepBuild/TopOpeBRepBuild_Builder.cxx
+@@ -1625,6 +1625,11 @@ void TopOpeBRepBuild_Builder::SplitSolid(const TopoDS_Shape& S1oriented,
+ 
+   // Add the intersection surfaces
+   // -----------------------------
++  // (Where no part of the solids' faces is kept, the faces of the surfaces
++  // alone bound the result (blends that consume every face of the solid):
++  // they are its start elements, which the solid builder grows shells
++  // from; as elements only, no shell was made and the result was empty.)
++  const bool aSurfacesOnly = SFS.StartElements().IsEmpty();
+   if (myDataStructure->NbSurfaces() > 0)
+   {
+     TopOpeBRepDS_SurfaceIterator SSurfaces = myDataStructure->SolidSurfaces(S1forward);
+@@ -1650,7 +1655,14 @@ void TopOpeBRepBuild_Builder::SplitSolid(const TopoDS_Shape& S1oriented,
+           std::cout << std::endl;
+         }
+ #endif
+-        SFS.AddElement(aFace);
++        if (aSurfacesOnly)
++        {
++          SFS.AddStartElement(aFace);
++        }
++        else
++        {
++          SFS.AddElement(aFace);
++        }
+       }
+     }
+   }
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
+index a1003dc7..eadcf52b 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
+@@ -716,6 +716,32 @@ GeomAbs_Shape ChFi3d_evalconti(const TopoDS_Edge& /*E*/,
+   return GeomAbs_CN;
+ }
+ 
++// Whether the spine is closed and each of its edges is an arc of the circle about Axis of
++// radius R: the spine goes once round that whole circle.
++static bool ChFi3d_SpineWholeCircle(const occ::handle<ChFiDS_Spine>& Spine, const gp_Ax1& Axis, const double R)
++{
++  if (Spine.IsNull() || !Spine->IsPeriodic())
++  {
++    return false;
++  }
++  const gp_Lin aAxis(Axis);
++  for (int ie = 1; ie <= Spine->NbEdges(); ie++)
++  {
++    const BRepAdaptor_Curve aC(Spine->Edges(ie));
++    if (aC.GetType() != GeomAbs_Circle)
++    {
++      return false;
++    }
++    const gp_Circ aCirc = aC.Circle();
++    if (!aCirc.Axis().IsParallel(Axis, Precision::Angular())
++        || aAxis.Distance(aCirc.Location()) > Precision::Confusion() || std::abs(aCirc.Radius() - R) > 1.e-6)
++    {
++      return false;
++    }
++  }
++  return true;
++}
++
+ // modified by NIZNHY-PKV Wed Dec 15 11:22:35 2010f
+ //=================================================================================================
+ 
+@@ -811,7 +837,7 @@ bool ChFi3d_KParticular(const occ::handle<ChFiDS_Spine>& Spine,
+           && ChFi3d::DefineConnectType(Spine->Edges(IE), aS1.Face(), aS2.Face(), 1.e-5, false)
+                == ChFiDS_Convex)
+       {
+-        return !bRet;
++        return ChFi3d_SpineWholeCircle(Spine, gp_Ax1(aCyl.Location(), aD2), aCyl.Radius()) ? bRet : !bRet;
+       }
+       return bRet;
+     }
+@@ -3982,16 +4008,25 @@ void ChFi3d_ContactsAlongFaceEdges(TopOpeBRepDS_DataStructure&       DStr,
+       gp_Vec       aT;
+       C->D1(aTm, aPm, aT);
+       const ChFiDS_FaceInterference& FIo = Fd->Interference(3 - ons);
+-      const occ::handle<Geom_Curve>& Co  = DStr.Curve(FIo.LineIndex()).Curve();
++      const occ::handle<Geom_Curve>  Co =
++        FIo.LineIndex() > 0 ? DStr.Curve(FIo.LineIndex()).Curve() : occ::handle<Geom_Curve>();
++      // (The other contact a point, the blend a sphere closing the face at
++      // its pole (ChFiKPart's plane/cylinder sphere): that point, the blend
++      // surface's at its p-curve there.)
++      const occ::handle<Geom2d_Curve>& aPCo = FIo.PCurveOnSurf();
++      const bool aPointOther = Co.IsNull() && FIo.LineIndex() > 0 && !aPCo.IsNull() && Fd->Surf() > 0
++                               && !DStr.Surface(Fd->Surf()).Surface().IsNull();
+       gp_Dir                         NF, Nv;
+-      if (Co.IsNull() || aT.Magnitude() <= gp::Resolution() || !faceNormalAt(F, aPm, NF)
++      if ((Co.IsNull() && !aPointOther) || aT.Magnitude() <= gp::Resolution() || !faceNormalAt(F, aPm, NF)
+           || !faceNormalAt(Fv, aPm, Nv))
+       {
+         continue;
+       }
+       // (The other contact's point nearest to it: a piece cut by a face
+       // beyond has its lines in other parameters.)
+-      gp_Pnt aPo = Co->Value(aTm);
++      gp_Pnt aPo = aPointOther ? DStr.Surface(Fd->Surf()).Surface()->Value(aPCo->Value(aTm).X(), aPCo->Value(aTm).Y())
++                               : Co->Value(aTm);
++      if (!aPointOther)
+       {
+         const double                fo = std::min(FIo.FirstParameter(), FIo.LastParameter());
+         const double                lo = std::max(FIo.FirstParameter(), FIo.LastParameter());
+@@ -4447,6 +4482,58 @@ static bool PartSection(const TopOpeBRepDS_DataStructure&
+   return true;
+ }
+ 
++// The face of the solid along an edge of the spine whose surface holds the
++// contact of Fd on side onS (its middle point within ten times Tol), as the
++// solid holds it; null where no face or more than one does.
++static TopoDS_Face ChFi3d_SpineFaceHoldingContact(const TopOpeBRepDS_DataStructure&   DStr,
++                                                  const int                           SolidIndex,
++                                                  const occ::handle<ChFiDS_Spine>&    Spine,
++                                                  const occ::handle<ChFiDS_SurfData>& Fd,
++                                                  const int                           onS,
++                                                  const double                        Tol)
++{
++  const ChFiDS_FaceInterference& FI = Fd->Interference(onS);
++  if (Spine.IsNull() || SolidIndex <= 0 || FI.LineIndex() <= 0)
++  {
++    return TopoDS_Face();
++  }
++  const occ::handle<Geom_Curve>& C = DStr.Curve(FI.LineIndex()).Curve();
++  if (C.IsNull())
++  {
++    return TopoDS_Face();
++  }
++  const gp_Pnt P = C->Value(0.5 * (FI.FirstParameter() + FI.LastParameter()));
++  TopoDS_Face  aFound;
++  int          aNb = 0;
++  for (TopExp_Explorer exF(DStr.Shape(SolidIndex), TopAbs_FACE); exF.More(); exF.Next())
++  {
++    const TopoDS_Face& F = TopoDS::Face(exF.Current());
++    if (!aFound.IsNull() && aFound.IsSame(F))
++    {
++      continue;
++    }
++    bool aOnSpine = false;
++    for (TopExp_Explorer exE(F, TopAbs_EDGE); exE.More() && !aOnSpine; exE.Next())
++    {
++      for (int ie = 1; ie <= Spine->NbEdges() && !aOnSpine; ie++)
++      {
++        aOnSpine = Spine->Edges(ie).IsSame(exE.Current());
++      }
++    }
++    if (!aOnSpine)
++    {
++      continue;
++    }
++    GeomAPI_ProjectPointOnSurf aPr(P, BRep_Tool::Surface(F));
++    if (aPr.NbPoints() > 0 && aPr.LowerDistance() <= 10. * Tol)
++    {
++      aFound = F;
++      aNb++;
++    }
++  }
++  return aNb == 1 ? aFound : TopoDS_Face();
++}
++
+ // The parameters on surface S of point P, in the periods nearest to Near.
+ static gp_Pnt2d ParametersNear(const occ::handle<Geom_Surface>& S, const gp_Pnt& P, const gp_Pnt2d& Near)
+ {
+@@ -4825,7 +4912,33 @@ void ChFi3d_FilDS(const int                         SolidIndex,
+     const bool aPointOn1 = Ishape2 != 0 && Fd->IsOnCurve1() && !Fd->IsOnCurve2()
+                            && V1.Point().Distance(V3.Point()) <= Precision::Confusion()
+                            && V2.Point().Distance(V4.Point()) > 10. * Precision::Confusion();
+-    if (Ishape1 != 0 && !aPointOn1)
++    // (Both sides on no face: each contact a line that another blend rides
++    // on, the faces of both taken away (ChFi3d_Builder::ApplyRides), which
++    // left the transitions below no face to be composed with. They are
++    // those of a side on the face its transition was computed on, the face
++    // of the spine's edges that holds its contact: side 1's, else side 2's.)
++    TopoDS_Face aRidden1, aRidden2;
++    if (Ishape1 == 0 && Ishape2 == 0)
++    {
++      aRidden1 = ChFi3d_SpineFaceHoldingContact(DStr, SolidIndex, spine, Fd, 1, tol3d);
++      if (aRidden1.IsNull())
++      {
++        aRidden2 = ChFi3d_SpineFaceHoldingContact(DStr, SolidIndex, spine, Fd, 2, tol3d);
++      }
++    }
++    if (!aRidden1.IsNull())
++    {
++      trafil1 = TopAbs::Compose(aRidden1.Orientation(), Fd->Orientation());
++      trafil1 = TopAbs::Compose(TopAbs::Reverse(Fi1.Transition()), trafil1);
++      trafil2 = TopAbs::Reverse(trafil1);
++    }
++    else if (!aRidden2.IsNull())
++    {
++      trafil2 = TopAbs::Compose(aRidden2.Orientation(), Fd->Orientation());
++      trafil2 = TopAbs::Compose(TopAbs::Reverse(Fi2.Transition()), trafil2);
++      trafil1 = TopAbs::Reverse(trafil2);
++    }
++    else if (Ishape1 != 0 && !aPointOn1)
+     {
+       if (Ishape1 > 0)
+       {

@@ -1315,6 +1315,12 @@ void TestDriver::sendKeyHalf(const KeyPress& press, bool down) {
 }
 
 QWidget* TestDriver::keyReceiver(QWidget*& window) {
+  // A widget that grabbed the keyboard (Send Feedback on a Region's overlay,
+  // mitcad#2616) takes every key, as Qt delivers the platforms' input.
+  if (QWidget* grabber = QWidget::keyboardGrabber(); grabber != nullptr && grabber->isVisible()) {
+    window = grabber->window();
+    return grabber;
+  }
   window = targetWindow();
   if (window == nullptr) {
     return nullptr;
@@ -1493,6 +1499,16 @@ void TestDriver::sendMouse(QEvent::Type kind, const QPoint& windowPos, Qt::Mouse
                            Qt::KeyboardModifiers modifiers) {
   QWidget* top = topWindow();
   if (top == nullptr) {
+    return;
+  }
+  // A widget that grabbed the mouse (Send Feedback on a Region's overlay,
+  // mitcad#2616) takes every mouse event wherever it is, as Qt delivers the
+  // platforms' input.
+  if (QWidget* grabber = QWidget::mouseGrabber(); grabber != nullptr && grabber->isVisible()) {
+    const QPoint global = top->mapToGlobal(windowPos);
+    QMouseEvent event(kind, QPointF(grabber->mapFromGlobal(global)), QPointF(grabber->window()->mapFromGlobal(global)),
+                      QPointF(global), button, buttons, modifiers, QPointingDevice::primaryPointingDevice());
+    QCoreApplication::sendEvent(grabber, &event);
     return;
   }
   const bool pressing = kind == QEvent::MouseButtonPress || kind == QEvent::MouseButtonDblClick;

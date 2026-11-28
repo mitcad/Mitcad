@@ -1,0 +1,11 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"The Bead command (mitcad#2645; tools/ui-sheet-bead-test.sh and its Windows and macOS twins): sheet rules F1 (t = 1, r = 2, K = 0.4, back reference: the plate lies below XY, its top face on it), Sketch1 F2 with a 60 x 40 rectangle and the sheet Face F3 (F3.b0, 2400 mm3); Sketch2 F4 on XY, on the plate's top face, with the line c1 from (10, 20) to (50, 20), the bead's centre line."},
+  {"cmd":"add_feature","def":{"type":"sheet_rules","thickness":1,"bend_radius":2,"allowance":{"type":"k_factor","k":0.4},"reference_side":"back","bend_relief":{"type":"rectangular","width":1,"depth":3},"corner_relief":{"type":"round","width":1,"depth":3}}},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_rectangle","sketch":"F2","corner":[0,0],"width":60,"height":40},
+  {"cmd":"add_feature","def":{"type":"sheet_face","rules":"F1","profiles":[{"sketch":"F2","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}]}},
+  {"expect":{"feature":"F3","status":"ok","body":"F3.b0","volume":2400}},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_line","sketch":"F4","start":[10,20],"end":[50,20]}
+]

@@ -1029,6 +1029,13 @@ pub struct LatheSetup {
     /// the operations (mitcad#2506), in their order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub manual_code: Vec<ManualCode>,
+    /// The turned profile is the bodies spun about the spindle axis
+    /// (mitcad#2629): every feature at whatever spindle angle, not only
+    /// what the section through the axis cuts, so that turning leaves the
+    /// material live tools mill. The live tools read the bodies as they
+    /// are.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub spun_target: bool,
 }
 
 /// A block of G-code the programmer writes into a lathe setup's program
@@ -1607,6 +1614,13 @@ pub struct TurningInput {
     pub peck: Option<CamValue>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stock_to_leave_z: Option<CamValue>,
+    /// Turn Roughing and Turn Finishing within limits along the work Z
+    /// (mitcad#2629): from (towards the face) and to (towards the chuck);
+    /// the face and the part's end when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit_from: Option<CamValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit_to: Option<CamValue>,
 }
 
 impl CamOperation {
@@ -1687,6 +1701,8 @@ impl CamOperation {
                 (&t.depth_of_cut, Length),
                 (&t.peck, Length),
                 (&t.stock_to_leave_z, Length),
+                (&t.limit_from, Length),
+                (&t.limit_to, Length),
             ] {
                 if let Some(value) = value {
                     out.push((value, kind));
@@ -1780,6 +1796,8 @@ impl CamOperation {
                 (&mut t.depth_of_cut, Length),
                 (&mut t.peck, Length),
                 (&mut t.stock_to_leave_z, Length),
+                (&mut t.limit_from, Length),
+                (&mut t.limit_to, Length),
             ] {
                 if let Some(value) = value {
                     out.push((value, kind));
@@ -2109,6 +2127,31 @@ pub fn check_setup(setup: &CamSetup) -> Result<(), String> {
     Ok(())
 }
 
+/// The refusal of a sketch text named in an input of sketch curves
+/// (mitcad#2588, GitHub mitcad/Mitcad#745): the text is one outline of
+/// glyphs, not curves the outline building reads. Written without an id,
+/// so that the notice cleaner leaves it whole.
+pub const SKETCH_TEXT_AS_CURVES: &str = "A CAM operation cannot follow a sketch text: Explode Text turns it into sketch curves to pick instead.";
+
+/// The refusal of any other name in an input of sketch curves that is no
+/// curve's id (mitcad#2588), without an example id for the same reason.
+pub const NOT_A_SKETCH_CURVE: &str = "An input of sketch curves names the sketch's curves by their ids, as the sketch query lists them.";
+
+/// A curve of an input of sketch curves by its name (`c3`): a sketch
+/// text's id (`t3`) is refused with what to do instead, any other name
+/// that is no curve's id with how curves are named (mitcad#2588). The
+/// operation check and both outline builders (planar and wrapped) read
+/// the names through it.
+pub fn curve_input_uid(name: &str) -> Result<crate::ids::EntityUid, String> {
+    crate::ids::EntityUid::parse_curve(name).map_err(|_| {
+        if crate::ids::parse_number::<u32>(name, "t").is_some() {
+            SKETCH_TEXT_AS_CURVES.to_owned()
+        } else {
+            NOT_A_SKETCH_CURVE.to_owned()
+        }
+    })
+}
+
 /// What is wrong with an operation by itself.
 pub fn check_operation(op: &CamOperation) -> Result<(), String> {
     check_name(&op.name, "operation")?;
@@ -2218,8 +2261,7 @@ pub fn check_operation(op: &CamOperation) -> Result<(), String> {
                     return Err("An input of sketch curves needs at least one curve.".to_owned());
                 }
                 for curve in curves {
-                    crate::ids::EntityUid::parse_curve(curve)
-                        .map_err(|_| "A sketch curve is named like c3.".to_owned())?;
+                    curve_input_uid(curve)?;
                 }
             }
             _ => {}

@@ -754,8 +754,11 @@ if(BUILD_TESTING)
   # limit surface's patches (mitcad#1757; no OCCT).
   mitcad_cargo_test(core.subdiv mitcad-subdiv)
   # The test runner's scheduling, profiles and parsers (tools/testrun,
-  # mitcad#790); no ctest needed.
+  # mitcad#790); its `runs` tests run the runner on a build tree of their
+  # own through this build's ctest and cmake (mitcad#2614).
   mitcad_cargo_test(tools.testrun mitcad-testrun)
+  set_property(TEST tools.testrun APPEND PROPERTY ENVIRONMENT
+               "MITCAD_TESTRUN_CTEST=${CMAKE_CTEST_COMMAND}" "MITCAD_TESTRUN_CMAKE=${CMAKE_COMMAND}")
   # model_render's camera, software rasterizer and PNG writer (mitcad#1486;
   # no OCCT).
   mitcad_cargo_test(core.preview mitcad-preview)

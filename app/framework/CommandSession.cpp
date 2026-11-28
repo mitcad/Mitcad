@@ -1838,6 +1838,69 @@ void CommandSession::picked(const Selection& items, Qt::KeyboardModifiers modifi
   }
 }
 
+bool CommandSession::invertPicks(const std::function<Selection(SelectFilter)>& shown) {
+  if (m_done || m_suspended || (m_presenter && !m_presenter->inputEnabled(m_active))) {
+    return false;
+  }
+  const InputDef* input = activeInput();
+  if (input == nullptr || input->type != InputDef::Type::Selection) {
+    return false;
+  }
+  if (m_host.modelBusy()) {
+    // After the job, as a pick waits for it.
+    inputAction([this, shown] { invertPicks(shown); });
+    return true;
+  }
+  const QString key = m_active;
+  Selection& selection = m_state.items(key);
+  // The kinds it holds; with nothing picked yet, every kind it takes now.
+  SelectFilter kinds;
+  for (const SelectionItem& item : std::as_const(selection)) {
+    kinds |= item.kind;
+  }
+  kinds = kinds == SelectFilter() ? activeKinds(input) : kinds & activeKinds(input);
+  const ItemResolver resolve = resolver();
+  // By sets: a large design shows tens of thousands of edges (mitcad#1631).
+  // A profile is one entry under other keys too (containsEntry).
+  const QSet<SelectionItem> held(selection.cbegin(), selection.cend());
+  const auto holds = [&](const SelectionItem& item) {
+    return held.contains(item) || (item.kind == SelectKind::Profile && containsEntry(selection, item, resolve));
+  };
+  Selection next;
+  QSet<SelectionItem> taken;
+  for (const SelectionItem& item : shown(kinds)) {
+    if (input->max != 0 && next.size() >= input->max) {
+      break;
+    }
+    if (!kinds.testFlag(item.kind) || !acceptsNow(input, item)) {
+      continue;
+    }
+    // An item the preview changed is the item it comes from (mitcad#1458);
+    // one the preview made has none and is left out.
+    const std::optional<SelectionItem> named = referable(item);
+    if (!named) {
+      continue;
+    }
+    const SelectionItem entry = input->takenIn(*named, m_state, m_host);
+    if (holds(entry) || taken.contains(entry) ||
+        (entry.kind == SelectKind::Profile && containsEntry(next, entry, resolve))) {
+      continue;
+    }
+    taken.insert(entry);
+    next.append(entry);
+  }
+  qDebug().noquote() << QStringLiteral("Invert Selection in %1 %2: %3 to %4")
+                            .arg(m_def.name, input->label, summarize(selection), summarize(next));
+  ++m_generation;
+  if (m_def.settingsKey) {
+    m_changedBeforePick = changedSinceStart();
+  }
+  selection = next;
+  selectionChanged(key);
+  moveKeyboardToValues();
+  return true;
+}
+
 bool CommandSession::selectionsSatisfied() const {
   const QVector<Slot> shown = slotsOf(true);
   return !std::any_of(shown.begin(), shown.end(), [this](const Slot& s) {
@@ -5053,7 +5116,9 @@ bool CommandSession::commitAsync() {
     recoverFailedCommit(result);
   };
   if (m_def.inspect) {
-    if (!m_def.keepsSection || !m_def.build) {
+    // An analysis kept not drawn (mitcad#2664) as one kept shown.
+    const bool keeps = m_def.keepsSection || m_def.keepsAnalysis;
+    if (!keeps || !m_def.build) {
       if (!m_def.keepsSection) {
         m_host.showSection(m_sectionBefore);
       }
@@ -5068,12 +5133,15 @@ bool CommandSession::commitAsync() {
       return true;
     }
     const QString name = m_analysis.value(QStringLiteral("name")).toString();
-    const QJsonObject command = name.isEmpty()
+    QJsonObject command = name.isEmpty()
         ? QJsonObject{{QStringLiteral("cmd"), QStringLiteral("add_analysis")},
                       {QStringLiteral("def"), built.def}}
         : QJsonObject{{QStringLiteral("cmd"), QStringLiteral("edit_analysis")},
-                      {QStringLiteral("name"), name}, {QStringLiteral("def"), built.def},
-                      {QStringLiteral("visible"), true}};
+                      {QStringLiteral("name"), name}, {QStringLiteral("def"), built.def}};
+    // Edited, it is shown; an analysis not drawn is never shown.
+    if (!name.isEmpty() && m_def.keepsSection) {
+      command.insert(QStringLiteral("visible"), true);
+    }
     const int depth = undoDepth();
     commandSequenceAsync(QJsonArray{command}, [this, failed, name, depth](const CommandHost::AsyncResult& result) {
       if (result.succeeded() && m_cancelRequested) {
@@ -5309,7 +5377,8 @@ bool CommandSession::commit() {
     return applyCommand(); // mitcad#375
   }
   if (m_def.inspect) {
-    if (m_def.keepsSection && m_def.build) {
+    // An analysis kept not drawn too (mitcad#2664).
+    if ((m_def.keepsSection || m_def.keepsAnalysis) && m_def.build) {
       if (!keepAnalysis()) {
         return false;
       }
@@ -5970,13 +6039,17 @@ bool CommandSession::keepAnalysis() {
     return true;
   }
   const QString name = m_analysis.value(QStringLiteral("name")).toString();
-  const QJsonObject command =
+  QJsonObject command =
       name.isEmpty() ? QJsonObject{{QStringLiteral("cmd"), QStringLiteral("add_analysis")},
                                    {QStringLiteral("def"), built.def}}
                      : QJsonObject{{QStringLiteral("cmd"), QStringLiteral("edit_analysis")},
                                    {QStringLiteral("name"), name},
-                                   {QStringLiteral("def"), built.def},
-                                   {QStringLiteral("visible"), true}};
+                                   {QStringLiteral("def"), built.def}};
+  // Edited, it is shown; an analysis not drawn (Interference, mitcad#2664)
+  // is never shown.
+  if (!name.isEmpty() && m_def.keepsSection) {
+    command.insert(QStringLiteral("visible"), true);
+  }
   QJsonObject result;
   if (!m_host.runCommand(command, &result)) {
     qDebug().noquote() << QStringLiteral("%1: OK not done").arg(m_def.name);

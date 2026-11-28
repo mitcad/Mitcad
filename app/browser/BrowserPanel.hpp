@@ -453,6 +453,22 @@ public:
   // compact: rows 21 px high").
   void setRowSpacing(BrowserRowSpacing spacing);
   BrowserRowSpacing rowSpacing() const { return m_rowSpacing; }
+  // The active component's highlight (mitcad#2618, Preferences > Display >
+  // Highlight the active component in the Browser): while on, the header row
+  // of the active component (the root's, or each occurrence of the active
+  // component, as their radio buttons show) is tinted with its component's
+  // colour (its bar's) at one intensity (browserRows::activeComponentTint),
+  // in the Docked, the Floating Card and the Floating Rows layout. No other
+  // row is tinted. A selected header shows the selection instead, and its
+  // tint again once the selection moves to another row. The tint follows
+  // every activation and the rows of each rebuild. Off, the default, the
+  // rows look as before. Logged ("Browser active highlight on").
+  void setHighlightActive(bool on);
+  bool highlightActive() const { return m_highlightActive; }
+  // The tint behind the row at `path` now (for tests): its component's
+  // colour, translucent; invalid for a row without one (not an active
+  // header, selected, the highlight off, or no such row).
+  QColor activeTint(const QString& path) const;
   // Where a row's parts are in the tree's viewport (for tests): its name,
   // light bulb and radio button (empty without one), whether the name is
   // cut short; all empty for a row not laid out or no row at `path`
@@ -721,6 +737,7 @@ private:
   BrowserControlPlace m_activatePlace = BrowserControlPlace::Classic;
   BrowserControlPlace m_eyePlace = BrowserControlPlace::Classic;
   BrowserRowSpacing m_rowSpacing = BrowserRowSpacing::Standard; // setRowSpacing (mitcad#2513)
+  bool m_highlightActive = false;                               // setHighlightActive (mitcad#2618)
   // setScrollBarOnLeft (mitcad#425): the bar at the left, and its place.
   void placeLeftScrollBar();
   bool m_scrollBarLeft = false;

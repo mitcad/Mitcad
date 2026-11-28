@@ -30,7 +30,7 @@
 mod grain;
 mod wood_textures;
 
-pub use grain::{SQUARE as GRAIN_SQUARE, grain_axes, grain_point};
+pub use grain::{SQUARE as GRAIN_SQUARE, grain_axes, grain_key, grain_offset, grain_point};
 pub use wood_textures::{SOURCE as BUILT_IN_TEXTURE_SOURCE, textured_ids};
 
 use std::collections::HashMap;

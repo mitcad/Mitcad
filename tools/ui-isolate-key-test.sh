@@ -45,7 +45,7 @@ EOF
 
 # Keyboard Shortcuts by a key of our own, as that window saves it.
 mkdir -p "$XDG_CONFIG_HOME/Mitcad"
-printf '[shortcuts]\ntools.shortcuts=F9\n' > "$XDG_CONFIG_HOME/Mitcad/Mitcad.conf"
+printf '[shortcuts]\ntools.shortcuts=F12\n' > "$XDG_CONFIG_HOME/Mitcad/Mitcad.conf"
 
 BOTH="F2.b0, F3.b0 in O1"
 
@@ -106,7 +106,7 @@ ui_expect_log "Browser Root/Component1:1 at" "and Component1:1"
 
 echo "--- Isolate and Unisolate bound in Keyboard Shortcuts"
 ui_mark
-ui_step "Keyboard Shortcuts (F9)"          ui_key F9
+ui_step "Keyboard Shortcuts (F12)"          ui_key F12
 ui_expect_new "Keyboard Shortcuts opened" "the window opened"
 ui_focus_dialog '^Keyboard Shortcuts$'
 bind "Isolate" F7

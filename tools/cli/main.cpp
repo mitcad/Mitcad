@@ -128,7 +128,7 @@ const char* const kUsage = R"(usage:
                         [--threads N] [--learn <dir>] [--references <dir>]... [--no-references]
                         [--geometric-tolerance <mm>] [--retry-bodies keep|replace]
                         [--accept-deviations all|none|<index>,...]
-                        [--own-start-time-scale <factor>]
+                        [--own-start-time-scale <factor>] [--count-items]
       Imports an .f3d or .f3z design with its timeline: parameters,
       sketches and features replayed as MitCad features, checked against
       the file's ASM history; an item that cannot be replayed becomes a
@@ -175,6 +175,11 @@ const char* const kUsage = R"(usage:
       where the design places them; documents not found leave their
       components empty, the report naming them. It never asks for them.
       --no-references leaves them all empty.
+      --count-items imports nothing: it prints (JSON) how many timeline
+      items the import with these options replays, the design's and those
+      of each document it refers to that it imports, once each, with each
+      design's count ({"items", "designs": [{"file", "design", "items"}]}),
+      the total the application's progress dialog counts against.
   mitcad-cli import-f3d <file.f3d> --bodies-only [--history] [--owners] [--save <out.mitcad>] [--json]
       Imports the bodies of an .f3d or .f3z file without their
       history: one base feature per body, built from the file's B-rep data.

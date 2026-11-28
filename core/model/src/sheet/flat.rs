@@ -76,6 +76,18 @@ pub struct FlatBend {
     pub slits: Vec<FlatLine>,
 }
 
+/// A bead on the Flat Pattern (mitcad#2645): the blank stays flat, and the
+/// bead is drawn as a form, its outline on its face and its centre lines,
+/// in flat coordinates.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct FlatBead {
+    pub feature: crate::ids::FeatureUid,
+    /// `up` when the bead stands out of the viewed side.
+    pub direction: &'static str,
+    pub outline: Vec<SegmentGeometry>,
+    pub centerlines: Vec<SegmentGeometry>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct FlatDomain {
     pub domain: SheetDomainRef,
@@ -101,6 +113,8 @@ pub struct FlatPattern<S> {
     /// A Lofted Flange's lines where its flat regions meet regions formed
     /// smooth (mitcad#2512), drawn on their own layer.
     pub facet_lines: Vec<FlatLine>,
+    /// The sheet's beads (mitcad#2645), drawn on their own layer.
+    pub beads: Vec<FlatBead>,
     pub domains: Vec<FlatDomain>,
     /// The developed configuration the outline came from.
     pub developed: SheetState,
@@ -348,7 +362,7 @@ pub(crate) fn evaluate<K: Kernel>(
     // plane touching it (mitcad#2435).
     // A Lofted Flange's chart likewise (mitcad#2512).
     let curved_or_lofted = super::folded::curved::developed(&state, def.stationary, thickness)
-        .or_else(|| super::folded::lofted::developed(&state, def.stationary));
+        .or_else(|| super::folded::lofted::developed(&state, def.stationary, thickness));
     let fixed_embedding = match curved_or_lofted {
         Some(result) => {
             developed = result.map_err(invalid)?;
@@ -574,6 +588,46 @@ pub(crate) fn evaluate<K: Kernel>(
             slot += 1;
         }
     }
+    // Beads as forms on the flat blank (mitcad#2645).
+    let mut beads = Vec::new();
+    for overlay in &state.overlays {
+        let SheetOverlayKind::Bead(bead) = &overlay.kind else {
+            continue;
+        };
+        let domain = SheetDomainRef::Panel(bead.panel);
+        let map = view(
+            *front_maps
+                .get(&domain)
+                .ok_or_else(|| invalid("the face of a bead is not developed".into()))?,
+        );
+        let section = bead.section.section().map_err(invalid)?;
+        let outline = bead.outline(&section).map_err(invalid)?;
+        // The side it stands out of: its face's when it stands out.
+        let raised = match bead.section.direction {
+            super::bead::BeadDirection::Out => bead.side,
+            super::bead::BeadDirection::In => match bead.side {
+                SheetReferenceSide::Front => SheetReferenceSide::Back,
+                SheetReferenceSide::Back => SheetReferenceSide::Front,
+            },
+        };
+        beads.push(FlatBead {
+            feature: overlay.feature,
+            direction: if raised == def.reference_side {
+                "up"
+            } else {
+                "down"
+            },
+            outline: outline
+                .iter()
+                .map(|g| super::bead::mapped_geometry(g, map))
+                .collect(),
+            centerlines: bead
+                .centre_lines()
+                .iter()
+                .map(|g| super::bead::mapped_geometry(g, map))
+                .collect(),
+        });
+    }
     let geometry = kernel
         .sheet_shape(
             &SheetShapeSpec {
@@ -627,6 +681,7 @@ pub(crate) fn evaluate<K: Kernel>(
         volume,
         bends,
         facet_lines,
+        beads,
         domains: domains
             .into_iter()
             .map(|d| FlatDomain {
@@ -672,6 +727,7 @@ impl<S> FlatPattern<S> {
             "bounds": {"min": min, "max": max},
             "bends": self.bends,
             "facet_lines": self.facet_lines,
+            "beads": self.beads,
             "domains": self.domains,
             "diagnostics": [],
         });

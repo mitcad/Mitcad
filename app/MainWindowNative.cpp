@@ -943,11 +943,11 @@ void MainWindow::refreshNativeActions() {
   for (int tab = 0; tab < tabs->count(); ++tab) workspaces.append(tabs->tabText(tab).toUpper());
   // Keep the hidden sketch page available before its tab is added.
   // MAKE (mitcad#1049) as SOLID and BUILD: the native toolbar reads its groups here;
-  // SURFACE, SHEET METAL and MANAGE (mitcad#1975) likewise.
+  // SURFACE, SHEET PARTS and MANAGE (mitcad#1975) likewise.
   // DRAWING and CUT SHEET (mitcad#1008, mitcad#1073): the tab a drawing
   // shows alone while it is open (Ribbon::setDrawingMode).
   for (const QString& workspace :
-       {QStringLiteral("SOLID"), QStringLiteral("SURFACE"), QStringLiteral("SHEET METAL"), QStringLiteral("BUILD"),
+       {QStringLiteral("SOLID"), QStringLiteral("SURFACE"), QStringLiteral("SHEET PARTS"), QStringLiteral("BUILD"),
         QStringLiteral("MAKE_PRINT"), QStringLiteral("MAKE_LASER"), QStringLiteral("MAKE_CNC"), QStringLiteral("MANAGE"), QStringLiteral("SKETCH"),
         QStringLiteral("DRAWING"), QStringLiteral("CUT SHEET")}) {
     for (const QString& name : Ribbon::groups(workspace)) {

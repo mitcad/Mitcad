@@ -47,6 +47,8 @@ use super::compose::{
     ARROW_LENGTH, Bounds, EXTENSION_BEYOND, EXTENSION_GAP, TEXT_GAP, arrow, broken_line,
     reach_along, unidirectional_middle, upright,
 };
+// ASME's elbows and arrows outside (mitcad#2621).
+use super::compose::{ASME_SHOULDER, arrows_outside, dimension_arrows, elbow_line, elbowed};
 use super::sheet::{Anchor, Group, Item, Pen, text_width};
 use mitcad_model::Characteristic;
 use mitcad_model::datum::{CurveGeometry, SurfaceGeometry, Vec3};
@@ -714,6 +716,9 @@ pub struct ValueText {
 /// The size of a stacked tolerance's text against the value's.
 const STACK: f64 = 0.7;
 
+/// The distance of a text's lines, in letter heights (a leader's notes').
+const LINE_PITCH: f64 = 1.6;
+
 impl ValueText {
     fn parts(&self, h: f64) -> Vec<(f64, f64, String, f64)> {
         // (along, up, text, height) from the start of the baseline.
@@ -773,6 +778,71 @@ impl ValueText {
             [self.width(h) / 2.0, (high - low) / 2.0],
             (high + low) / 2.0,
         )
+    }
+
+    /// Its lines, split at the line breaks of its own texts (mitcad#2621):
+    /// the main text's lines, the last of them with the stacked tolerance
+    /// and the first line of the text after it, then that text's other
+    /// lines; each line's spaces trimmed and empty lines left out. Itself
+    /// alone when it has no line break.
+    pub fn lines(&self) -> Vec<ValueText> {
+        if !self.main.contains('\n') && !self.after.contains('\n') {
+            return vec![self.clone()];
+        }
+        let plain = |t: &str| ValueText {
+            text: t.to_owned(),
+            main: t.to_owned(),
+            ..ValueText::default()
+        };
+        let main: Vec<&str> = self.main.split('\n').map(str::trim).collect();
+        let after: Vec<&str> = self.after.split('\n').map(str::trim).collect();
+        let (last, first_lines) = main.split_last().unwrap_or((&"", &[]));
+        let (joined, after_lines) = after.split_first().unwrap_or((&"", &[]));
+        let mut out: Vec<ValueText> = first_lines
+            .iter()
+            .filter(|l| !l.is_empty())
+            .map(|l| plain(l))
+            .collect();
+        let middle = ValueText {
+            text: [*last, *joined]
+                .iter()
+                .filter(|t| !t.is_empty())
+                .copied()
+                .collect::<Vec<_>>()
+                .join(" "),
+            main: (*last).to_owned(),
+            upper: self.upper.clone(),
+            lower: self.lower.clone(),
+            brackets: self.brackets,
+            after: (*joined).to_owned(),
+        };
+        if !middle.main.is_empty() || middle.upper.is_some() || !middle.after.is_empty() {
+            out.push(middle);
+        }
+        out.extend(
+            after_lines
+                .iter()
+                .filter(|l| !l.is_empty())
+                .map(|l| plain(l)),
+        );
+        out
+    }
+
+    /// Writes its lines ([`ValueText::lines`]) horizontal beside `at`, the
+    /// end of a leader's shoulder, as ASME has a callout (mitcad#2621): the
+    /// first line's letters' middle level with `at`, the others below it,
+    /// starting the text gap right of `at` (`side` +1) or ending the text
+    /// gap left of it (-1).
+    fn write_beside(&self, group: &mut Group, at: P2, side: f64, h: f64) {
+        let (x, anchor) = if side > 0.0 {
+            (at[0] + TEXT_GAP, Anchor::Start)
+        } else {
+            (at[0] - TEXT_GAP, Anchor::End)
+        };
+        for (i, line) in self.lines().iter().enumerate() {
+            let y = at[1] - h / 2.0 - i as f64 * h * LINE_PITCH;
+            line.write(group, [x, y], 0.0, anchor, h);
+        }
     }
 
     /// Writes it horizontal with its box's middle at `c` (ASME,
@@ -1309,23 +1379,19 @@ fn dimension_line(
         perp(n).map(|v| -v)
     };
     if frame.standard.unidirectional() {
-        unidirectional_text(g, fa, fb, towards, annotation, words, h);
-    } else {
-        g.line(Pen::Thin, fa, fb);
-    }
-    if length >= 2.0 * ARROW_LENGTH + 1.0 {
-        arrow(g, fa, mul2(towards, -1.0));
-        arrow(g, fb, towards);
-    } else {
-        // Too short: the arrows outside, pointing in.
-        g.line(Pen::Thin, fa, sub2(fa, mul2(towards, ARROW_LENGTH + 2.0)));
-        g.line(Pen::Thin, fb, add2(fb, mul2(towards, ARROW_LENGTH + 2.0)));
-        arrow(g, fa, towards);
-        arrow(g, fb, mul2(towards, -1.0));
-    }
-    if frame.standard.unidirectional() {
+        // Away from the picks: the way the extension lines run, across the
+        // sheet (an elbow's default side, mitcad#2621).
+        let away = [sub2(fa, a)[0], sub2(fb, b)[0]]
+            .into_iter()
+            .find(|x| x.abs() > 1e-9)
+            .map_or(1.0, f64::signum);
+        let outside = unidirectional_text(g, fa, fb, towards, away, annotation, words, h);
+        dimension_arrows(g, fa, fb, towards, outside);
         return;
     }
+    g.line(Pen::Thin, fa, fb);
+    // Too short: the arrows outside, pointing in.
+    dimension_arrows(g, fa, fb, towards, arrows_outside(fa, fb, None));
     // The text moves along the way it reads (as a drag and a place keep
     // it), whichever way the picks run.
     let [u, v] = annotation.text_offset.unwrap_or([0.0, 0.0]);
@@ -1344,24 +1410,55 @@ fn dimension_line(
 
 /// ASME's dimension line from `fa` to `fb` (mitcad#2047): its value
 /// horizontal, its box's middle on the line (in the middle, or beyond `fb`
-/// past the arrow when it does not fit between the arrows), the line
+/// past the arrow when it does not fit between the feet), the line
 /// broken around it. The text offset moves it as under ISO: along the
 /// line the way [`upright_along`] gives, and across it, the break
 /// following it while it sits on the line; moved past an end the line
-/// runs on to it.
+/// runs on to it. Returns whether the arrows go outside: when the line is
+/// too short for them, or its value in line leaves them no room
+/// ([`arrows_outside`], mitcad#2621).
+///
+/// An upright line too short for its value between its feet
+/// ([`elbowed`], mitcad#2621) has its arrows outside and the value on an
+/// elbow ([`elbow_line`]): the line run on beyond its upper end (the
+/// lower one when the text offset's along part takes it below the lower
+/// end's bend) to a bend, a horizontal shoulder from there to the side
+/// `away` (+1 right, -1 left; the text offset's across part's side when
+/// it has one, as far from the line as that part says, at least the
+/// shoulder and the text gap) and the value beside its end, its middle
+/// level with the shoulder.
+#[allow(clippy::too_many_arguments)]
 fn unidirectional_text(
     g: &mut Group,
     fa: P2,
     fb: P2,
     towards: P2,
+    away: f64,
     annotation: &ViewAnnotation,
     words: &ValueText,
     h: f64,
-) {
+) -> bool {
     let (half, _) = words.half_box(h);
     let length = len2(sub2(fb, fa));
     let along = upright_along(towards);
     let across = perp(along);
+    if elbowed(fa, fb, towards, half) {
+        let (u, v) = match annotation.text_offset {
+            Some([u, v]) => (Some(u), v),
+            None => (None, 0.0),
+        };
+        // The text offset's across part to the right or left of the line.
+        let sideways = v * across[0];
+        let side = if sideways.abs() > 1e-9 {
+            sideways.signum()
+        } else {
+            away
+        };
+        let beside = sideways.abs() - half[0] - TEXT_GAP;
+        let c = elbow_line(g, fa, fb, along, u, side, beside, half);
+        words.write_level(g, c, h);
+        return true;
+    }
     let c = match annotation.text_offset {
         Some([u, v]) => add2(add2(mid(fa, fb), mul2(along, u)), mul2(across, v)),
         None => unidirectional_middle(fa, fb, towards, half),
@@ -1376,6 +1473,7 @@ fn unidirectional_text(
         broken_line(g, end, on, c, half);
     }
     words.write_level(g, c, h);
+    arrows_outside(fa, fb, Some((c, half)))
 }
 
 /// An ordinate dimension: a thin line from the point across to the level
@@ -1636,17 +1734,9 @@ fn round(
         } => {
             let c = frame.at(center);
             let r = radius * scale;
-            let shift = annotation.text_offset.unwrap_or_else(|| {
-                let out = r + 10.0;
-                match arc {
-                    // Out from the middle of an arc.
-                    Some((start, end)) => {
-                        let half = (start + end) / 2.0;
-                        [out * half.cos(), out * half.sin()]
-                    }
-                    None => [out * FRAC_1_SQRT_2, out * FRAC_1_SQRT_2],
-                }
-            });
+            let shift = annotation
+                .text_offset
+                .unwrap_or_else(|| end_on_shift(r, arc));
             let text_at = add2(c, shift);
             let toward = vec2::unit(shift).unwrap_or([1.0, 0.0]);
             let outside = len2(shift) > r;
@@ -1656,6 +1746,15 @@ fn round(
                 diameter_end_on(g, c, r, toward, arc, outside.then_some(text_at));
             } else {
                 radius_end_on(g, c, r, toward, arc, outside.then_some(text_at));
+            }
+            if outside && frame.standard.unidirectional() {
+                // ASME (mitcad#2621): a short shoulder from the leader's
+                // bend, the text beside its end, the first line's middle
+                // level with it; the side the bend lies of the centre.
+                let end = add2(text_at, [side * ASME_SHOULDER, 0.0]);
+                g.line(Pen::Thin, text_at, end);
+                words.write_beside(g, end, side, frame.text);
+                return Ok(());
             }
             if outside {
                 g.line(Pen::Thin, text_at, add2(text_at, [side * width, 0.0]));
@@ -1721,6 +1820,22 @@ fn round(
     let (sa, sb) = (start(a), start(b));
     dimension_line(g, sa, sb, foot(a), foot(b), n, annotation, words, frame);
     Ok(())
+}
+
+/// Where a radius's or a diameter's text of a circle seen end on goes
+/// from the centre when it has no text offset (paper mm; `r` the radius on
+/// the sheet): 10 mm beyond the rim, up and right, or out from the middle
+/// of an arc. A drag starts from it (mitcad#2621).
+fn end_on_shift(r: f64, arc: Option<(f64, f64)>) -> P2 {
+    let out = r + 10.0;
+    match arc {
+        // Out from the middle of an arc.
+        Some((start, end)) => {
+            let half = (start + end) / 2.0;
+            [out * half.cos(), out * half.sin()]
+        }
+        None => [out * FRAC_1_SQRT_2, out * FRAC_1_SQRT_2],
+    }
 }
 
 /// The end of an arc (counter-clockwise from `start` to `end`, radians)
@@ -2930,12 +3045,15 @@ pub fn moved(annotation: &mut ViewAnnotation, seen: &[Seen], frame: &Frame<'_>, 
             Some(Seen::Circle {
                 radius,
                 end_on: true,
+                arc,
                 ..
             }) => {
-                let out = radius * frame.map.scale + 10.0;
+                // From where it is drawn: an arc's text out from its middle
+                // (mitcad#2621). Dragged across the centre, the shoulder
+                // and the text turn to the other side.
                 annotation.text_offset = shift(
                     annotation.text_offset,
-                    [out * FRAC_1_SQRT_2, out * FRAC_1_SQRT_2],
+                    end_on_shift(radius * frame.map.scale, *arc),
                 );
             }
             Some(seen) => {
@@ -5098,6 +5216,10 @@ mod asme_tests;
 #[cfg(test)]
 #[path = "annotate_callout_tests.rs"]
 mod callout_tests;
+
+#[cfg(test)]
+#[path = "annotate_asme_leader_tests.rs"]
+mod asme_leader_tests;
 
 #[cfg(test)]
 mod hole_callout_tests {

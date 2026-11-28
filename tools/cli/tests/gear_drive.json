@@ -1,0 +1,43 @@
+[
+  {"comment": "Gear Drive (mitcad#2608): a planetary set, module 1, of 18 sun teeth, three planets of 30 and the ring's 78, the ring fixed, 0.1 mm backlash, 6 mm planet bores on the carrier's pins, with a contact set of its members. Planetary Drive (C1, O1): Sun, Planet 1 to 3, Carrier (with Pin 1 to 3), Ring."},
+  {"cmd": "add_gear_drive", "drive": {"type": "planetary", "module": 1, "face_width": 8, "sun_teeth": 18,
+    "planet_teeth": 30, "planets": 3, "backlash": 0.1, "planet_bore": 6, "contact_set": true}},
+  {"expect": {"feature": "Sun", "status": "ok"}},
+  {"expect": {"feature": "Planet 3", "status": "ok"}},
+  {"expect": {"feature": "Carrier", "status": "ok"}},
+  {"expect": {"feature": "Ring", "status": "ok"}},
+  {"expect": {"query": {"query": "contact_sets"}, "result": [{"name": "Contact1"}]}},
+  {"expect": {"query": {"query": "joints"}, "result": {"links": [
+    {"name": "Sun Link", "solved": true}, {"name": "Planet 1 Mesh", "solved": true},
+    {"name": "Planet 2 Mesh", "solved": true}, {"name": "Planet 3 Mesh", "solved": true}]}}},
+
+  {"comment": "The carrier driven 10 degrees, sampled every 5 degrees with the contact set: the sun turns 16/3 as far (53.3 degrees, more than two of its teeth) and each planet -78/30 as far on the carrier, the teeth passing through each other nowhere, so the motion is not stopped and every mesh stays engaged."},
+  {"cmd": "drive_joint", "joint": "Carrier Joint", "values": {"rz": "10 deg"}},
+  {"expect": {"query": {"query": "joints"}, "tolerance": 1e-5, "result": {"joints": [
+    {"name": "Sun Joint", "values": {"rz": 0.9308422677303091}},
+    {"name": "Carrier Joint", "values": {"rz": 0.17453292519943295}},
+    {"name": "Ring Joint"},
+    {"name": "Planet 1 Joint", "values": {"rz": -0.45378560551852565}},
+    {"name": "Planet 2 Joint", "values": {"rz": -0.45378560551852565}},
+    {"name": "Planet 3 Joint", "values": {"rz": -0.45378560551852565}}]}}},
+
+  {"comment": "The same set with the sun fixed, Planetary Drive (2) 200 mm along x without a contact set and pins: Sun F20, Planet 1 to 3 F21 to F23, Carrier F24, Ring F25, its joints F26 (Sun Joint, rigid) to F31, its links F32 to F35. Its carrier driven 10 degrees turns the ring 1 + 18/78 as far and each planet 18/30 as far on the carrier; the first set stays where it was driven."},
+  {"cmd": "add_gear_drive", "drive": {"type": "planetary", "module": 1, "face_width": 8, "sun_teeth": 18,
+    "planet_teeth": 30, "planets": 3, "backlash": 0.1, "fixed": "sun"}, "transform": {"translation": [200, 0, 0]}},
+  {"expect": {"query": {"query": "gear_drive", "component": "Planetary Drive (2)"}, "result": {
+    "feature": "F20", "drive": {"fixed": "sun"}, "values": {"ratio": 1.2307692307692308, "input": "ring"}}}},
+  {"cmd": "drive_joint", "joint": "F27", "values": {"rz": "10 deg"}},
+  {"expect": {"query": {"query": "joints"}, "tolerance": 1e-5, "result": {"joints": [
+    {"name": "Sun Joint", "values": {"rz": 0.9308422677303091}},
+    {"name": "Carrier Joint", "values": {"rz": 0.17453292519943295}},
+    {"name": "Ring Joint"},
+    {"name": "Planet 1 Joint", "values": {"rz": -0.45378560551852565}},
+    {"name": "Planet 2 Joint", "values": {"rz": -0.45378560551852565}},
+    {"name": "Planet 3 Joint", "values": {"rz": -0.45378560551852565}},
+    {"name": "Sun Joint", "uid": "F26"},
+    {"name": "Carrier Joint", "uid": "F27", "values": {"rz": 0.17453292519943295}},
+    {"name": "Ring Joint", "uid": "F28", "values": {"rz": 0.21480975409160977}},
+    {"name": "Planet 1 Joint", "values": {"rz": 0.10471975511965977}},
+    {"name": "Planet 2 Joint", "values": {"rz": 0.10471975511965977}},
+    {"name": "Planet 3 Joint", "values": {"rz": 0.10471975511965977}}]}}}
+]

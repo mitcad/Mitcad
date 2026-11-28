@@ -63,4 +63,28 @@ QIcon levelIcon(const QIcon& icon, NoticeLevel level);
 // visual rect in the viewport), `indentation` wide.
 void paintComponentBar(QPainter* painter, const QRect& cell, int indentation, const QColor& color);
 
+// The active component's header tint (mitcad#2618, Preferences > Display >
+// Highlight the active component in the Browser): the component's colour
+// (its bar's) at one intensity, translucent over the row's surface, so that
+// it follows the theme: a pale tint on a light surface, a deep one on a dark
+// surface. 25%: the most that keeps the rows' name colours (Text and the
+// hidden rows' TextHidden) at least 4.5:1 on it in either theme with every
+// component colour, also under the Rows background's hover tint (the unit
+// test browser_active_highlight checks it).
+inline constexpr double kActiveComponentTintAlpha = 0.25;
+inline QColor activeComponentTint(QColor component) {
+  if (component.isValid()) {
+    component.setAlphaF(static_cast<float>(kActiveComponentTintAlpha));
+  }
+  return component;
+}
+// The tint as it shows over an opaque `surface`: what the row's text is
+// read on.
+inline QColor activeComponentTintOn(const QColor& component, const QColor& surface) {
+  const double a = kActiveComponentTintAlpha;
+  const auto mix = [a](int top, int under) { return qRound(a * top + (1.0 - a) * under); };
+  return QColor(mix(component.red(), surface.red()), mix(component.green(), surface.green()),
+                mix(component.blue(), surface.blue()));
+}
+
 } // namespace mitcad::browserRows

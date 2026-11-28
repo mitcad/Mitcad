@@ -50,7 +50,7 @@ param(
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
 Ui-Init $App $Out $QtBin @{ 'solid.rectangular_pattern' = 'F7'; 'solid.circular_pattern' = 'F8';
-  'solid.path_pattern' = 'F9'; 'solid.mirror' = 'F11' } -StepPause 0
+  'solid.path_pattern' = 'F12'; 'solid.mirror' = 'F11' } -StepPause 0
 $cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
   ForEach-Object { Join-Path (Split-Path $script:UiApp) $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $cli) { Ui-Fail "no mitcad-cli.exe beside $($script:UiApp)" }
@@ -426,7 +426,7 @@ function Select-Wall {
   Ui-Step 'select the hole''s wall'      { Ui-Click $wall[0] $wall[1] }
   Ui-ExpectNew "Selected: 1 face [face $bore of F2.b0" 'the hole''s wall selected'
 }
-$patterns = @(@('Rectangular Pattern', 'F7'), @('Circular Pattern', 'F8'), @('Pattern on Path', 'F9'), @('Mirror', 'F11'))
+$patterns = @(@('Rectangular Pattern', 'F7'), @('Circular Pattern', 'F8'), @('Pattern on Path', 'F12'), @('Mirror', 'F11'))
 Ui-StartApp 'pattern-preselect' @('--open', $holeDesign)
 Ui-ExpectLog 'pattern-preselect.mitcad' 'the block with a hole opened'
 Ui-Step 'fit (F6)'                       { Ui-Key 'F6' }

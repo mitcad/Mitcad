@@ -36,7 +36,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{ 'sketch.create' = 'F7'; 'assembly.policy' = 'F8'; 'solid.new_component' = 'F9' } -StepPause 0
+Ui-Init $App $Out $QtBin @{ 'sketch.create' = 'F7'; 'assembly.policy' = 'F8'; 'solid.new_component' = 'F12' } -StepPause 0
 
 # Ui-ExpectNone "text" "description": no line since the mark has the text.
 function Ui-ExpectNone([string]$Text, [string]$Description) {
@@ -126,7 +126,7 @@ Ui-Step 'cancel (Esc)'                   { Ui-Key 'Escape' }
 
 Write-Host '--- Sketch planes of other components'
 Ui-Mark
-Ui-Step 'new component (F9)'             { Ui-Key 'F9' }
+Ui-Step 'new component (F12)'             { Ui-Key 'F12' }
 Ui-ExpectNew 'Panel New Component input name at' 'the New Component panel'
 Ui-Step 'name it Part2'                  { Ui-TypeIn 'Panel New Component input name' 'Part2' }
 Ui-Step 'OK (Enter)'                     { Ui-Key 'Return' }
@@ -261,7 +261,7 @@ Ui-Mark
 Ui-Step 'activate Bracket'                { Ui-ClickLogged 'Browser radio Root/Bracket:1' }
 Ui-ExpectNew 'Activated Bracket' 'Bracket is active'
 Ui-Mark
-Ui-Step 'new component (F9)'              { Ui-Key 'F9' }
+Ui-Step 'new component (F12)'              { Ui-Key 'F12' }
 Ui-ExpectNew 'Panel New Component input name at' 'the New Component panel'
 Ui-Step 'name it Inner'                   { Ui-TypeIn 'Panel New Component input name' 'Inner' }
 Ui-Step 'OK (Enter)'                      { Ui-Key 'Return' }

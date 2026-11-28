@@ -4,7 +4,7 @@
 # Input-driven Windows UI test of keys per context (mitcad#720) in the build
 # VM (tools/ui-windows-lib.ps1 says how the input is posted), as the keys
 # per context steps of tools/ui-command-test.sh on Linux:
-#   1. Keyboard Shortcuts (F9 in the test's settings), by its keys: Command
+#   1. Keyboard Shortcuts (F12 in the test's settings), by its keys: Command
 #      Search's row expanded, its Sketch row given F3, Fit Point Spline (a
 #      sketch command) given S; OK saves them, the app logs Command Search's
 #      keys per context (S in 3D View and Command Panel, F3 in Sketch) and no
@@ -30,7 +30,7 @@ param(
 
 # Keyboard Shortcuts by a key: the command search's popup closes at once in
 # session 0.
-Ui-Init $App $Out $QtBin @{ 'tools.shortcuts' = 'F9' } -StepPause 0
+Ui-Init $App $Out $QtBin @{ 'tools.shortcuts' = 'F12' } -StepPause 0
 
 # Searches-Since-Mark: the command searches opened since Ui-Mark.
 function Searches-Since-Mark {
@@ -43,7 +43,7 @@ Write-Host 'ok   no default shortcut in conflict'
 
 Write-Host '--- 1. Keyboard Shortcuts: Command Search F3 in Sketch, Fit Point Spline S'
 Ui-Mark
-Ui-Step 'Keyboard Shortcuts (F9)'         { Ui-Key 'F9' }
+Ui-Step 'Keyboard Shortcuts (F12)'         { Ui-Key 'F12' }
 Ui-ExpectNew 'Keyboard Shortcuts opened' 'the window opened'
 Ui-FocusDialog '^Keyboard Shortcuts$'
 Ui-Step 'find Command Search'             { Ui-Type 'Command Search' }
@@ -75,7 +75,7 @@ Ui-FocusMain
 
 Write-Host '--- 2. Keyboard Shortcuts: OK refuses F3 for the spline too'
 Ui-Mark
-Ui-Step 'Keyboard Shortcuts (F9)'         { Ui-Key 'F9' }
+Ui-Step 'Keyboard Shortcuts (F12)'         { Ui-Key 'F12' }
 Ui-ExpectNew 'Keyboard Shortcuts opened' 'the window opened'
 Ui-FocusDialog '^Keyboard Shortcuts$'
 $windows = Ui-Windows '^Keyboard Shortcuts$'

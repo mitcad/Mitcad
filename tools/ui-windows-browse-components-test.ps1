@@ -19,7 +19,7 @@
 #      button Insert, and Insert places it.
 #   4. Installed -> Community -> Favorites (no favorites yet) -> Installed,
 #      the block starred, then Favorites lists it, the selection kept.
-#      Insert from Library (F9) and Community Library (F7) open the same
+#      Insert from Library (F12) and Community Library (F7) open the same
 #      window on Installed and on Community.
 #   5. The Floating layout (--chrome=floating): Tools > Libraries lists
 #      Browse Components... once and opens the browser.
@@ -32,7 +32,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{ 'insert.library_component' = 'F9'; 'tools.community_library' = 'F7' } -StepPause 0
+Ui-Init $App $Out $QtBin @{ 'insert.library_component' = 'F12'; 'tools.community_library' = 'F7' } -StepPause 0
 
 $git = Get-Command git -ErrorAction SilentlyContinue
 if (-not $git) {
@@ -239,7 +239,7 @@ Ui-ExpectNew 'Library browser kept the selection component|' 'the block kept sel
 Ui-Step 'close (Escape)'                 { Ui-Key 'Escape' }
 Ui-FocusMain
 Ui-Mark
-Ui-Step 'Insert from Library (F9)'       { Ui-Key 'F9' }
+Ui-Step 'Insert from Library (F12)'       { Ui-Key 'F12' }
 Ui-FocusDialog '^Browse Components$'
 Ui-ExpectNew 'Library browser view: Installed' 'Insert from Library opens it on Installed'
 Ui-Step 'close (Escape)'                 { Ui-Key 'Escape' }

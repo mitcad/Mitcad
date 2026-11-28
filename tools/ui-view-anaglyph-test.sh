@@ -11,7 +11,8 @@
 # still selects a face; Preferences › Display's stereo depth and
 # convergence reach the view at once, are saved with OK and put back on
 # Cancel; off, the camera is in its projection from before; Orthographic
-# ends it. Preferences › Display's focal lengths (mitcad#1717): 35 mm for
+# ends it; the orientation cube following the view is drawn as the
+# projection Anaglyph 3D goes back to (mitcad#2641). Preferences › Display's focal lengths (mitcad#1717): 35 mm for
 # the perspective camera and 50 mm for Anaglyph 3D give 37.8 and 27.0
 # degrees, Anaglyph 3D on and off switches between them, and the model's
 # height at the target stays.
@@ -26,7 +27,7 @@ cli=${UI_CLI:-$(cd "$(dirname "$UI_APP")/.." && pwd)/tools/cli/mitcad-cli}
 mkdir -p "$root/build"
 work=$(mktemp -d "$root/build/ui-view-anaglyph.XXXXXX")
 trap 'ui_cleanup; rm -rf -- "${work:?}"' EXIT
-export MITCAD_TEST_WORK=$work MITCAD_TEST_STEP_MS=100
+export MITCAD_TEST_WORK=$work MITCAD_TEST_STEP_MS=100 MITCAD_LOG_ORIENTATION_CUBE=1
 export MITCAD_TEST_INPUT=$here/ui-scripts/view-anaglyph.mitcad-ui
 "$cli" run "$here/ui-scripts/view-anaglyph.json" --save "$work/block.mitcad" || exit 1
 ui_start_display

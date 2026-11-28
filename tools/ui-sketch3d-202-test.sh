@@ -22,7 +22,7 @@
 #     view that sees the face from above at an angle.
 #   - Line (L) from a corner A of the rectangle by typed offsets 10, 0, 15:
 #     the line AB leaves the face's plane.
-#   - Tangent Arc (F9, the test's key) continuing AB at B, its end clicked
+#   - Tangent Arc (F12, the test's key) continuing AB at B, its end clicked
 #     on a top corner V of Post's box: the Linked Point snap names the
 #     vertex in Post, the end is attached to it through the occurrence O1.
 #   - Finish; Pipe with Chain Selection off (A is also a corner of the
@@ -77,7 +77,7 @@ esc_tool() {
 ui_start_display
 # Keys of the test's own: Tangent Arc and the Home view have none.
 mkdir -p "$UI_CONFIG/Mitcad"
-printf '[shortcuts]\nsketch.arc_tangent=F9\nview.home=F11\n' >> "$UI_CONFIG/Mitcad/Mitcad.conf"
+printf '[shortcuts]\nsketch.arc_tangent=F12\nview.home=F11\n' >> "$UI_CONFIG/Mitcad/Mitcad.conf"
 ui_start_app --open "$FILE"
 ui_step "fit (F6)"                       ui_key F6
 ui_expect_log "Bodies shown: " "the bodies are shown"
@@ -166,7 +166,7 @@ esc_tool Line
 
 echo "--- A tangent arc from B onto a top corner of Post's box"
 ui_mark
-ui_step "Tangent Arc (F9)"               ui_key F9
+ui_step "Tangent Arc (F12)"               ui_key F12
 ui_expect_new "3D sketch tool Tangent Arc: started" "Tangent Arc draws in the 3D sketch"
 ui_expect_new "Pick vertex F2.b0/V{" "Post's vertices logged where a click meets them"
 ui_sync

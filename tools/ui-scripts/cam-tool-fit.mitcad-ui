@@ -1,0 +1,113 @@
+# SPDX-License-Identifier: MIT
+# The milling panels' Tool (mitcad#2590, GitHub mitcad/Mitcad#748;
+# app/COMMANDS.md "The CNC group"), the input script of
+# tools/ui-cam-tool-fit-test.sh (Linux) and
+# tools/ui-macos-cam-tool-fit-test.sh, on tools/ui-scripts/cam-tool-fit.json
+# (a router whose tool 1 is a ball end mill, tool 2 a flat end mill and
+# tool 3 an engraving cutter, Setup 1 on it with Pocket 1 saved with the
+# ball end mill; Setup 2 on a router with only a ball end mill and a
+# drill):
+#
+#   1. Pocket 1 edited: its ball end mill shown and flagged at Tool, OK
+#      off; the flat end mill chosen instead, OK edits it;
+#   2. Pocket, Contour and Facing on Setup 1 start with tool 2, the flat
+#      end mill after the ball one, and are added; Adaptive Clearing starts
+#      with it too;
+#   3. Generate: every operation up to date;
+#   4. Contour on the line takes the engraving cutter; back outside, the
+#      flat end mill comes back;
+#   5. Facing on Setup 2: no tool it can use, the instruction at Tool and
+#      OK off; Setup 1 chosen, the flat end mill.
+wait-idle
+command view.fit
+wait-idle
+
+mark
+workspace MAKE
+click-logged '^Ribbon tab MAKE_CNC at '
+wait-log '^Ribbon tab shown: MAKE_CNC$'
+
+# 1. The saved pocket's ball end mill: kept in sight, flagged, replaced.
+mark
+dblclick-logged '^Browser Root/CAM/Setup 1/Pocket 1 at '
+wait-log '^Editing CAM operation Pocket 1 with Pocket$'
+expect-choice-text tool '^1: 6 mm ball end mill$'
+wait-log '^Preview Pocket: not built: This operation cuts with a flat or bull nose end mill: choose one as the Tool[.]$' 10
+qt-choice input_tool '2: 6 mm flat end mill'
+expect-choice-text tool '^2: 6 mm flat end mill$'
+key Return
+wait-log '^CAM operation edited: Pocket 1 in Setup 1$' 30
+
+# 2. New operations on Setup 1 start with the flat end mill.
+mark
+command make.cam_pocket
+wait-log '^Command Pocket started'
+qt-choice input_setup 'Setup 1'
+expect-choice-text tool '^2: 6 mm flat end mill$'
+click-pick 'profile F3/'
+wait-log '^Pocket Areas: 1 profile'
+type-in '^Panel Pocket input bottom at ' '-2 mm'
+key Return
+wait-log '^CAM operation added: Pocket 2 to Setup 1$' 30
+
+mark
+command make.cam_contour
+wait-log '^Command Contour started'
+qt-choice input_setup 'Setup 1'
+expect-choice-text tool '^2: 6 mm flat end mill$'
+click-pick 'profile F3/'
+wait-log '^Contour Outlines: 1 profile'
+key Return
+wait-log '^CAM operation added: Contour 1 to Setup 1$' 30
+
+mark
+command make.cam_facing
+wait-log '^Command Facing started'
+qt-choice input_setup 'Setup 1'
+expect-choice-text tool '^2: 6 mm flat end mill$'
+key Return
+wait-log '^CAM operation added: Facing 1 to Setup 1$' 30
+
+mark
+command make.cam_adaptive
+wait-log '^Command Adaptive Clearing started'
+qt-choice input_setup 'Setup 1'
+expect-choice-text tool '^2: 6 mm flat end mill$'
+key Escape
+wait-idle
+
+# 3. Generate: up to date, the edited pocket too.
+mark
+command make.cam_generate
+wait-log '^CAM generate Setup 1: Pocket 1 up_to_date, [1-9][0-9]* moves, .*; Pocket 2 up_to_date, [1-9][0-9]* moves, .*; Contour 1 up_to_date, [1-9][0-9]* moves, .*; Facing 1 up_to_date, [1-9][0-9]* moves, ' 120
+expect-never 'CAM generate Setup 1: .*failed'
+
+# 4. On the line a contour takes the engraving cutter; outside it does
+# not, and the flat end mill comes back.
+mark
+command make.cam_contour
+wait-log '^Command Contour started'
+qt-choice input_setup 'Setup 1'
+qt-choice input_side 'On the Line'
+qt-choice input_tool '3: Engraver'
+expect-choice-text tool '^3: Engraver$'
+qt-choice input_side 'Outside'
+expect-choice-text tool '^2: 6 mm flat end mill$'
+key Escape
+wait-idle
+
+# 5. Setup 2's machine has no flat or bull nose end mill: no tool, the
+# instruction at Tool, OK refused; Setup 1 brings the flat end mill.
+mark
+command make.cam_facing
+wait-log '^Command Facing started'
+qt-choice input_setup 'Setup 2'
+wait-log '^Preview Facing: not built: The setup.s machine has no flat or bull nose end mill for this operation: add one with Machines and Tools' 10
+key Return
+wait-idle
+expect-no-log '^CAM operation added: Facing 2'
+qt-choice input_setup 'Setup 1'
+expect-choice-text tool '^2: 6 mm flat end mill$'
+key Escape
+wait-idle
+expect-never 'TestDriver: FAIL|CAM operation refused|CAM setup refused'

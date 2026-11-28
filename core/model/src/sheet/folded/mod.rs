@@ -43,6 +43,9 @@ pub(crate) mod triangulated;
 // (mitcad#2512).
 pub(crate) mod lofted;
 pub(crate) use lofted::lofted_flange;
+// Bead: ribs pressed into a panel along sketch lines (mitcad#2645).
+pub(crate) mod bead;
+pub(crate) use bead::bead;
 
 use super::*;
 use crate::features::sheet::SheetRulesDef;
@@ -56,6 +59,26 @@ pub(super) fn read<K: Kernel>(
     ctx: &mut EvalContext<'_, K>,
     body: BodyUid,
 ) -> Result<(SheetState, SheetRulesDef<f64>), String> {
+    let (state, rules) = read_any(ctx, body)?;
+    // A Lofted Flange's transition (mitcad#2512) is made by its feature;
+    // Sheet Cut, Flange and Hem take it on their own (mitcad#2575).
+    if lofted::lofted_panel(&state).is_some() {
+        return Err(
+            "a lofted flange's sheet takes Sheet Cut, and Flange and Hem on a straight edge of a \
+             flat facet; other sheet metal features (bends, folds, unfolds, corners) not yet: \
+             edit the lofted flange itself, or cut it with Hole or a cutting Extrude"
+                .into(),
+        );
+    }
+    Ok((state, rules))
+}
+
+/// [`read`] of any valid sheet, a Lofted Flange's among them
+/// (mitcad#2575).
+pub(super) fn read_any<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    body: BodyUid,
+) -> Result<(SheetState, SheetRulesDef<f64>), String> {
     ctx.body(body)?;
     let state = ctx.require_sheet(body)?;
     // A sheet laid flat by triangulation is not changed (mitcad#2442).
@@ -63,16 +86,6 @@ pub(super) fn read<K: Kernel>(
     let rules = ctx.sheet_rules(state.rules)?;
     if state.algorithm != ALGORITHM_VERSION || state.charts.is_empty() {
         return Err("sheet material charts require recomputation".into());
-    }
-    // A Lofted Flange's transition (mitcad#2512) is made by its feature
-    // alone.
-    if lofted::lofted_panel(&state).is_some() {
-        return Err(
-            "a lofted flange's sheet takes no other sheet metal features yet (flanges, bends, \
-             sheet cuts, unfolds): edit the lofted flange itself, or cut holes in it with Hole \
-             or a cutting Extrude"
-                .into(),
-        );
     }
     if state.rules_version != format!("{:032x}", rules.version) {
         return Err("sheet material rules do not match current rules".into());

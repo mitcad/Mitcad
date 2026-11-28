@@ -704,6 +704,21 @@ bool chooseTestPopup(const QString& title, const std::function<void()>& open,
   return true;
 }
 
+bool screenCaptureAllowed() {
+  if (CGPreflightScreenCaptureAccess()) {
+    return true;
+  }
+  // Asked once per run: the system shows its prompt the first time only,
+  // and a refusal is not asked again in a loop. Never in a UI test's run
+  // (MITCAD_TEST_INPUT), which nobody is there to answer.
+  static bool asked = !qEnvironmentVariableIsEmpty("MITCAD_TEST_INPUT");
+  if (!asked) {
+    asked = true;
+    return CGRequestScreenCaptureAccess();
+  }
+  return false;
+}
+
 #ifdef MITCAD_MAC_UI
 void showAboutPanel(const QString& credits) {
   NSMutableDictionary* options = [NSMutableDictionary dictionary];

@@ -868,7 +868,9 @@ Afterwards, the document is that file. An existing file must have
   The error names the fields. Save the design in the application, which
   asks first, or give another `path`. The same holds for a design whose
   CAM this MitCad could not read (mitcad#2581): the save would drop its
-  machines, setups and operations.
+  machines, setups and operations. It holds too for the linked design
+  edited in place, and for a design recovered from an autosave, which
+  keeps what its file has that this MitCad did not read (mitcad#2587).
 - The `path` is the file of a design that another window has open
   (mitcad#1323). The error names that window's document, also as
   `open_document`.
@@ -1603,7 +1605,7 @@ descriptions of `model_query` and `model_command` point to it.
 |---|---|
 | none | `contents`: the `##` and `###` headings of the reference, one a line (`###` indented); `guides`: each guide topic's `id` and `read_when` (below); `queries`, `commands`, `features`: every query, command and feature type the server permits; `schemas`: the commands with a JSON Schema; `usage` |
 | `section` | One section with its subsections: `section` (its heading), `path` (the headings above it), `text`. In brief by default (below); `"extended": true` gives the whole text. The name is a heading (`"Values"`, `"Sketch commands"`, in any case), a name a heading lists (`"split_body"` finds *Face features: shell, …, split_body, split_face*) or a part of a heading, in that order; `other_sections` names the other matches |
-| `query`, `command` | Its entry (mitcad#1897) in `text`: the reference rows of that query or command, each table with its header and the headings above it; a name without rows gets the section that describes it in prose, whole up to 16 kB, else that section's paragraphs, examples and lists about it. `section` and `path`: the section; `sections`: the headings that list the name; `also_in`: other sections that name it; `brief`; `permitted`. A command also gets `schema`, its JSON Schema, where one exists (below) |
+| `query`, `command` | Its entry (mitcad#1897) in `text`: the reference rows of that query or command, each table with its header and the headings above it; a name without rows gets the section that describes it in prose, whole up to 16 kB, else that section's paragraphs, examples and lists about it. `section` and `path`: the section; `sections`: the headings that list the name; `also_in`: other sections that name it; `brief`; `permitted`. A command also gets `schema`, its JSON Schema, where one exists (below); a query also gets `purpose`, a sentence or two on what it is for (mitcad#2636) |
 | `feature` | The section of that feature type (the heading that lists it, or the section of its first example definition), as `section` gives it, with `feature`, `example` (its first example definition) and `permitted`; in brief by default like `section` |
 | `search` | `headings` that contain the text, and `hits`: `section` (the headings above the line) and `excerpt` (240 characters around the text) of each line that contains it, in any case; `total` |
 | `guide` | A guide on how to model well (below): `guide` (its id) and `text`. `"index"` gives the index |
@@ -1679,6 +1681,14 @@ reference file itself stays whole for developers
 answers with the section *construction_plane, construction_axis,
 construction_point*, its table of definitions and the example
 `{"type": "construction_plane", "definition": {"type": "offset", "plane": "xy", "distance": 10}}`.
+
+The same reference, the same commands' schemas and the same names make
+the [API reference](https://mitcad.org/docs/api/) for people
+(mitcad#2606): a page per command, query and feature type with its
+purpose (a command's from its schema, a query's the same `purpose` as
+above), its fields, an example, its result and its refusals, an overview
+and a search, without ticket references or history. It is made for each release
+([tools/api-reference/README.md](../tools/api-reference/README.md)).
 
 ### Guides for agents
 

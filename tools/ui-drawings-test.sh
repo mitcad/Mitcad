@@ -814,7 +814,7 @@ ui_mark
 ui_step "Close Drawing"                    ui_click_logged "Drawing Close Drawing"
 ui_expect_new "Drawing closed" "the 3D view again"
 # Solid and Build back, Solid shown, as before the drawing (mitcad#1008).
-ui_expect_new "Ribbon tabs: START, SOLID, SURFACE, SHEET METAL, BUILD, MAKE_PRINT, MAKE_LASER, MAKE_CNC, MANAGE (shown SOLID)" "the model's tabs back, the one it was opened from shown"
+ui_expect_new "Ribbon tabs: START, SOLID, SURFACE, SHEET PARTS, BUILD, MAKE_PRINT, MAKE_LASER, MAKE_CNC, MANAGE (shown SOLID)" "the model's tabs back, the one it was opened from shown"
 ui_mark
 ui_step "edit Extrude1 (double-click)"     ui_double_click_logged "Timeline Extrude1"
 ui_expect_new " with Extrude" "editing Extrude1"
@@ -866,7 +866,7 @@ echo "--- Saved and opened again"
 ui_mark
 ui_step "back to the model (Close Drawing)" ui_click_logged "Drawing Close Drawing"
 ui_expect_new "Drawing closed" "closed"
-ui_expect_new "Ribbon tabs: START, SOLID, SURFACE, SHEET METAL, BUILD, MAKE_PRINT, MAKE_LASER, MAKE_CNC, MANAGE (shown BUILD)" "back on the Build tab it was opened from"
+ui_expect_new "Ribbon tabs: START, SOLID, SURFACE, SHEET PARTS, BUILD, MAKE_PRINT, MAKE_LASER, MAKE_CNC, MANAGE (shown BUILD)" "back on the Build tab it was opened from"
 ui_focus_main
 ui_step "save (Ctrl+S)"                    ui_key ctrl+s
 ui_expect_log "Saved $FILE" "saved"
@@ -1189,7 +1189,7 @@ ui_step "Close Drawing"                    ui_click_logged "Drawing Close Drawin
 ui_expect_new "Drawing closed" "the 3D view again"
 # The model's tabs and the cards back (mitcad#1008), the Browser's in place
 # of the Drawings card (mitcad#1990).
-ui_expect_new "Ribbon tabs: START, SOLID, SURFACE, SHEET METAL, BUILD, MAKE_PRINT, MAKE_LASER, MAKE_CNC, MANAGE (shown SOLID)" "Solid and Build back"
+ui_expect_new "Ribbon tabs: START, SOLID, SURFACE, SHEET PARTS, BUILD, MAKE_PRINT, MAKE_LASER, MAKE_CNC, MANAGE (shown SOLID)" "Solid and Build back"
 floating_cards with timelineDock
 floating_cards with browserDock
 floating_cards without drawingsDock

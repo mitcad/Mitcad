@@ -37,7 +37,9 @@ public:
   ~ComponentBrowser() override;
 
   // For the tests (TestDriver's invoke-widget): follows the first link of
-  // the page whose text or address contains `text`, as a click would.
+  // the page whose text or address contains `text`, as a click would. Only
+  // in a test run (MITCAD_TEST_INPUT), and only the link it found, by a
+  // one-off key (mitcad#2615).
   Q_INVOKABLE void clickLink(const QString& text);
   // The host's note under the page (interface 4, mitcad#2281): a download
   // that waits for the open command, comes in when it closes, or is
@@ -72,6 +74,8 @@ private:
   ComponentBrowserHost* m_host = nullptr;
   WebDownloadFolders m_folders;
   CefView* m_view = nullptr;
+  // The key of the clickLink under way (mitcad#2615); empty when none.
+  QString m_clickKey;
   QLineEdit* m_address = nullptr;
   // The page's address as the field shows it; the user's edit since the last
   // navigation (kept over the page's address changes); the field follows the

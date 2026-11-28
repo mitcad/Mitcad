@@ -1516,6 +1516,12 @@ struct CommandDef {
   // edited (`edit_analysis`), and `load` fills the inputs from an entry of
   // the `analyses` query to edit it.
   bool keepsSection = false;
+  // Whether OK keeps the inspection in the document as an analysis that is
+  // not drawn, run again whenever it is opened (Interference, mitcad#2664):
+  // `build` gives its definition and `load` fills the inputs, as with
+  // keepsSection, but the panel leaves the shown section and analysis as
+  // they are and OK keeps nothing shown.
+  bool keepsAnalysis = false;
   // What `load` fills the inputs from when the panel edits an item kept in
   // the document that is not a feature (an analysis; an image reference,
   // mitcad#782), as the log names it: "Editing analysis Section1 with

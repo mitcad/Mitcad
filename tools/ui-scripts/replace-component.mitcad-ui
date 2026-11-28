@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: MIT
+# Replace Component (mitcad#2640), the shared input script of
+# tools/ui-replace-component-test.sh (Linux),
+# tools/ui-windows-replace-component-test.ps1 (Windows) and
+# tools/ui-macos-replace-component-test.sh (macOS), on the holder
+# replace-component-holder.json: Bracket.mitcad (a 10 x 10 x 5 box, 500 mm3)
+# linked and placed twice, Joint1 on a face of Bracket:1; Bracket_v2.mitcad
+# (the box 8 mm high, 800 mm3) beside it. ASCII only: the Windows runner
+# copies it as ASCII.
+#   1. Replace Component... from Bracket:1's browser row, Bracket_v2.mitcad
+#      typed: the replacement shows in all occurrences at once, Joint1 kept on
+#      its face; OK keeps it (the name Bracket kept), one undo step; Undo
+#      takes it back.
+#   2. From Bracket:2's row, This one: Bracket_v2 shows there alone (two
+#      bodies); Cancel takes it back with the history.
+expect-ever 'View area' 600
+wait-idle 600
+command view.fit
+wait-idle
+expect-model-bodies 1 500
+expect-ever '^Browser Root/Bracket:1 at ' 30
+wait-idle
+capture-undo-depth baseline
+
+# --- 1. All occurrences, Joint1 kept; OK, then Undo.
+mark
+context-menu-logged '^Browser Root/Bracket:1 at ' 'Replace Component'
+wait-log '^Replace Component dialog opened: Bracket:1, 2 occurrences$' 30
+focus-dialog '^Replace Component$' 20
+type Bracket_v2.mitcad
+key tab
+wait-log '^Replace Component reference: Joint1 [(]a[)]: (name|geometry)$' 60
+wait-log '^Replace Component preview: Bracket_v2[.]mitcad, all occurrences: occurrences 2, references 1, unmatched 0$' 60
+wait-idle
+expect-model-bodies 1 800
+focus-dialog '^Replace Component$' 20
+button '^OK$'
+wait-log '^Replace Component: Bracket replaced by Bracket in 2 occurrences, 0 unmatched$' 30
+wait-idle
+expect-model-bodies 1 800
+expect-undo-depth ${baseline} 1
+mark
+key ctrl+z
+wait-log '^Undo: Replace Bracket with Bracket_v2$' 20
+wait-idle
+expect-model-bodies 1 500
+expect-undo-depth ${baseline} 0
+
+# --- 2. This one, then Cancel.
+mark
+context-menu-logged '^Browser Root/Bracket:2 at ' 'Replace Component'
+wait-log '^Replace Component dialog opened: Bracket:2, 2 occurrences$' 30
+focus-dialog '^Replace Component$' 20
+type Bracket_v2.mitcad
+key tab
+wait-log '^Replace Component preview: Bracket_v2[.]mitcad, all occurrences: ' 60
+button '^This one$'
+wait-log '^Replace Component preview: Bracket_v2[.]mitcad, this one: occurrences 1, references 0, unmatched 0$' 60
+wait-idle
+expect-model-bodies 2 1300
+focus-dialog '^Replace Component$' 20
+key escape
+wait-log '^Replace Component canceled$' 20
+wait-idle
+expect-model-bodies 1 500
+expect-undo-depth ${baseline} 0
+expect-never 'Recompute failed|OCCT view event failed|TestDriver: FAIL'

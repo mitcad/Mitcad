@@ -73,10 +73,10 @@ pub const DEFAULT_CLEARANCE: f64 = 0.1;
 /// How far a through mortise runs on past the mortise body's far face, mm
 /// (besides the clearance), so that its end lies on none of the body's
 /// faces.
-const THROUGH_PAST: f64 = 1.0;
+pub(super) const THROUGH_PAST: f64 = 1.0;
 
 /// Slack of the fit checks, mm.
-const SLACK: f64 = 1e-6;
+pub(super) const SLACK: f64 = 1e-6;
 
 /// The most tenons of one feature.
 pub const MAX_TENONS: f64 = 100.0;
@@ -472,7 +472,10 @@ fn not_reaching(body: BodyUid) -> String {
 }
 
 /// One shape of several: the only one, or their compound.
-fn one_shape<K: Kernel>(kernel: &K, mut shapes: Vec<K::Shape>) -> Result<K::Shape, String> {
+pub(super) fn one_shape<K: Kernel>(
+    kernel: &K,
+    mut shapes: Vec<K::Shape>,
+) -> Result<K::Shape, String> {
     if shapes.len() == 1 {
         return Ok(shapes.remove(0));
     }
@@ -480,7 +483,7 @@ fn one_shape<K: Kernel>(kernel: &K, mut shapes: Vec<K::Shape>) -> Result<K::Shap
 }
 
 /// The extrusion of `regions` along `z` from `start` for `distance`.
-fn extrude<K: Kernel>(
+pub(super) fn extrude<K: Kernel>(
     ctx: &EvalContext<'_, K>,
     frame: SketchFrame,
     regions: &[ProfileRegion],
@@ -508,7 +511,7 @@ fn extrude<K: Kernel>(
 /// Where a through tenon ends: the distance from `from` along `z` to where
 /// the mortise body's material ends last along that line; None when the
 /// line meets no material of it ahead.
-fn through_length<K: Kernel>(
+pub(super) fn through_length<K: Kernel>(
     kernel: &K,
     body: &K::Shape,
     from: [f64; 3],
@@ -769,7 +772,7 @@ fn outline_points(curves: &[Curve3]) -> Vec<[f64; 3]> {
 }
 
 /// A sketch curve's id.
-fn curve(n: u32) -> EntityUid {
+pub(super) fn curve(n: u32) -> EntityUid {
     EntityUid(n)
 }
 
@@ -777,7 +780,13 @@ fn curve(n: u32) -> EntityUid {
 /// corners rounded by `radius` (none at 0): lines `c<first>` … `c<first +
 /// 3>`, or with round corners lines and arcs `c<first>` … `c<first + 7>`,
 /// counter-clockwise from the side at -b / 2.
-fn rectangle(first: u32, a: f64, b: f64, radius: f64, centre: [f64; 2]) -> ProfileRegion {
+pub(super) fn rectangle(
+    first: u32,
+    a: f64,
+    b: f64,
+    radius: f64,
+    centre: [f64; 2],
+) -> ProfileRegion {
     let (x, y) = (a / 2.0, b / 2.0);
     let geometries: Vec<SegmentGeometry> = if radius <= 0.0 {
         let corners = [[-x, -y], [x, -y], [x, y], [-x, y]];

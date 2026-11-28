@@ -5348,6 +5348,29 @@ nothing fixed, broken, changed or random. Not yet shown failing without the
 patch by `tools/occt-port-proof.py 2535` (the lab case above shows the
 reason for both bodies).
 
+## 2539
+
+[2539-hlr-polygonal-hiding-by-faces-seen-edge-on.patch](../opencascade/2539-hlr-polygonal-hiding-by-faces-seen-edge-on.patch)
+
+Test: geometry/tests/port/p2539-polygonal-hiding-within-the-hiding-triangle.cpp
+(ctest geometry.port.2539), OCCT's polygonal hidden-line removal alone
+(HLRBRep_PolyAlgo with OCC28784's projector): a flat triangular sliver seen
+almost edge on and a plate whose long top edge runs along it at a shallow
+angle, almost in its plane, in the coordinates the reported view's
+triangulation had (test_sliver_along_an_edge): no part of the edge left of
+the sliver hidden, and 130.8 mm of it seen there. In the OCCT lab the chain
+without the patch hides 130.8 mm of that edge (case 2539-sliver-along-edge),
+130.8 mm of the reported upper shaft's outline beside the collar half alone
+at 1:2 and 1:5 (2539-shaft-collar-pair) and 109.6 mm of the shafts'
+outlines in the reported bodies at 1:2 and 1:5, none at 1:1 and 1:10
+(2539-shaft-ends); with the patch none in all three. Of the lab's shared set
+(62 cases) only these three differ. OCCT's hlr group is not in the lab's
+suite. Not yet shown failing without the patch by
+`tools/occt-port-proof.py 2539` (the lab cases above show it).
+Reported design: tools/cli/drawing-shaft-outlines-reported-test.py
+(cli.drawing_shaft_outlines_reported), GitHub #765's drawing at 1:1, 1:2,
+1:5 and 1:10 with and without hidden edges.
+
 ## 2542
 
 [2542-brepoffset-crease-split-at-a-sphere-pole-cut-there.patch](../opencascade/2542-brepoffset-crease-split-at-a-sphere-pole-cut-there.patch)
@@ -5376,3 +5399,74 @@ all.)
 Reported design: tools/cli/shell-sharp-reported-test.cmake
 (cli.shell_sharp_reported), GitHub #720's design at its marker, both round
 ends removed, 2 and 3 mm inside, Sharp (shell_sharp_reported591.json).
+
+## 2623
+
+[2623-shapeupgrade-unifysamedomain-trim-on-the-periodic-bspline-made.patch](../opencascade/2623-shapeupgrade-unifysamedomain-trim-on-the-periodic-bspline-made.patch)
+
+Test: geometry/tests/port/p2623-closed-surface-merged-across-its-closure.cpp
+(ctest geometry.port.2623), OCCT's face merge alone with B-spline faces
+joined, as the booleans' SimplifyResult: the outer half of a ring revolved
+from the exact rational circle of radius 3 round (10, 0, 0) (a surface of
+revolution closed in v, not periodic), cut to y >= 0 so that two of its
+faces meet at the circle's start
+(test_faces_merged_across_the_closure_of_a_surface_of_revolution): one
+valid face on the trimmed periodic B-spline, 4 faces, the volume
+(pi (10 + 4 / pi) 9 pi / 2, 500.68 mm3) within 1e-3; and a half tube of
+radius 10 and height 10 whose side is a rational B-spline closed in u, not
+periodic (test_input_bspline_not_made_periodic_in_place): merged into 4
+faces with the input's side surfaces not periodic afterwards. In the OCCT
+lab (case 2623-closed-surface-merged-across-its-closure, the same bodies
+made in DRAW) the chain without the patch throws on the ring
+("Standard_ConstructionError: Geom_RectangularTrimmedSurface::V parameters
+out of range", the reported design's message) and makes both of the
+tube's input side faces' surface periodic; with the patch the ring merges
+into 4 valid faces of 500.7 mm3, one on a periodic B-spline, and the
+tube's input surfaces stay not periodic. Of the lab's shared set (58
+cases) only this case differs. OCCT's heal and offset groups against the
+chain without the patch: 2327 same, 174 failing in both, nothing fixed,
+broken or changed; offset/compshape/A3 random (as in 2542's run).
+Reported design: tools/cli/extrude-replace-reported-test.cmake
+(cli.extrude_replace_reported), GitHub #674's design, the reporter's Join
+of the tab on the rim up to the body: no failed merge in the boolean
+trace, the rib ends still merged with the rounding
+(extrude_replace_reported674.json).
+## 2582
+
+[2582-chfi3d-whole-rims-rounded-closing-a-cap-to-a-pole-or-taking-every-face-away.patch](../opencascade/2582-chfi3d-whole-rims-rounded-closing-a-cap-to-a-pole-or-taking-every-face-away.patch)
+
+Test: geometry/tests/port/p2582-whole-rims-at-their-radius.cpp
+(ctest geometry.port.2582), OCCT's fillet alone, each result one valid
+solid of the exact volume (Pappus) within 1e-8 relative:
+test_cylinder_rim_closed_to_a_pole (a cylinder 5 x 10, its top rim
+rounded with 5: one sphere face about (0, 0, 5), area 50 pi, no face at
+the top, the bottom a whole disc), test_both_rims_a_ball (then the bottom
+rim: two hemispheres of one sphere, 500 / 3 pi), test_rim_in_two_arcs
+and test_boss_on_a_plate (the second geometries: the rim in two half
+arcs, the patch's ChFi3d_SpineWholeCircle over several edges, and a boss
+on a plate), test_annulus_four_rims_a_torus (annuli 40 / 20 and 30 / 10,
+10 high, their four rims rounded with 5 in one go: four toroidal faces of
+radii 15 or 10 and 5 about the axis, 2 pi^2 R 25),
+test_annulus_rounding_ridden_on_both_sides (both bottom rims and the top's
+outer one: the bottom outer rounding met by another on both its faces,
+the patch's ChFi3d_FilDS part) and, the boundaries,
+test_near_and_part_roundings_unchanged (the cylinder's rim and the
+annulus's four rims at 4.99, the bottom outer rim with both top rims at
+5). In the OCCT lab (case 2582-whole-rims-at-their-radius) the chain
+without the patch gives the cylinder invalid (773.498012 mm3, the cap kept
+beside the hemisphere), fails the ball, the annuli and the cube of
+mitcad#1922 (no result), gives the boss on a plate invalid (2507.321699)
+and the three rims invalid (3206.591696), the rim in two arcs 1e-4 mm3
+over (walked); with it each is exact and valid (the cube 523.630190, its
+exact shape's 523.6302); the boundaries and a cylinder under a spherical
+cap (not covered, it fails either way) the same. Of the lab's shared set
+(57 cases) only 2582-whole-rims-at-their-radius differs. OCCT's groups
+blend, chamfer and offset against the chain without the patch: 1353 same,
+167 failing in both, nothing fixed, broken, changed or random.
+Designs: tools/cli/tests/fillet_whole_rims.json (cli.fillet_whole_rims:
+GitHub #741's three designs made from commands, at their size without a
+note), tools/cli/fillet-whole-rims-reported-test.cmake
+(cli.fillet_whole_rims_reported: the reporter's designs by their content
+ids under MITCAD_MITCAD_REPORTED, skipped without them), and
+tools/cli/tests/p9_warnings.json (cli.p9_warnings: the dome on a boss
+built at its size; the sliver warning on the capped boss).

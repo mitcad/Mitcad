@@ -472,6 +472,19 @@ void shortcutAnswers() {
   CHECK(answer.isEmpty());
 }
 
+// Where a demonstration may draw (mitcad#2615): the target and 64 pixels
+// around it, never over the rest of the window.
+void allowedArea() {
+  const QRectF target(100, 200, 200, 20);
+  const QRectF area = GuideDemonstration::allowedArea(target);
+  CHECK(area == QRectF(36, 136, 328, 148));
+  CHECK(area.contains(target));
+  // A picture offset 4000 pixels away is outside it; one beside the
+  // target, inside.
+  CHECK(!area.intersects(QRectF(4100, 200, 32, 32)));
+  CHECK(area.contains(QRectF(310, 205, 40, 20)));
+}
+
 } // namespace
 
 int guideDemonstrationTests() {
@@ -482,6 +495,7 @@ int guideDemonstrationTests() {
   bindings();
   deviceBindings();
   shortcutAnswers();
+  allowedArea();
   return failures;
 }
 MITCAD_UNIT_TEST(guideDemonstrationTests);

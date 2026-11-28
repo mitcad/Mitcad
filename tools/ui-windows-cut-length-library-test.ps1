@@ -30,7 +30,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{ 'insert.library_component' = 'F9' } -StepPause 0
+Ui-Init $App $Out $QtBin @{ 'insert.library_component' = 'F12' } -StepPause 0
 
 $git = Get-Command git -ErrorAction SilentlyContinue
 if (-not $git) {
@@ -99,7 +99,7 @@ Ui-StartApp 'cut-length-library' @('--open', $scene)
 
 Write-Host "--- 1. Insert from Library: the profile's length an option"
 Ui-Mark
-Ui-Step 'Insert from Library (F9)'       { Ui-Key 'F9' }
+Ui-Step 'Insert from Library (F12)'       { Ui-Key 'F12' }
 Ui-FocusDialog '^Browse Components$'
 Ui-Step 'search the profile'             { Ui-Type 'Profile 20x20 cut test' }
 Ui-ExpectNew "Library search 'Profile 20x20 cut test': 1 components" 'the search finds it'
@@ -137,7 +137,7 @@ Ui-ExpectVolume 'Body [^(]* \([^)]*\): volume [0-9.]+ -> ([0-9.]+) mm3' 313614.6
 
 Write-Host '--- 3. The rail: a stock length sets its length'
 Ui-Mark
-Ui-Step 'Insert from Library (F9)'       { Ui-Key 'F9' }
+Ui-Step 'Insert from Library (F12)'       { Ui-Key 'F12' }
 Ui-FocusDialog '^Browse Components$'
 Ui-Step 'search the rail'                { Ui-Type 'Rail cut test' }
 Ui-ExpectNew "Library search 'Rail cut test': 1 components" 'the search finds the rail'
@@ -158,7 +158,7 @@ Ui-ExpectVolume 'New body [^(]* \([^)]*\): volume ([0-9.]+) mm3' 108000 'the rai
 
 Write-Host '--- 4. A board of sizes: L beside its closed rows'
 Ui-Mark
-Ui-Step 'Insert from Library (F9)'       { Ui-Key 'F9' }
+Ui-Step 'Insert from Library (F12)'       { Ui-Key 'F12' }
 Ui-FocusDialog '^Browse Components$'
 Ui-Step 'search the board'               { Ui-Type 'Board cut test' }
 Ui-ExpectNew "Library search 'Board cut test': 1 components" 'the search finds the board'

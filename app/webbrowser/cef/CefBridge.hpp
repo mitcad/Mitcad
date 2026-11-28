@@ -7,7 +7,9 @@
 // folder (checked again here, whatever the renderer did); its call goes to
 // the view's owner from the event loop (never from within CEF's callback,
 // which must not run Qt's dialogs or end the view), and the guide's events
-// go to the page's persistent "events" query.
+// go to the page's persistent "events" query, one per frame. A page's calls
+// are limited (mitcad#2615, TutorialPageRules.hpp): at most 4 MB each, 20 a
+// second, 4 of each call waiting for their answers.
 
 #include <cstdint>
 #include <functional>
@@ -18,6 +20,7 @@
 #include <QString>
 
 #include "include/wrapper/cef_message_router.h"
+#include "webbrowser/TutorialPageRules.hpp"
 
 namespace mitcad::cef {
 
@@ -43,12 +46,22 @@ public:
   // An event to every page listening.
   void send(const QString& json);
   // The view goes: no more events.
-  void clear() { m_listeners.clear(); }
+  void clear() {
+    m_listeners.clear();
+    m_eventFrames.clear();
+  }
 
 private:
+  using BridgeLimiter = tutorialrules::BridgeLimiter;
   QString m_folder;
   Post m_post;
   std::map<int64_t, CefRefPtr<Callback>> m_listeners;
+  // The events listener of each frame (its identifier): one each.
+  std::map<std::string, int64_t> m_eventFrames;
+  // The calls' limits (mitcad#2615, TutorialPageRules.hpp); a run of
+  // refusals is logged once.
+  BridgeLimiter m_limiter;
+  bool m_limitLogged = false;
 };
 
 } // namespace mitcad::cef

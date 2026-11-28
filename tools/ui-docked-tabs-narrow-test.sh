@@ -6,7 +6,7 @@
 # (mitcad#2079), through the real UI, on a 20 mm cube mitcad-cli makes.
 # Since mitcad#2082 the Docked layout of Linux has the Floating layout's
 # toolbar panel: its tab row has the shown workspace's tabs (Design's:
-# Solid, Surface, Sheet Metal, Build and Manage), Start is the top bar's
+# Solid, Surface, Sheet Parts, Build and Manage), Start is the top bar's
 # Home and Render the workspace selector's. (The pill tabs that fold into a
 # », with Boost development compact first, are the macOS Docked toolbar's,
 # docs/ui-conventions.md 13.) Checked:
@@ -41,7 +41,7 @@ cat > "$WORK/cube.json" << 'JSON'
 JSON
 "$CLI" run "$WORK/cube.json" --save "$FILE" > "$WORK/cli.log" 2>&1 || { cat "$WORK/cli.log"; ui_fail "mitcad-cli"; }
 
-DESIGN_TABS=(SOLID SURFACE "SHEET METAL" BUILD MANAGE)
+DESIGN_TABS=(SOLID SURFACE "SHEET PARTS" BUILD MANAGE)
 
 # expect_row description shown: each Design tab's last logged place is in
 # sight inside the window, left to right, before the + of the tabs' menu.

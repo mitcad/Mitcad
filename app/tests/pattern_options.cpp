@@ -2,7 +2,9 @@
 // The patterns' Direction Type and Distance Type (mitcad#545): the panels'
 // choices as the definitions' `symmetric` and `distance_type` and back, the
 // length row's label, Flip while symmetric, the options in words; the
-// Pattern Type a selection made before the command picks (mitcad#1290).
+// Pattern Type a selection made before the command picks (mitcad#1290); the
+// Operation of Mirror and Circular Pattern as `combine` and back
+// (mitcad#2617).
 #include "UnitTests.hpp"
 #include "commands/PatternOptions.hpp"
 #include "framework/Command.hpp"
@@ -171,6 +173,40 @@ void preselectedTypeTests() {
   CHECK(faces.choice(type) == QStringLiteral("bodies"));
 }
 
+// The Operation of Mirror and Circular Pattern (mitcad#2617): Join of
+// bodies writes `combine: true`, New Body and other Pattern Types leave it
+// out; a definition with `combine` loads as Join.
+void operationTests() {
+  const QString bodies = QStringLiteral("bodies");
+  QJsonObject def{{QStringLiteral("type"), QStringLiteral("circular_pattern")}};
+  setPatternOperation(def, bodies, joinOperation());
+  CHECK(def.value(QStringLiteral("combine")).toBool());
+  CHECK(patternOperationOf(def) == joinOperation());
+
+  // New Body takes the flag out again, also where an edited definition had
+  // it.
+  setPatternOperation(def, bodies, newBodyOperation());
+  CHECK(!def.contains(QStringLiteral("combine")));
+  CHECK(def.size() == 1);
+  CHECK(patternOperationOf(def) == newBodyOperation());
+
+  // Join applies to bodies only: a pattern of features or faces with the
+  // hidden choice left at Join has no `combine`.
+  setPatternOperation(def, QStringLiteral("features"), joinOperation());
+  CHECK(!def.contains(QStringLiteral("combine")));
+  def.insert(QStringLiteral("combine"), true);
+  setPatternOperation(def, QStringLiteral("faces"), joinOperation());
+  CHECK(!def.contains(QStringLiteral("combine")));
+
+  // Older designs and imports: a definition already carrying the flag
+  // shows Join; one without it, or with it false, New Body.
+  CHECK(patternOperationOf(QJsonObject{{QStringLiteral("combine"), true}}) == joinOperation());
+  CHECK(patternOperationOf(QJsonObject{{QStringLiteral("combine"), false}}) == newBodyOperation());
+  CHECK(patternOperationOf(QJsonObject{}) == newBodyOperation());
+  CHECK(joinOperation() == QStringLiteral("join"));
+  CHECK(newBodyOperation() == QStringLiteral("new_body"));
+}
+
 } // namespace
 
 int patternOptionsTests() {
@@ -179,6 +215,7 @@ int patternOptionsTests() {
   lengthLabelTests();
   optionsTextTests();
   preselectedTypeTests();
+  operationTests();
   return failures;
 }
 MITCAD_UNIT_TEST(patternOptionsTests);

@@ -8,7 +8,9 @@
 use serde::{Deserialize, Serialize};
 
 use super::plunge::{depth_under, reach};
-use super::profile::{PV, Piece, chain_moves, envelope, first_reach, piece_at, pieces, tool_path};
+use super::profile::{
+    PV, Piece, chain_moves, chain_of, envelope, first_reach, piece_at, pieces, tool_path,
+};
 use super::tool::{TurningTool, TurningToolKind};
 use super::{PXZ, TurnCycle, TurnMove, TurnPart, TurnPath};
 use crate::CamError;
@@ -156,17 +158,169 @@ fn cycle_start(part: &TurnPart, side: TurnSide, clearance: f64) -> Result<PXZ, C
     }
 }
 
+/// Where along Z a Turn Roughing or a Turn Finishing cuts (mitcad#2629,
+/// GitHub mitcad/Mitcad#690): the stretch of the side's profile between
+/// `from` (towards the face) and `to` (towards the chuck), work Z; each
+/// left out, from the face or to where the part ends. The material beyond
+/// a limit is left as it is, whatever an operation before did there: at
+/// `from` the tool goes down into the stock no steeper than `entry`
+/// (degrees from the Z axis; 90 straight down) and leaves what lies under
+/// that line, at `to` it stops at a shoulder and goes straight out, the
+/// nose never past either limit. Without limits the operation covers the
+/// whole side, as before.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TurnLimits {
+    #[serde(default)]
+    pub from: Option<f64>,
+    #[serde(default)]
+    pub to: Option<f64>,
+    #[serde(default = "ninety")]
+    pub entry: f64,
+}
+
+fn ninety() -> f64 {
+    90.0
+}
+
+impl Default for TurnLimits {
+    fn default() -> Self {
+        TurnLimits {
+            from: None,
+            to: None,
+            entry: 90.0,
+        }
+    }
+}
+
+impl TurnLimits {
+    /// What is wrong with them, in words.
+    fn check(&self) -> Result<(), CamError> {
+        let finite = |v: Option<f64>| v.is_none_or(f64::is_finite);
+        if !(finite(self.from) && finite(self.to)) {
+            return Err(err("The operation's limits must be numbers."));
+        }
+        if let (Some(from), Some(to)) = (self.from, self.to)
+            && from <= to + 1e-6
+        {
+            return Err(err(
+                "The limit towards the face must be in front of the limit towards the chuck.",
+            ));
+        }
+        if !(self.entry.is_finite() && (0.0..=90.0).contains(&self.entry)) {
+            return Err(err("The entry angle must be from 0 to 90 degrees."));
+        }
+        Ok(())
+    }
+}
+
+/// A side's profile within the limits: the raw chain clipped to them, and
+/// whether a limit cuts it towards the face (`enters`: the tool goes down
+/// into the stock there) and towards the chuck (`ends`).
+struct Window {
+    profile: Vec<PV>,
+    enters: Option<f64>,
+    ends: bool,
+}
+
+const NO_STRETCH: &str = "The operation's limits leave none of the part's profile between them.";
+
+fn window(part: &TurnPart, side: TurnSide, limits: &TurnLimits) -> Result<Window, CamError> {
+    limits.check()?;
+    let profile = side_chain(part, side)?;
+    let first_z = profile[0].z;
+    let last_z = profile[profile.len() - 1].z;
+    let enters = limits.from.filter(|f| *f < first_z - 1e-6);
+    let ends = limits.to.is_some_and(|t| t > last_z + 1e-6);
+    if enters.is_none() && !ends {
+        if limits.to.is_some_and(|t| t >= first_z - 1e-6)
+            || limits.from.is_some_and(|f| f <= last_z + 1e-6)
+        {
+            return Err(err(NO_STRETCH));
+        }
+        return Ok(Window {
+            profile,
+            enters: None,
+            ends: false,
+        });
+    }
+    let mut ps = pieces(&profile);
+    if let Some(f) = enters {
+        if f <= last_z + 1e-6 {
+            return Err(err(NO_STRETCH));
+        }
+        // The last piece reaching the limit: everything after it lies
+        // towards the chuck of it.
+        let i = ps
+            .iter()
+            .rposition(|p| p.a[1].max(p.b[1]) >= f - EPS)
+            .ok_or_else(|| err(NO_STRETCH))?;
+        let p = ps[i];
+        let start = if p.b[1] >= f - EPS {
+            p.b
+        } else {
+            piece_at(&p, 1, f).unwrap_or(p.a)
+        };
+        let mut kept = vec![Piece { a: start, ..p }];
+        kept.extend_from_slice(&ps[i + 1..]);
+        ps = kept;
+    }
+    if ends {
+        let t = limits.to.unwrap_or(last_z);
+        if ps.first().is_none_or(|p| p.a[1] <= t + 1e-6) {
+            return Err(err(NO_STRETCH));
+        }
+        // The first piece reaching the limit.
+        if let Some(j) = ps.iter().position(|p| p.a[1].min(p.b[1]) <= t + EPS) {
+            let p = ps[j];
+            let end = if p.a[1] <= t + EPS {
+                p.a
+            } else {
+                piece_at(&p, 1, t).unwrap_or(p.b)
+            };
+            ps.truncate(j);
+            ps.push(Piece { b: end, ..p });
+        }
+    }
+    let profile = chain_of(&ps);
+    if profile.len() < 2 {
+        return Err(err(NO_STRETCH));
+    }
+    Ok(Window {
+        profile,
+        enters,
+        ends,
+    })
+}
+
+const EPS: f64 = 1e-9;
+
+/// The stock's surface on a side: its radius outside, its bore inside.
+fn surface(part: &TurnPart, side: TurnSide) -> f64 {
+    match side {
+        TurnSide::Outside => part.stock_radius,
+        TurnSide::Inside => part.stock_inner_radius,
+    }
+}
+
 /// The finished contour of a side on the part, before the tool: the
 /// envelope, or with a `plunge` angle above zero the contour that goes
 /// down walls falling towards the chuck no steeper than that
 /// ([`reach`], mitcad#2503); in the bore up to where it meets the
-/// stock's own bore.
-fn side_contour(part: &TurnPart, side: TurnSide, plunge: f64) -> Result<Vec<PV>, CamError> {
-    let profile = side_chain(part, side)?;
+/// stock's own bore. Within `limits` (mitcad#2629) it starts on the
+/// stock's surface at the limit towards the face, goes down from there
+/// no steeper than the entry angle (and the plunge angle), and ends at
+/// the limit towards the chuck.
+fn side_contour(
+    part: &TurnPart,
+    side: TurnSide,
+    plunge: f64,
+    limits: &TurnLimits,
+) -> Result<(Vec<PV>, Window), CamError> {
+    let w = window(part, side, limits)?;
     let mut chain = if plunge > 0.0 {
-        reach(&profile, side.inside(), plunge)
+        reach(&w.profile, side.inside(), plunge)
     } else {
-        envelope(&profile, side.inside())
+        envelope(&w.profile, side.inside())
     };
     // In the bore, the contour ends where it meets the stock's own bore.
     if side == TurnSide::Inside
@@ -178,7 +332,20 @@ fn side_contour(part: &TurnPart, side: TurnSide, plunge: f64) -> Result<Vec<PV>,
         chain.truncate(i + 1);
         chain[i].bulge = 0.0;
     }
-    Ok(chain)
+    if let Some(f) = w.enters {
+        // Into the stock at the limit, as steeply as the tool goes down:
+        // what lies under that line is left.
+        let angle = limits.entry.max(plunge);
+        if angle <= 1e-9 {
+            return Err(err(
+                "The tool cannot go down into the stock at the limit towards the face: choose Plunge Free, or a tool whose insert leaves room behind its nose.",
+            ));
+        }
+        let mut walled = vec![PV::new(surface(part, side), f)];
+        walled.extend(chain);
+        chain = reach(&walled, side.inside(), angle);
+    }
+    Ok((chain, w))
 }
 
 /// The finished contour of a side for the tool (controlled point), with
@@ -188,6 +355,7 @@ fn side_contour(part: &TurnPart, side: TurnSide, plunge: f64) -> Result<Vec<PV>,
 /// roughing that plunges (mitcad#2549), go into them as the plunge angle
 /// allows. `offset` leaves that much stock all round, a true offset of
 /// the contour (roughing into undercuts); 0 for the contour itself.
+#[allow(clippy::too_many_arguments)]
 fn finish_contour(
     part: &TurnPart,
     side: TurnSide,
@@ -196,13 +364,16 @@ fn finish_contour(
     clearance: f64,
     plunge: f64,
     offset: f64,
+    limits: &TurnLimits,
 ) -> Result<Vec<PV>, CamError> {
-    let mut chain = side_contour(part, side, plunge)?;
+    let (mut chain, w) = side_contour(part, side, plunge, limits)?;
     // A contour that ends along Z goes on by the nose radius, so that the
     // nose clears the corner where the part ends (the stock beyond is
-    // parted off or held).
+    // parted off or held); not at a limit (mitcad#2629): the part goes on
+    // beyond it.
     let n = chain.len();
     if tool.nose_radius > 0.0
+        && !w.ends
         && n >= 2
         && chain[n - 2].bulge == 0.0
         && (chain[n - 2].x - chain[n - 1].x).abs() < 1e-9
@@ -217,6 +388,16 @@ fn finish_contour(
     };
     if (last.x - out_x).abs() > 1e-9 {
         chain.push(PV::new(out_x, last.z));
+    }
+    // Down into the stock at the limit towards the face (mitcad#2629):
+    // from clear of it, the nose kept behind the limit; placed so that
+    // the tool comes in clear of the stock as at the exit.
+    if let Some(f) = w.enters {
+        let top = match side {
+            TurnSide::Outside => out_x + tool.nose_radius,
+            TurnSide::Inside => (out_x - tool.nose_radius).max(0.0),
+        };
+        chain.insert(0, PV::new(top, f));
     }
     // With an offset: the path of a nose bigger by the offset, moved to
     // the real nose's tip.
@@ -241,16 +422,36 @@ fn finish_contour(
 /// The cycle profile of a contour: a rapid in X alone, a feed in Z to the
 /// contour's start, then the contour.
 fn cycle_profile(contour: &[PV], start: PXZ, feed: f64) -> Vec<TurnMove> {
+    cycle_profile_in(contour, start, feed, false)
+}
+
+/// [`cycle_profile`]; with `clear` (a contour starting at a limit towards
+/// the face, mitcad#2629: clear of the stock) the move along Z to its
+/// start is a rapid.
+fn cycle_profile_in(contour: &[PV], start: PXZ, feed: f64, clear: bool) -> Vec<TurnMove> {
     let first = contour[0];
     let mut out = vec![TurnMove::Rapid {
         to: [first.x, start[1]],
     }];
-    out.push(TurnMove::Line {
-        to: [first.x, first.z],
-        feed,
-    });
+    if clear {
+        out.push(TurnMove::Rapid {
+            to: [first.x, first.z],
+        });
+    } else {
+        out.push(TurnMove::Line {
+            to: [first.x, first.z],
+            feed,
+        });
+    }
     out.extend(chain_moves(contour, feed));
     out
+}
+
+/// Whether `limits` cut the side's profile towards the face: the tool
+/// goes down into the stock there (mitcad#2629).
+fn enters(part: &TurnPart, side: TurnSide, limits: &TurnLimits) -> Result<bool, CamError> {
+    let chain = side_chain(part, side)?;
+    Ok(limits.from.is_some_and(|f| f < chain[0].z - 1e-6))
 }
 
 /// Roughing a side in passes along Z of at most `depth` (radius), each
@@ -276,6 +477,19 @@ pub struct RoughOp {
 }
 
 pub fn rough(part: &TurnPart, op: &RoughOp, tool: &TurningTool) -> Result<TurnPath, CamError> {
+    rough_within(part, op, tool, &TurnLimits::default())
+}
+
+/// [`rough`] within `limits` (mitcad#2629): the passes cut only between
+/// them. A limit towards the face inside the part makes the tool go down
+/// into the stock there, which a G71 cannot: written as moves then, as a
+/// roughing that plunges, leaving the larger allowance all round.
+pub fn rough_within(
+    part: &TurnPart,
+    op: &RoughOp,
+    tool: &TurningTool,
+    limits: &TurnLimits,
+) -> Result<TurnPath, CamError> {
     part.validate().map_err(err)?;
     side_tool(op.side, tool, "Roughing")?;
     if !(positive(op.depth) && positive(op.retract) && positive(op.clearance) && positive(op.feed))
@@ -295,10 +509,10 @@ pub fn rough(part: &TurnPart, op: &RoughOp, tool: &TurningTool) -> Result<TurnPa
     }
     let s = op.side.sign();
     let start = cycle_start(part, op.side, op.clearance)?;
-    if op.plunge > 0.0 {
-        return rough_pockets(part, op, tool, start);
+    if op.plunge > 0.0 || enters(part, op.side, limits)? {
+        return rough_pockets(part, op, tool, start, limits);
     }
-    let finish = finish_contour(part, op.side, tool, start, op.clearance, 0.0, 0.0)?;
+    let finish = finish_contour(part, op.side, tool, start, op.clearance, 0.0, 0.0, limits)?;
     let contour: Vec<PV> = finish
         .iter()
         .map(|v| PV {
@@ -391,6 +605,18 @@ pub struct FinishOp {
 }
 
 pub fn finish(part: &TurnPart, op: &FinishOp, tool: &TurningTool) -> Result<TurnPath, CamError> {
+    finish_within(part, op, tool, &TurnLimits::default())
+}
+
+/// [`finish`] within `limits` (mitcad#2629): along the stretch of the
+/// contour between them, in from clear of the stock at the limit towards
+/// the face and straight out at the limit towards the chuck.
+pub fn finish_within(
+    part: &TurnPart,
+    op: &FinishOp,
+    tool: &TurningTool,
+    limits: &TurnLimits,
+) -> Result<TurnPath, CamError> {
     part.validate().map_err(err)?;
     side_tool(op.side, tool, "Finishing")?;
     if !(positive(op.clearance) && positive(op.feed)) {
@@ -404,12 +630,22 @@ pub fn finish(part: &TurnPart, op: &FinishOp, tool: &TurningTool) -> Result<Turn
     // without a plunge bridges it): no deeper than the insert cuts, unless
     // the roughings before it leave no more than that (mitcad#2549).
     if !op.roughed
-        && let Some(deep) = too_deep(part, op, tool)?
+        && let Some(deep) = too_deep_within(part, op, tool, limits)?
     {
         return Err(err(deep.message()));
     }
-    let contour = finish_contour(part, op.side, tool, start, op.clearance, op.plunge, 0.0)?;
-    let profile = cycle_profile(&contour, start, op.feed);
+    let contour = finish_contour(
+        part,
+        op.side,
+        tool,
+        start,
+        op.clearance,
+        op.plunge,
+        0.0,
+        limits,
+    )?;
+    let clear = enters(part, op.side, limits)?;
+    let profile = cycle_profile_in(&contour, start, op.feed, clear);
     let mut moves = vec![TurnMove::Rapid { to: start }];
     moves.extend(profile.iter().copied());
     let end = moves.last().map(TurnMove::to).unwrap_or(start);
@@ -499,11 +735,22 @@ pub fn too_deep(
     op: &FinishOp,
     tool: &TurningTool,
 ) -> Result<Option<TooDeep>, CamError> {
+    too_deep_within(part, op, tool, &TurnLimits::default())
+}
+
+/// [`too_deep`] of a finish within `limits` (mitcad#2629): its undercuts
+/// between them.
+pub fn too_deep_within(
+    part: &TurnPart,
+    op: &FinishOp,
+    tool: &TurningTool,
+    limits: &TurnLimits,
+) -> Result<Option<TooDeep>, CamError> {
     if op.plunge <= 0.0 {
         return Ok(None);
     }
-    let bridged = side_contour(part, op.side, 0.0)?;
-    let reached = side_contour(part, op.side, op.plunge)?;
+    let (bridged, _) = side_contour(part, op.side, 0.0, limits)?;
+    let (reached, _) = side_contour(part, op.side, op.plunge, limits)?;
     let (depth, at) = depth_under(&bridged, &reached, op.side.inside());
     Ok((depth > tool.max_depth + 1e-6).then_some(TooDeep {
         depth,
@@ -531,18 +778,37 @@ pub fn too_deep_after(
     tool: &TurningTool,
     roughings: &[(RoughOp, TurningTool)],
 ) -> Result<Option<TooDeep>, CamError> {
-    let Some(deep) = too_deep(part, op, tool)? else {
+    let within: Vec<(RoughOp, TurningTool, TurnLimits)> = roughings
+        .iter()
+        .map(|(o, t)| (o.clone(), t.clone(), TurnLimits::default()))
+        .collect();
+    too_deep_after_within(part, op, tool, &TurnLimits::default(), &within)
+}
+
+/// [`too_deep_after`] with limits (mitcad#2629): the finish's own, and
+/// each roughing's; beyond its limits a roughing leaves the stock as it
+/// is.
+pub fn too_deep_after_within(
+    part: &TurnPart,
+    op: &FinishOp,
+    tool: &TurningTool,
+    limits: &TurnLimits,
+    roughings: &[(RoughOp, TurningTool, TurnLimits)],
+) -> Result<Option<TooDeep>, CamError> {
+    let Some(deep) = too_deep_within(part, op, tool, limits)? else {
         return Ok(None);
     };
-    let reached = side_contour(part, op.side, op.plunge)?;
+    let (reached, _) = side_contour(part, op.side, op.plunge, limits)?;
     let mut least: Option<TooDeep> = None;
-    for (rough_op, rough_tool) in roughings {
+    for (rough_op, rough_tool, rough_limits) in roughings {
         // Another side's, or one that fails: nothing is known of what it
         // leaves.
-        if rough_op.side != op.side || rough(part, rough_op, rough_tool).is_err() {
+        if rough_op.side != op.side
+            || rough_within(part, rough_op, rough_tool, rough_limits).is_err()
+        {
             continue;
         }
-        let roughed = side_contour(part, op.side, rough_op.plunge)?;
+        let roughed = roughed_contour(part, op.side, rough_op.plunge, rough_limits)?;
         let (under, at) = depth_under(&roughed, &reached, op.side.inside());
         let left = under
             + rough_op.allowance_x.max(rough_op.allowance_z)
@@ -563,6 +829,31 @@ pub fn too_deep_after(
     })
 }
 
+/// What a roughing within `limits` leaves along the whole side: its
+/// contour between them, the stock's surface beyond them (mitcad#2629).
+fn roughed_contour(
+    part: &TurnPart,
+    side: TurnSide,
+    plunge: f64,
+    limits: &TurnLimits,
+) -> Result<Vec<PV>, CamError> {
+    let (mut chain, w) = side_contour(part, side, plunge, limits)?;
+    let full = side_chain(part, side)?;
+    let surface = surface(part, side);
+    if w.enters.is_some() {
+        chain.insert(0, PV::new(surface, full[0].z));
+    }
+    if w.ends
+        && let Some(last) = chain.last_mut()
+    {
+        last.bulge = 0.0;
+        let z = last.z;
+        chain.push(PV::new(surface, z));
+        chain.push(PV::new(surface, full[full.len() - 1].z));
+    }
+    Ok(chain)
+}
+
 /// Roughing into undercuts (mitcad#2549): levels `depth` apart from the
 /// stock's surface down to the contour's deepest point, each cutting
 /// along Z wherever the contour is below it. The contour is the one at
@@ -580,15 +871,25 @@ fn rough_pockets(
     op: &RoughOp,
     tool: &TurningTool,
     start: PXZ,
+    limits: &TurnLimits,
 ) -> Result<TurnPath, CamError> {
     let s = op.side.sign();
     let leave = op.allowance_x.max(op.allowance_z);
-    let contour = finish_contour(part, op.side, tool, start, op.clearance, op.plunge, leave)?;
-    let surface = match op.side {
-        TurnSide::Outside => part.stock_radius,
-        TurnSide::Inside => part.stock_inner_radius,
-    };
-    // In front of the face the contour is open to its start's X.
+    let contour = finish_contour(
+        part,
+        op.side,
+        tool,
+        start,
+        op.clearance,
+        op.plunge,
+        leave,
+        limits,
+    )?;
+    let clear = enters(part, op.side, limits)?;
+    let surface = surface(part, op.side);
+    // In front of the face the contour is open to its start's X (within
+    // limits, mitcad#2629, its start is clear of the stock: the passes
+    // stay behind the limit).
     let mut chain = vec![PV::new(contour[0].x, start[1])];
     chain.extend(contour.iter().copied());
     let ps = pieces(&chain);
@@ -631,7 +932,7 @@ fn rough_pockets(
             moves.push(TurnMove::Rapid { to });
         }
     }
-    moves.extend(cycle_profile(&contour, start, op.feed));
+    moves.extend(cycle_profile_in(&contour, start, op.feed, clear));
     let end = moves.last().map(TurnMove::to).unwrap_or(start);
     moves.push(TurnMove::Rapid {
         to: [end[0], start[1]],

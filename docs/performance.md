@@ -482,6 +482,20 @@ algorithm (`part <i> parts=1 faces=… … total=…`, `i` the body's index in
 the `project` line), to show which bodies the time goes to. They combine
 (`compare,parts`).
 
+`MITCAD_DRAWING_TRACE=strokes` (mitcad#2539) prints every line of each
+view three times, `drawing-trace: stroke <stage> view=<id> seen=<0|1>
+kind=<kind> source=<body index> points=x,y;…` in the view's millimetres:
+as the kernel projected it (`kernel`), as the view shows it after its
+threads, detail circle and breaks (`shown`), and as the sheet draws it at
+the view's scale with its details smaller than the pen simplified
+(`sheet`). A line missing on a sheet is so traced to the step that lost
+it. The geometry test's probe `test_geometry_surfaces drawing
+--round-outlines <file.brep> <scale>` goes on from there for a front view
+at a scale: for each long round face seen from the side, its
+triangulation near the outline and the stretches of its outline lines
+missing from the view of all the file's solids, of its solid alone on the
+polygonal path and of its solid alone exactly.
+
 **Measured** (mitcad#962, the Windows build, a 26-body assembly with
 modelled threads: 1 154 faces, 260 of them free-form, 2 816 edges): the
 front, right, top and corner views took 34.9, 46.4, 20.3 and 5.3 s, of

@@ -44,6 +44,7 @@
 #include "../framework/UserText.hpp"
 #include "../commands/SurfaceAnalysis.hpp"
 #include "../files/Libraries.hpp"
+#include "../files/LibraryDialogs.hpp"
 #include "../cam/CamManualCode.hpp"
 #include "../library/EditOptionsDialog.hpp"
 #include "../library/PartOptions.hpp"
@@ -62,6 +63,7 @@
 #include "ParametersDialog.hpp"
 #include "PolicyDialog.hpp"
 #include "ReorientDialog.hpp"
+#include "ReplaceComponentDialog.hpp"
 #include "SelectionSets.hpp"
 #include "TimelineWidget.hpp"
 
@@ -305,6 +307,11 @@ BrowserController::BrowserController(DocumentHost& host, QWidget* window)
   m_browser->setRowSpacing(browserRowSpacing());
   connect(&BrowserPreferencesNotifier::instance(), &BrowserPreferencesNotifier::rowSpacingChanged, this,
           [this] { m_browser->setRowSpacing(browserRowSpacing()); });
+  // The active component's highlight (mitcad#2618): as Preferences has it,
+  // and every window's rows painted again at once when it changes.
+  m_browser->setHighlightActive(browserHighlightActive());
+  connect(&BrowserPreferencesNotifier::instance(), &BrowserPreferencesNotifier::highlightActiveChanged, this,
+          [this] { m_browser->setHighlightActive(browserHighlightActive()); });
   m_timeline = new TimelineWidget(host.model(), window);
   m_failures = new QToolButton(window);
   m_failures->setObjectName(QStringLiteral("failuresBadge"));
@@ -3110,6 +3117,12 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
             });
       }
     }
+    // Replace Component (mitcad#2640): this component swapped for another
+    // design or component, here or in all its places.
+    if (!root) {
+      const QString path = node.occurrence;
+      menu.add(QStringLiteral("component"), tr("Replace Component…"), [this, path] { openReplaceComponent(path); });
+    }
     // A design edited in place (mitcad#2321): the root row finishes it.
     if (root && m_host.editingInPlace()) {
       menu.add(QStringLiteral("finish-sketch"), tr("Finish Edit in Place"), [this] { m_host.finishEditInPlace(); });
@@ -3447,6 +3460,12 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
         }
       });
     }
+    // mitcad#2664
+    menu.add(QStringLiteral("interference"), tr("New Interference"), [this] {
+      if (canChange()) {
+        m_host.startCommand(QStringLiteral("inspect.interference"), {}, nullptr);
+      }
+    });
     break;
   case BrowserNode::Type::Joints:
     // Joints (mitcad#55): in the component the folder is in, when active.
@@ -3502,6 +3521,8 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
              : node.featureType == QStringLiteral("point_cloud_deviation") ? tr("Edit Point Cloud Deviation")
              : node.featureType == QStringLiteral("min_radius")            ? tr("Edit Minimum Radius") // mitcad#2518
              : node.featureType == QStringLiteral("minimum_distance")      ? tr("Edit Minimum Distance") // mitcad#2519
+             // A kept check runs again in its panel (mitcad#2664).
+             : node.featureType == QStringLiteral("interference")          ? tr("Run Interference")
                                                                            : tr("Edit Section Analysis"),
              [this, node] { m_host.editAnalysis(node.uid); });
     // A section's other side (mitcad#1975: here, no longer in the
@@ -3520,6 +3541,8 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
       });
     }
     menu.separator();
+    // No Show or Hide for an interference check, which has no light bulb
+    // (mitcad#2664).
     visibility();
     renameEntry();
     menu.add(QStringLiteral("delete"), tr("Delete"), [this, node] { deleteNode(node); });
@@ -5850,6 +5873,85 @@ void BrowserController::openReorient() {
     qDebug().noquote() << QStringLiteral("Reorient Design body %1: box %2 - %3")
                               .arg(instance.value(QStringLiteral("name")).toString(),
                                    point(box.value(QStringLiteral("min"))), point(box.value(QStringLiteral("max"))));
+  }
+}
+
+// Replace Component (mitcad#2640).
+
+void BrowserController::openReplaceComponent(const QString& path) {
+  if (!canChange()) {
+    return;
+  }
+  const DocumentSnapshot::Occurrence* placed = path.isEmpty() ? nullptr : occurrence(path);
+  if (placed == nullptr) {
+    m_host.showStatus(tr("Select the component to replace, in the Browser or the view."), NoticeLevel::Information);
+    return;
+  }
+  // Copied: the snapshot changes while the dialog previews.
+  ReplaceComponentSetup setup;
+  setup.occurrence = path;
+  setup.occurrenceName = placed->name;
+  setup.component = placed->name;
+  const QString replaced = placed->component;
+  for (const DocumentSnapshot::Component& c : std::as_const(m_snapshot.components)) {
+    if (c.uid == replaced) {
+      setup.component = c.name;
+    } else if (!c.uid.isEmpty() && c.uid != QStringLiteral("C0")) {
+      setup.components.append({c.uid, c.name});
+    }
+  }
+  setup.occurrences = std::max(1, occurrencesOf(m_snapshot.occurrences, replaced));
+  setup.base = m_host.documentFolder();
+  const QString start = m_host.projectFolder().isEmpty() ? m_host.documentFolder() : m_host.projectFolder();
+  setup.chooseFile = [this, start] {
+    return dialogOpenFileName(m_window, tr("Replacement Design"), start, tr("MitCad designs (*.mitcad)"));
+  };
+  // A library part from the component browser of Insert from Library.
+  setup.chooseLibrary = [this] {
+    LibraryBrowser browser(LibraryBrowser::View::Installed, m_window);
+    prepareModal(&browser);
+    if (execDialog(&browser) != QDialog::Accepted || !browser.choice()) {
+      return QJsonObject();
+    }
+    const LibraryChoice choice = *browser.choice();
+    QJsonObject library{{QStringLiteral("id"), choice.library},
+                        {QStringLiteral("url"), choice.url},
+                        {QStringLiteral("rev"), choice.rev},
+                        {QStringLiteral("component"), choice.component}};
+    if (!choice.config.isEmpty()) {
+      library.insert(QStringLiteral("config"), choice.config);
+    }
+    if (!choice.standard.isEmpty()) {
+      library.insert(QStringLiteral("standard"), choice.standard);
+    }
+    qDebug().noquote() << QStringLiteral("Replace Component: library part %1/%2 chosen")
+                              .arg(choice.library, choice.component);
+    return QJsonObject{{QStringLiteral("library"), library},
+                       {QStringLiteral("link"), choice.link},
+                       {QStringLiteral("name"), choice.name.isEmpty() ? choice.component : choice.name}};
+  };
+  const QString before = setup.component;
+  ReplaceComponentDialog dialog([this](const QJsonObject& command,
+                                       QJsonObject* result) { return m_host.runModelCommand(command, result); },
+                                [this] { return mitcad::modelMessage(m_host.lastError()); }, std::move(setup),
+                                m_window);
+  prepareModal(&dialog);
+  if (execDialog(&dialog) != QDialog::Accepted) {
+    return;
+  }
+  const QJsonObject result = dialog.result();
+  const int occurrences = static_cast<int>(result.value(QStringLiteral("occurrences")).toArray().size());
+  const int unmatched = result.value(QStringLiteral("unmatched")).toInt();
+  qDebug().noquote() << QStringLiteral("Replace Component: %1 replaced by %2 in %3 occurrences, %4 unmatched")
+                            .arg(before, result.value(QStringLiteral("name")).toString())
+                            .arg(occurrences)
+                            .arg(unmatched);
+  if (unmatched > 0) {
+    m_host.showStatus(tr("%n reference(s) on %1 found no match on the replacement: their features are marked "
+                         "broken until they are given new geometry.",
+                         "", unmatched)
+                          .arg(before),
+                      NoticeLevel::Warning);
   }
 }
 

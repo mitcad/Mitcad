@@ -1,0 +1,7 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "Bracket.mitcad of tools/ui-scripts/replace-component.mitcad-ui (mitcad#2640): a 10 x 10 x 5 box in the root, 500 mm3."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [0, 0],
+    "length": 10, "width": 10, "height": 5, "operation": "new_body"}},
+  {"expect": {"bodies": 1, "world_volume": 500}}
+]

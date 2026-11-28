@@ -10,10 +10,10 @@ use serde::{Deserialize, Serialize};
 
 use super::entry::{Entry, EntrySpace, enter};
 use super::path::{self, Path};
-use super::{Depths, Direction, Heights, check_mill};
+use super::{Depths, Direction, Heights, check_cutter};
 use crate::CamError;
 use crate::geom::Contour;
-use crate::tool::{Cutting, Tool};
+use crate::tool::{Cutting, Tool, ToolShape};
 use crate::toolpath::{PathBuilder, Toolpath};
 
 /// Which side of the outlines the tool cuts on.
@@ -202,9 +202,16 @@ fn pline_contour(p: &Polyline<f64>, reverse: bool) -> Contour {
     }
 }
 
-/// The toolpath of a contour operation.
+/// The toolpath of a contour operation. On the line it takes a V-bit (an
+/// engraving cutter or a chamfer mill) too, its tip on the outlines
+/// (mitcad#2589); beside them only flat and bull nose end mills.
 pub fn contour(op: &ContourOp, tool: &Tool) -> Result<Toolpath, CamError> {
-    check_mill(tool, &op.cutting, &op.depths)?;
+    if matches!(tool.shape, ToolShape::VBit { .. }) && op.side != Side::On {
+        return Err(CamError::new(
+            "An engraving cutter or a chamfer mill cuts a contour only with the tool on the line.",
+        ));
+    }
+    check_cutter(tool, &op.cutting, &op.depths, op.side == Side::On)?;
     op.heights.validate(op.depths.top)?;
     let levels = op.depths.levels()?;
     let loops = contour_loops(op, tool)?;
@@ -846,3 +853,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod v_bit_tests;

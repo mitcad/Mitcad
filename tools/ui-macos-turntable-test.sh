@@ -20,6 +20,9 @@ ui_init "$1" "$3"
 cli=$2
 UI_TIMEOUT=300
 export MITCAD_TEST_WORK=$UI_OUT/files
+# An empty folder each run (mitcad#2611): an earlier run's frames make Export
+# ask to replace them, and the script waits for a line that never comes.
+rm -rf -- "${MITCAD_TEST_WORK:?}"
 mkdir -p "$MITCAD_TEST_WORK"
 ffmpeg=$(command -v ffmpeg || true)
 for folder in /opt/homebrew/bin /usr/local/bin /opt/local/bin; do

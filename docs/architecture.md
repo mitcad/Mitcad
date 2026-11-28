@@ -66,7 +66,7 @@ the probe cannot use the document's tools or replace its conversation.
 | `core/update` (`mitcad-update`) | Rust | Release manifest, signatures, version selection; the `mitcad-release` tool. No network ([updates.md](updates.md)). |
 | `core/mcp` (`mitcad-mcp`) | Rust | MCP lifecycle, JSON-RPC envelopes, tool schemas, the command-reference resource and `model_reference`, the reference in sections (mitcad#714); the guides for agents (`core/mcp/guide/`, Agent Skills layout, behind `model_reference {"guide": …}` and `mitcad://guide/<id>`, mitcad#1508); headless stdio and live application profiles. No geometry dependency; its tests read the model API's permitted names ([mcp.md](mcp.md)). |
 | `core/preview` (`mitcad-preview`) | Rust | Preview images without a GPU or a display (mitcad#1486): `model_render`'s arguments, its camera (shared by every quality), a software rasterizer over the bodies' display meshes (with a section's caps and highlighted edges, mitcad#1487, and the overlay of an analysis' triangles over them, mitcad#1488) and a PNG writer; deterministic on one platform. The live server draws the same pictures through `Document::mcp_render`. The model builds the scene (`core/model/src/preview.rs`) ([mcp.md](mcp.md), Preview images); its line art as SVG (mitcad#1736, `format: "svg"`) is a drawing view's projection along the camera (`core/model/src/preview/lines.rs`). |
-| `core/cam` (`mitcad-cam`) | Rust | CAM for CNC milling (mitcad#1013, [cam.md](cam.md)): tools and the tool library, planar outlines of lines and arcs, toolpaths, the 2.5-axis operations (facing, contour with the tool radius compensation, offset pocketing with islands, drilling), the machine model with its keep-out zones and tool changers and the check of a program against it, and the post-processors (one `PostProcessor` trait; grbl, grblHAL, RepRapFirmware, MillenniumOS, Mach3, Mach4, LinuxCNC, Makera Carvera and Carvera Air); turning on a 2-axis lathe in `turning/` (mitcad#1869: the lathe, turning tools, the revolved profile, facing, roughing, finishing, grooving, parting off, threading, the Fanuc turning dialect with G71/G70/G76 and the LinuxCNC one longhand (mitcad#2425), the program check, the turned section's simulation; live tools on the C axis in `turning/live.rs`, mitcad#2067: milling and drilling on the face and the diameter, polar and cylindrical interpolation; mitcad#2319: planes with the Y axis and tilted by a B head, the sub-spindle's hand-over, the whole program cut in 3D in `turning/solid.rs`; mitcad#2375: live tools on the sub-spindle with its own C axis, its speeds, travel and chuck in the lathe check; mitcad#2392: its body and moving zones in the lathe check and the simulation, a control that mirrors only Z on it; mitcad#2405: its own revolved profile, the turret's body against it, its outline and place per operation for Simulate; mitcad#2412: the turret's body against the main chuck and the fixed zones in `turning/turret.rs`, a body per station, the zones' Y on a lathe with a Y axis, the zones and the turret per operation for Simulate in `turning/drawn.rs`). No model, no OCCT; offsets by cavalier_contours. |
+| `core/cam` (`mitcad-cam`) | Rust | CAM for CNC milling (mitcad#1013, [cam.md](cam.md)): tools and the tool library, planar outlines of lines and arcs, toolpaths, the 2.5-axis operations (facing, contour with the tool radius compensation, offset pocketing with islands, drilling), the machine model with its keep-out zones and tool changers and the check of a program against it, and the post-processors (one `PostProcessor` trait; grbl, grblHAL, RepRapFirmware, MillenniumOS, Mach3, Mach4, LinuxCNC, Makera Carvera and Carvera Air, Estlcam); turning on a 2-axis lathe in `turning/` (mitcad#1869: the lathe, turning tools, the revolved profile, facing, roughing, finishing, grooving, parting off, threading, the Fanuc turning dialect with G71/G70/G76 and the LinuxCNC one longhand (mitcad#2425), the program check, the turned section's simulation; live tools on the C axis in `turning/live.rs`, mitcad#2067: milling and drilling on the face and the diameter, polar and cylindrical interpolation; mitcad#2319: planes with the Y axis and tilted by a B head, the sub-spindle's hand-over, the whole program cut in 3D in `turning/solid.rs`; mitcad#2375: live tools on the sub-spindle with its own C axis, its speeds, travel and chuck in the lathe check; mitcad#2392: its body and moving zones in the lathe check and the simulation, a control that mirrors only Z on it; mitcad#2405: its own revolved profile, the turret's body against it, its outline and place per operation for Simulate; mitcad#2412: the turret's body against the main chuck and the fixed zones in `turning/turret.rs`, a body per station, the zones' Y on a lathe with a Y axis, the zones and the turret per operation for Simulate in `turning/drawn.rs`). No model, no OCCT; offsets by cavalier_contours. |
 | `core/subdiv` (`mitcad-subdiv`) | Rust | Forms (mitcad#1757): control cages, their edits, Catmull-Clark subdivision with creases and boundaries and the limit surface as bicubic patches, below the model (re-exported as `mitcad_model::subdiv`); no OCCT ([Forms](#forms-subdivision-surfaces)). |
 | `core/ffi` (`mitcad-ffi-bridges`), `core/cpp` | Rust, C++ | CXX bridges: the `Kernel` on OCCT, the document API for C++. An rlib (mitcad#792), so that Cargo starts it on its dependencies' metadata. |
 | `core/ffi-staticlib` (`mitcad-ffi`) | Rust | The static library the application links (CMake target `mitcad_ffi`): `mitcad-ffi-bridges` with every Rust library it uses, no code of its own ([README](../core/ffi-staticlib/README.md)). |
@@ -677,7 +677,14 @@ design in a project.
   `measure` query places two selections) until no box is nearer than the
   distance found, keeping each pair's result by the picks' key of the
   measurement objects; the app draws the line between the closest points
-  with Print Analysis' overlay. No kernel method of its own.
+  with Print Analysis' overlay. No kernel method of its own. Interference
+  checks (mitcad#2664) are kept the same way with their bodies (none:
+  every body at the marker), but they are not drawn
+  (`AnalysisDef::is_drawn`): never shown, leaving the shown analysis
+  shown; the app runs one again when it is opened from the Analysis
+  folder, through the `interference` query (the kernel's
+  `interferences`), as Inspect › Interference runs it
+  (`CommandDef::keepsAnalysis`).
 - **Point clouds and Point Cloud Deviation** (mitcad#2240;
   `core/model/src/point_cloud_files.rs`,
   `core/model/src/document/point_clouds.rs`, `api/point_clouds.rs`): a
@@ -1521,6 +1528,17 @@ design in a project.
   lengths), so the feature still cuts once and joins once
   ([commands.md](../core/model-api/src/commands.md), "Mortise and
   Tenon").
+- **Wood Joint** (mitcad#2604, `core/model/src/features/wood_joint.rs`):
+  Mortise and Tenon's model for woodworking joints, no kernel method of
+  its own. Each kind (dado, rabbet, tongue and groove, bridle, box joint,
+  loose tenon, dowel) is a plan of pieces on the end face (rectangles or
+  circles, their middles, how much the holes are larger, blind or
+  through, loose or grown), and one pipeline shared with
+  `mortise_tenon.rs` (`EndFace`, `rectangle`, `extrude`,
+  `through_length`) cuts the holes into the other part and joins what
+  grows to the first, or cuts both parts and makes each loose piece a
+  new body ([commands.md](../core/model-api/src/commands.md), "Wood
+  Joint"). Not the assembly joints of `features/joint.rs`.
 - **Envelope** (mitcad#1271, `core/model/src/features/envelope.rs`,
   `features/envelope/wrap.rs`, `document/envelope.rs`): no kernel method
   of its own. The kernel tessellates the source (`Kernel::triangle_mesh`);
@@ -2011,8 +2029,17 @@ the `Shape` type.
   `BRepBndLib::AddOptimal` boxes the surface over the parameter rectangle
   the boundary spans (the whole surface on a face flagged as its natural
   restriction), so a fillet's corner plate trimmed from a larger surface
-  read millimetres larger than the body. The looser, quicker box that
-  holds a shape is `enclosing_box`.
+  read millimetres larger than the body. Sampling that rectangle beyond
+  the face, OCCT's box fails on a surface with no value there (mitcad#2633,
+  which left Section Analysis unable to cut a shelled body; an offset
+  surface, as a shell's inner faces have, has no value where the surface
+  it is offset from has no normal):
+  OCCT's box from the surface's own bounds stands in for it (an offset
+  surface's from its basis surface's poles), or, when that fails too,
+  every side is searched inside the face; a point inside the face where
+  the surface has no value makes the search untrusted like one cut short,
+  and without any OCCT box the failure stands. The looser, quicker box
+  that holds a shape is `enclosing_box`.
 - A shape also keeps its edges' middles and curves once worked out
   (`edge_middles`, `edge_geometries`) and a box that holds each face
   (`face_boxes`, `Kernel::face_boxes`, on all cores; faces of offset,
@@ -4077,11 +4104,30 @@ it and compares the two.
   needs nothing of `app/tutorials`, shows a card per tutorial in the
   page's center; a tutorial's progress, which its pages report through the
   bridge's `set_progress`, is a setting per tutorial id
-  (`TutorialSources`). The bridge's `query` (mitcad#2371) reads the
+  (`TutorialSources`); Continue goes on in the window whose design the
+  tutorial is open in or was left in, while that window shows the same
+  design (mitcad#2610). The bridge's `query` (mitcad#2371) reads the
   window's design through the model's allow-list of read-only queries
   (`tutorial_query`, `core/model-api/src/tutorial_bridge.rs`: `sketch`,
   `feature`, `bodies`, each answer cut to what a lesson checks); commands,
-  other queries and other designs are refused in words.
+  other queries and other designs are refused in words. Every tutorial
+  page is treated as someone else's (mitcad#2615, docs/tutorials.md
+  "What a page cannot do"): a tutorial's browser (`CefView` with a
+  bridge folder) loads nothing outside the folder and navigates nowhere
+  else, opens no popup, file, script or permission dialog, has no WebGL
+  and no WebRTC, and runs in a request context of its own in memory; a
+  web link the user clicked reaches the application through the page
+  widget's dynamic property (`webbrowser/TutorialPageRules.hpp`, so the
+  component's interface stays as it is) and opens in the system's
+  browser after a question naming the site. The bridge limits a page's
+  calls (`BridgeLimiter`: 20 a second, 4 of each in flight, 4 MB), a
+  page's texts are escaped and cut in the log, and the module's scripted
+  clicks (the UI tests' `clickLink`) need a test run and a one-off key.
+  The application records the tutorial's own document (its
+  `m_mcpDocumentId`) and closes the pane when another design is installed
+  in its window; `open_design` opens only the manifest's `designs`, into
+  that window. A module without these rules (no
+  `mitcad_tutorial_page_guards`) shows no tutorials.
 - **Texture sources** (`app/materials/`, mitcad#315): where Edit
   Appearances finds sets of texture maps. Each source is one class behind
   `TextureSource` (asynchronous categories, search, thumbnails and fetch;
@@ -4135,7 +4181,13 @@ it and compares the two.
   writes a zip of the open design and the files it refers to inside its
   project, with the report, the screenshot and the log, into `reports`;
   the user attaches it to the issue or e-mails it, and the body only
-  names it.
+  names it. Send Feedback on a Region (F9, mitcad#2616) only changes the
+  screenshot and the form's start: an overlay of its own windows
+  (`RegionPicker`, holding the mouse and the keyboard) picks the region,
+  and its picture comes from the screens (`QScreen::grabWindow`) once the
+  overlay is hidden, so that separate windows and the OpenGL view are in
+  it; where the system does not give the screen (macOS without the Screen
+  Recording permission, Wayland), from the main window's own picture.
 - **3D view** (`app/OcctViewer`): an OCCT `V3d_View` in a
   `QOpenGLWidget`; OCCT renders into FBOs and needs a native drawable to
   make Qt's context current on. Linux (mitcad#2031): OCCT's port is built

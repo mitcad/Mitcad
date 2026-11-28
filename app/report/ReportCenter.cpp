@@ -12,6 +12,8 @@
 #include <vector>
 
 #include <QApplication>
+#include <QGuiApplication>
+#include <QKeySequence>
 #include <QCheckBox>
 #include <QClipboard>
 #include <QDateTime>
@@ -24,6 +26,7 @@
 #include <QLocale>
 #include <QMainWindow>
 #include <QMessageBox>
+#include <QPixmap>
 #include <QPushButton>
 #include <QScreen>
 #include <QSettings>
@@ -44,7 +47,10 @@
 #include "framework/HangWatchdog.hpp"
 #include "framework/SessionLog.hpp"
 #include "framework/TestSync.hpp"
+#include "platform/MacChrome.hpp"
 #include "report/CrashHandler.hpp"
+#include "report/FeedbackRegion.hpp"
+#include "report/RegionPicker.hpp"
 #include "report/ReportDialogs.hpp"
 #include "mcp/LogRing.hpp"
 #include "render/RenderDevice.hpp"
@@ -67,6 +73,9 @@ constexpr int kReportLogLines = 150;
 constexpr int kZipLogLines = 5000;
 // Whether the start offers the crashes of earlier runs.
 bool g_offerEarlier = true;
+// Send Feedback on a Region (mitcad#2616): the time the system takes to
+// draw again what the hidden overlay covered, before the screen is read.
+constexpr int kRegionSettleMs = 200;
 
 void notePanic(const char* message, std::size_t length) { crash::noteMessage(message, length); }
 
@@ -156,6 +165,23 @@ void ReportCenter::registerCommands(CommandRegistry& registry) {
   feedback.duringCommands = true;
   feedback.run = [this] { sendFeedback(); };
   registry.add(feedback);
+
+  // Send Feedback on a Region (mitcad#2616): F9, then a drag over MitCad.
+  m_registry = &registry;
+  CommandDef region;
+  region.id = QStringLiteral("help.send_feedback_region");
+  region.name = tr("Send Feedback on a Region…");
+  region.icon = QStringLiteral("feedback");
+  region.kind = CommandDef::Kind::Action;
+  region.mode = CommandDef::Mode::Any;
+  region.shortcut = QKeySequence(Qt::Key_F9);
+  region.tooltip = tr("Reports a problem with the part of MitCad you drag over as the screenshot");
+  region.keywords = {QStringLiteral("bug"),        QStringLiteral("report"), QStringLiteral("issue"),
+                     QStringLiteral("screenshot"), QStringLiteral("region"), QStringLiteral("area"),
+                     QStringLiteral("snip"),       QStringLiteral("problem"), QStringLiteral("feedback")};
+  region.duringCommands = true;
+  region.run = [this] { sendFeedbackOnRegion(); };
+  registry.add(region);
 }
 
 void ReportCenter::setOfferEarlierCrashes(bool offer) { g_offerEarlier = offer; }
@@ -248,7 +274,10 @@ QString ReportCenter::diagnostics() const {
 
 void ReportCenter::sendFeedback() {
   // The window as it is, before the form covers it.
-  const QImage screenshot = m_window.grab().toImage();
+  showFeedbackForm(m_window.grab().toImage(), report::FeedbackStart::Window);
+}
+
+void ReportCenter::showFeedbackForm(const QImage& screenshot, report::FeedbackStart start) {
   const bool designOpen = m_host.designOpen && m_host.designOpen();
   report::FeedbackDialog* form = nullptr;
   const auto preview = [this, &form](const report::Feedback& feedback) {
@@ -269,13 +298,109 @@ void ReportCenter::sendFeedback() {
                                        feedback.diagnostics, true, true};
     return previewAndSend(report, feedback.screenshot, form, feedback.includeDesign, feedback.includeLogs);
   };
-  report::FeedbackDialog dialog(screenshot, designOpen, preview, &m_window);
+  report::FeedbackDialog dialog(screenshot, designOpen, preview, &m_window, start);
   form = &dialog;
   prepareModal(&dialog);
   qInfo().noquote() << QStringLiteral("Send Feedback: the form shows");
   if (execDialog(&dialog) != QDialog::Accepted) {
     qInfo().noquote() << QStringLiteral("Send Feedback cancelled");
   }
+}
+
+// ---------------------------------------------------------------------------
+// Send Feedback on a Region (mitcad#2616)
+
+void ReportCenter::sendFeedbackOnRegion() {
+  if (m_regionPicker) {
+    // Already picking: the key held repeats, or the menu chose it again.
+    return;
+  }
+  if (QApplication::activeModalWidget() != nullptr) {
+    qInfo().noquote() << QStringLiteral("Feedback region: not while a dialog is open");
+    return;
+  }
+  if (QGuiApplication::mouseButtons() != Qt::NoButton || QWidget::mouseGrabber() != nullptr) {
+    qInfo().noquote() << QStringLiteral("Feedback region: not during a drag");
+    return;
+  }
+  QWidget* host = m_window.window();
+  // What the overlay covers: MitCad's windows that show (the main window,
+  // Floating chrome's panels and cards, the chat card, a dialog that is not
+  // modal).
+  QRect area;
+  for (QWidget* top : QApplication::topLevelWidgets()) {
+    const Qt::WindowType type = top->windowType();
+    if (!top->isVisible() || top->isMinimized() || type == Qt::ToolTip || type == Qt::Popup ||
+        top->testAttribute(Qt::WA_DontShowOnScreen)) {
+      continue;
+    }
+    area = area.isNull() ? top->frameGeometry() : area.united(top->frameGeometry());
+  }
+  QList<QRect> screens;
+  for (const QScreen* screen : QGuiApplication::screens()) {
+    screens.append(screen->geometry());
+  }
+  // The command's key, as Keyboard Shortcuts has it: held through the drag,
+  // its release takes the region.
+  int heldKey = Qt::Key_unknown;
+  if (m_registry != nullptr) {
+    const QKeySequence key = m_registry->shortcut(QStringLiteral("help.send_feedback_region"));
+    if (!key.isEmpty()) {
+      heldKey = key[static_cast<uint>(key.count() - 1)].key();
+    }
+  }
+  auto* picker = new report::RegionPicker(area, screens, heldKey, host);
+  m_regionPicker = picker;
+  connect(picker, &report::RegionPicker::picked, this, [this, picker](const QRect& region) {
+    picker->deleteLater();
+    regionPicked(region);
+  });
+  connect(picker, &report::RegionPicker::canceled, this, [picker] { picker->deleteLater(); });
+  if (!picker->start()) {
+    qInfo().noquote() << QStringLiteral("Feedback region: canceled (MitCad's windows are on no screen)");
+    picker->deleteLater();
+    return;
+  }
+  qInfo().noquote() << QStringLiteral("Feedback region: picking");
+}
+
+void ReportCenter::regionPicked(const QRect& region) {
+  const QPoint at = m_window.mapFromGlobal(region.topLeft());
+  qInfo().noquote() << QStringLiteral("Feedback region: %1x%2 at the window's (%3, %4)")
+                           .arg(region.width())
+                           .arg(region.height())
+                           .arg(at.x())
+                           .arg(at.y());
+  // The overlay is hidden: the picture once the system has drawn what it
+  // covered again, without the dimming and the rectangle.
+  TestSync::singleShot(kRegionSettleMs, this, [this, region] {
+    QImage image;
+    QString source;
+    if (mac::screenCaptureAllowed()) {
+      image = report::grabScreenRegion(region);
+      source = QStringLiteral("the screen");
+    }
+    if (image.isNull()) {
+      // macOS without the Screen Recording permission, a session that does
+      // not give the screen (Wayland): the window's own picture, cropped to
+      // the region (the window's separate panels are not in it).
+      const QPixmap window = m_window.grab();
+      const qreal ratio = window.devicePixelRatio();
+      const QRect inWindow = QRect(m_window.mapFromGlobal(region.topLeft()), region.size()).intersected(m_window.rect());
+      if (!inWindow.isEmpty()) {
+        const QRect pixels(qRound(inWindow.x() * ratio), qRound(inWindow.y() * ratio),
+                           qRound(inWindow.width() * ratio), qRound(inWindow.height() * ratio));
+        image = window.toImage().copy(pixels);
+        image.setDevicePixelRatio(1.0);
+      }
+      source = QStringLiteral("the window (the screen could not be read)");
+    }
+    qInfo().noquote() << QStringLiteral("Feedback region image: %1x%2 from %3")
+                             .arg(image.width())
+                             .arg(image.height())
+                             .arg(source);
+    showFeedbackForm(image, report::FeedbackStart::Region);
+  });
 }
 
 // ---------------------------------------------------------------------------

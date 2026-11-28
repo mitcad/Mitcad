@@ -787,14 +787,25 @@ the body and of its faces and their textures' base colour images
   and box (turned by the rotation, divided by the size); a normal map's
   tangent frame is the two directions read by Attribute nodes, turned by
   the rotation and made perpendicular to the normal as box's axes are.
+  The grain coordinates carry the body's grain offset (mitcad#2605,
+  `grainOffset` of its id, which is its `grainKey`: uid, `@` and the
+  occurrence's path; commands.md "Built-in wood and panel textures"), so
+  separate bodies of one wood show different parts of its images and
+  every map of the set reads the same part. Such a mesh is the body's
+  own: `BodyData::lookKey` names the body when its material or a face
+  group's lies along the grain, so occurrences of one mesh in a grain
+  look are not instanced; other looks share their Cycles meshes as
+  before.
 - **Textures in the shaded view** (mitcad#2186,
   `app/view/TexturedBody.hpp`): a body whose appearance or a face's has a
   texture with a found base colour image (not by the mesh's own texture
   coordinates) is drawn as a `TexturedBody` in the shaded styles: its
   faces' display meshes as OCCT's `StdPrs_ShadedShape` draws them, but
   with texture coordinates of MitCad's own per vertex (the projection as
-  the renderer's: grain by the face's directions, planar, or box by the
-  vertex normal; turned and divided by the size), in one group per look
+  the renderer's: grain by the face's directions with the body's grain
+  offset, `grainOffset` of the key the render scene gives the same body,
+  mitcad#2605; planar, or box by the vertex normal; turned and divided by
+  the size), in one group per look
   (the body's, each face group's in its colour or texture), and the
   lines as `FineEdges` draws them. The image is an OCCT texture made once
   per file (`viewTexture`: at most 2048 pixels a side, sRGB, repeated,
@@ -803,7 +814,8 @@ the body and of its faces and their textures' base colour images
   base colour image is drawn there; the normal and roughness maps are
   the rendered view's. The component palette, see-through and ghosted
   bodies stay without texture. The view logs `View textured body <uid>:
-  <n> textured looks` once per body and look count (UI tests). Before,
+  <n> textured looks, grain offset <u> <v>` once per body and look count
+  (UI tests). Before,
   the shaded view drew no textures, as OCCT generates texture
   coordinates from object coordinates only in its fixed-function
   pipeline.
@@ -934,18 +946,37 @@ the body and of its faces and their textures' base colour images
   Birch (six panels; the design names the id and embeds no image) and a
   reference panel in a plain copy of the same plywood. In the light and
   the dark color scheme the shaded view draws each cabinet body textured
-  (`View textured body F1.b0: 1 textured looks` …) and the panel in its
+  (`View textured body F1.b0: 1 textured looks` …), each panel with the
+  model's grain offset of its uid (mitcad#2605: neighbouring panels show
+  different parts of the images), and the panel in its
   colour; where the view shows the cabinet, neighbouring pixels differ
   by the grain clearly more than on the panel. The rendered view sends
   the bodies as `plywood_birch` with every image found and renders the
   cabinet with the same difference against the panel. Its pictures stay
   in `build/ui-wood-textures-pictures`.
+- `tools/ui-wood-grain-reported-test.sh` (mitcad#2624, GitHub
+  mitcad/Mitcad#663; the reported design from `MITCAD_MITCAD_REPORTED`,
+  skipped without it): two Pine plates joined along their long sides.
+  Each is drawn with a grain offset of its own. Seen from below
+  (orthographic), the pine's stripes run along the joint and wave along
+  it, together on one board; in windows 30 mm long the stripes' direction
+  (the pixels' structure tensor, smoothed over 5 x 5) in a 10 mm strip
+  on each side of the joint differs by at least 3 degrees and twice as
+  much as between two strips the same distance apart on one plate. A
+  redraw (Wireframe and back) shows the same, the rendered view (32
+  samples) differs across the joint by at least 1 degree more than
+  within a plate, and after a move of one plate, a save and a reopen
+  each body keeps its offset. Pictures in
+  `build/ui-wood-grain-reported-pictures`.
 - `app.unit` `grainProjectionTests` (`app/tests/grain_projection.cpp`):
   the application's grain directions agree with the model's tests
   (`core/model-base/src/appearance/grain.rs`): a panel's faces and edges
   along its length, its ends along their own longest side, a turned or
   finely meshed face, square faces, a dowel, and a panel's mesh's
-  coordinates per face.
+  coordinates per face; the grain offsets (mitcad#2605) are the model's
+  values for the same keys, far apart for two boards side by side, shift
+  every coordinate of a mesh by the same amount without changing its
+  directions, and give a body along the grain a look key of its own.
 
 Decisions and limits:
 
@@ -1371,7 +1402,18 @@ device renders on the CPU, as before.
   Open Image Denoise on NVIDIA GeForce RTX 3080 (CUDA) failed (…)"; the
   `device` event's `denoiser_device`, and the `denoiser` event where there
   is one, then name the CPU); only when that one cannot start or
-  fails too does the CPU take over, with the message above. A GPU that
+  fails too does the CPU take over, with the message above giving both
+  failures, the first one first ("… failed (…), and again with denoising
+  on the CPU (…)"). The retry starts only after the failed renderer has
+  ended (mitcad#2613): until its Cycles session ends it keeps the GPU's
+  memory and a reference to the device's CUDA context, so a second
+  session on the same GPU shares a context that a sticky CUDA error (an
+  illegal address, a launch timeout) has made unusable, and fails at its
+  first call into it (`cuStreamCreate`) with that error, or gets only the
+  memory the failed one left (a 4 GB GPU). Once the last session has
+  released the context, the retry gets a fresh one. Calls in between
+  reach a stand-in and are replayed with the rest. The CPU, in contrast,
+  starts before the failed renderer ends. A GPU that
   already denoises on the CPU goes to the CPU at once. Each step happens
   at most once. Every failure of a GPU-denoising GPU gets the retry, not
   only the denoiser's: when Open Image Denoise runs on the rendering GPU,
@@ -2818,8 +2860,10 @@ scope; they are not inferred from the M1 tests. Qt remains the default UI.
   material changes only it, hiding and showing it needs no mesh, another
   mesh changes only it, and a released mesh is gone; a face with a
   material of its own, another material of that face and none again each
-  change only that body and no mesh (mitcad#53); then the last scene
-  renders. An orthographic view whose eye stands inside the block renders
+  change only that body and no mesh (mitcad#53); two bodies of one mesh
+  in a look along the grain take a Cycles mesh each, none instanced, and
+  the same bodies again change nothing (mitcad#2605: each its own grain
+  offset); then the last scene renders. An orthographic view whose eye stands inside the block renders
   as one from far outside it (mitcad#215: the mean difference of the
   images below 2 of 255). With the ground on, the block covers a good part
   of the image from below the ground in perspective, looking up in

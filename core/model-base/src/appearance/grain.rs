@@ -26,6 +26,9 @@
 //! 5. A point p's coordinates are (p · u, p · v) in mm: faces in one plane
 //!    with the same directions continue each other's image. The texture's
 //!    rotation and size then apply as in every projection.
+//! 6. Each placed body adds an offset of its own to its points' grain
+//!    coordinates ([`grain_offset`], mitcad#2605), so neighbouring bodies
+//!    of one wood do not read as one board.
 
 use mitcad_vec3::{add, cross, dot, norm, scale, sub};
 
@@ -104,6 +107,57 @@ pub fn grain_axes(triangles: impl IntoIterator<Item = [[f64; 3]; 3]>) -> ([f64; 
 /// The grain coordinates (mm) of a point: along u and along v.
 pub fn grain_point(axes: &([f64; 3], [f64; 3]), p: [f64; 3]) -> [f64; 2] {
     [dot(p, axes.0), dot(p, axes.1)]
+}
+
+/// The span (mm) a body's grain offset lies in along u and along v
+/// ([`grain_offset`]): several repeats of every built-in set, so the offset
+/// modulo the repeat spreads over the whole image.
+pub const OFFSET_SPAN: f64 = 10_000.0;
+
+/// What names a placed body for its grain offset ([`grain_offset`]): the
+/// body's uid (`F3.b0`), with `@` and the path of occurrence uids that
+/// places it (`F3.b0@O1/O4`) when an occurrence does; as the shaded view
+/// and the rendered view name their bodies.
+pub fn grain_key(body: &str, occurrence: &str) -> String {
+    if occurrence.is_empty() {
+        body.to_owned()
+    } else {
+        format!("{body}@{occurrence}")
+    }
+}
+
+/// A placed body's offset into the images it lays along the grain
+/// (mitcad#2605), in mm along u and along v: added to each of its points'
+/// grain coordinates before the rotation and the repeat apply, so separate
+/// bodies of one wood show different parts of its images instead of one
+/// board's, while each keeps its repeat size and grain directions. It
+/// depends on the body's key ([`grain_key`]) only, so a body keeps it when
+/// it is drawn again, moved or the design reopened; all maps of a set and
+/// every face of the body take the same one, so faces in one plane still
+/// continue each other's image.
+///
+/// The key's UTF-8 bytes by 64-bit FNV-1a, mixed by MurmurHash3's final
+/// step (FNV-1a alone moves little for keys differing in their last
+/// character, `F1.b0` and `F1.b1`); the low 32 bits over 2³² times
+/// [`OFFSET_SPAN`] along u, the high 32 bits along v. The application
+/// (`app/render/GrainProjection.hpp`, `grainOffset`) follows it exactly.
+pub fn grain_offset(key: &str) -> [f64; 2] {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in key.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash ^= hash >> 33;
+    hash = hash.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    hash ^= hash >> 33;
+    hash = hash.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+    hash ^= hash >> 33;
+    let low = (hash & 0xffff_ffff) as f64;
+    let high = (hash >> 32) as f64;
+    [
+        low / 4_294_967_296.0 * OFFSET_SPAN,
+        high / 4_294_967_296.0 * OFFSET_SPAN,
+    ]
 }
 
 /// Whether the component of largest magnitude is negative.
@@ -272,5 +326,56 @@ mod tests {
         }
         let (u, _) = grain_axes(triangles);
         assert!(close(u, [0.0, 0.0, 1.0]), "{u:?}");
+    }
+
+    /// Two bodies of one wood side by side (mitcad#2605: two pine boards
+    /// of a reported design, `F3.b0` and `F4.b0`, read as one board): each
+    /// takes its own part of the images. The values are fixed (the
+    /// application's `grainProjectionTests` checks the same ones), so a
+    /// body keeps its part on every redraw, placement and reopening, and
+    /// keys that differ only in their last character, or by the occurrence
+    /// that places a body, still get far-apart parts.
+    #[test]
+    fn separate_bodies_take_different_parts_of_the_grain() {
+        let near =
+            |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).abs() < 1e-6 && (a[1] - b[1]).abs() < 1e-6;
+        let first = grain_offset("F3.b0");
+        let second = grain_offset("F4.b0");
+        assert!(
+            near(first, [8159.940994810313, 5121.577237732708]),
+            "{first:?}"
+        );
+        assert!(
+            near(second, [1406.768704764545, 9617.54277581349]),
+            "{second:?}"
+        );
+        assert!(near(grain_offset("F3.b0"), first));
+        assert_eq!(grain_key("F3.b0", ""), "F3.b0");
+        assert_eq!(grain_key("F3.b0", "O1/O4"), "F3.b0@O1/O4");
+        let placed = grain_offset(&grain_key("F3.b0", "O1/O4"));
+        assert!(
+            near(placed, [6916.328517254442, 6243.558961432427]),
+            "{placed:?}"
+        );
+        // Within one repeat of the woods (800 mm) the parts are far apart:
+        // the distance modulo the repeat, the shorter way round.
+        let apart = |a: [f64; 2], b: [f64; 2], repeat: f64| {
+            (0..2)
+                .map(|k| {
+                    let d = (a[k] - b[k]).rem_euclid(repeat);
+                    d.min(repeat - d)
+                })
+                .fold(0.0, f64::max)
+        };
+        assert!(apart(first, second, 800.0) > 100.0);
+        let keys = ["F1.b0", "F1.b1", "F2.b0", "F3.b0@O1", "F3.b0@O2"];
+        for (i, a) in keys.iter().enumerate() {
+            for b in &keys[i + 1..] {
+                let d = apart(grain_offset(a), grain_offset(b), 800.0);
+                assert!(d > 50.0, "{a} and {b}: {d} mm");
+            }
+            let [u, v] = grain_offset(a);
+            assert!((0.0..OFFSET_SPAN).contains(&u) && (0.0..OFFSET_SPAN).contains(&v));
+        }
     }
 }

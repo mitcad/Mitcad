@@ -476,7 +476,13 @@ QString choiceLabel(const QString& label) {
     QT_TRANSLATE_NOOP("Choice", "Shell"), QT_TRANSLATE_NOOP("Choice", "Outward"),
     QT_TRANSLATE_NOOP("Choice", "Inward"), QT_TRANSLATE_NOOP("Choice", "Both Ways"),
     QT_TRANSLATE_NOOP("Choice", "Both Pieces"), QT_TRANSLATE_NOOP("Choice", "Above the Plane"),
-    QT_TRANSLATE_NOOP("Choice", "Below the Plane")};
+    QT_TRANSLATE_NOOP("Choice", "Below the Plane"),
+    // commands/WoodJointCommands.cpp: Joint's types (mitcad#2604).
+    QT_TRANSLATE_NOOP("Choice", "Dado"), QT_TRANSLATE_NOOP("Choice", "Rabbet"),
+    QT_TRANSLATE_NOOP("Choice", "Tongue and Groove"), QT_TRANSLATE_NOOP("Choice", "Bridle"),
+    QT_TRANSLATE_NOOP("Choice", "Box Joint"), QT_TRANSLATE_NOOP("Choice", "Loose Tenon"),
+    QT_TRANSLATE_NOOP("Choice", "Dowel"), QT_TRANSLATE_NOOP("Choice", "Mortise and Tenon"),
+    QT_TRANSLATE_NOOP("Choice", "Dogbone")};
 
 // Colours of the selection inputs in order, unless an input sets its own
 // (the role table's, shared with the AppKit panel).

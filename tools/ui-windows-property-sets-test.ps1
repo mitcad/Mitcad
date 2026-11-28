@@ -34,7 +34,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{ 'view.find_in_design' = 'F7'; 'view.property_sets' = 'F8'; 'build.parts_list' = 'F9'
+Ui-Init $App $Out $QtBin @{ 'view.find_in_design' = 'F7'; 'view.property_sets' = 'F8'; 'build.parts_list' = 'F12'
   'file.design_properties' = 'F11' } -StepPause 0
 $cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
   ForEach-Object { Join-Path (Split-Path $script:UiApp) $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
@@ -155,7 +155,7 @@ Ui-Step 'close (Esc)'                    { Ui-Key 'Escape' }
 Write-Host '--- 5. The Bill of Materials'' property columns'
 Ui-FocusMain
 Ui-Mark
-Ui-Step 'Bill of Materials (F9)'                { Ui-Key 'F9' }
+Ui-Step 'Bill of Materials (F12)'                { Ui-Key 'F12' }
 Ui-FocusDialog '^Bill of Materials$'
 Ui-ExpectNew 'Build parts list: ' 'the list opened'
 Ui-Mark

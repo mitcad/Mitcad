@@ -17,7 +17,7 @@
 #      (its command by a key of our own, F8) hides both planes, greys their
 #      rows and keeps the sketches and the origin; the design saved keeps
 #      it as display state and no feature's light bulb; on again shows both
-#      planes. Sketches (F9) and Origins (F7) the same way, the Origin
+#      planes. Sketches (F12) and Origins (F7) the same way, the Origin
 #      folder's light bulb staying on.
 # tools/ui-windows-view-show-test.ps1 does the same in the Windows VM.
 #
@@ -79,7 +79,7 @@ EOF
 # View › Show's commands by keys of our own, as Tools > Keyboard Shortcuts
 # saves them.
 mkdir -p "$XDG_CONFIG_HOME/Mitcad"
-printf '[shortcuts]\nview.show_origins=F7\nview.show_construction=F8\nview.show_sketches=F9\n' \
+printf '[shortcuts]\nview.show_origins=F7\nview.show_construction=F8\nview.show_sketches=F12\n' \
   > "$XDG_CONFIG_HOME/Mitcad/Mitcad.conf"
 
 # last_since "prefix": the last line since the mark that begins with it.
@@ -185,10 +185,10 @@ echo "ok   the planes' rows no longer greyed"
 
 echo "--- Sketches and Origins"
 ui_mark
-ui_step "View › Show › Sketches off (F9)"  ui_key F9
+ui_step "View › Show › Sketches off (F12)"  ui_key F12
 ui_expect_new "Sketches shown: none" "no sketch drawn"
 ui_mark
-ui_step "View › Show › Sketches on (F9)"   ui_key F9
+ui_step "View › Show › Sketches on (F12)"   ui_key F12
 ui_expect_new "Sketches shown: F2, F4" "both sketches drawn again"
 ui_mark
 ui_step "View › Show › Origins off (F7)"   ui_key F7

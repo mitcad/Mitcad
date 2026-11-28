@@ -38,6 +38,9 @@ pub struct Outcome {
     pub alone: bool,
     /// Its resource locks.
     pub locks: Vec<String>,
+    /// A test that did not pass: the lines of its log that name its
+    /// failures (`ctest::failure_lines`, mitcad#2614).
+    pub quotes: Vec<String>,
 }
 
 /// The run as a whole.
@@ -322,6 +325,9 @@ pub fn render(s: &Summary) -> String {
                     let _ = write!(out, " (log {})", log.display());
                 }
                 out.push('\n');
+                for quote in &o.quotes {
+                    let _ = writeln!(out, "      | {quote}");
+                }
             }
         }
     }
@@ -358,6 +364,20 @@ pub fn results_tsv(outcomes: &[Outcome]) -> String {
             mib(o.predicted_memory),
             u8::from(o.lane)
         );
+    }
+    out
+}
+
+/// The failure lines of the tests that did not pass (`failures.tsv`,
+/// mitcad#2614), tab-separated with a header: the test, its result, a line
+/// of its log that names a failure; a row per line, a test without such
+/// lines left out. `tools/check-all.sh` quotes them in its summary.
+pub fn failures_tsv(outcomes: &[Outcome]) -> String {
+    let mut out = String::from("name\tresult\tline\n");
+    for o in outcomes.iter().filter(|o| !o.kind.ok()) {
+        for quote in &o.quotes {
+            let _ = writeln!(out, "{}\t{}\t{quote}", o.name, o.kind.label());
+        }
     }
     out
 }
@@ -401,6 +421,7 @@ mod tests {
         outcomes[1].before = vec![0];
         outcomes[2].lane = true;
         outcomes[2].note = "exit 1".into();
+        outcomes[2].quotes = vec!["x.cpp:3: check failed: a == b".into()];
         let change = ("core.model".to_owned(), "wall 100 s -> 318 s".to_owned());
         let changes = [change];
         let summary = Summary {
@@ -415,6 +436,9 @@ mod tests {
             ..Summary::default()
         };
         let text = render(&summary);
+        // The failure with the line of its log that names it (mitcad#2614).
+        let quoted = "app.ui-x [priority lane]: exit 1\n      | x.cpp:3: check failed: a == b\n";
+        assert!(text.contains(quoted), "{text}");
         assert!(text.contains("4 tests in 10 min 0 s"), "{text}");
         assert!(text.contains("passed 2, failed 1, not run 1"), "{text}");
         assert!(text.contains("0:00 - 4:12  core.cargo_build"), "{text}");
@@ -434,6 +458,13 @@ mod tests {
             .filter_map(|l| l.rsplit('\t').next())
             .collect();
         assert_eq!(lanes, ["0", "0", "1", "0"]);
+        // The failures' lines, a row each; a failure without lines (the
+        // test that never ran) has none.
+        let failures = failures_tsv(&outcomes);
+        assert_eq!(
+            failures,
+            "name\tresult\tline\napp.ui-x\tfailed\tx.cpp:3: check failed: a == b\n"
+        );
     }
 
     #[test]

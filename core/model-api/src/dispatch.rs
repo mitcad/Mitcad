@@ -91,11 +91,11 @@ pub(super) trait DispatchOps<K: Kernel> {
     /// The families of commands besides the document's own (`Command`,
     /// which takes every other name, so that its error lists its commands
     /// for an unknown one). A new family is one row here.
-    fn command_families() -> [CommandFamily<K>; 44];
+    fn command_families() -> [CommandFamily<K>; 45];
 }
 
 impl<K: Kernel> DispatchOps<K> for Document<K> {
-    fn command_families() -> [CommandFamily<K>; 44] {
+    fn command_families() -> [CommandFamily<K>; 45] {
         [
             // Gears: the motion link of a mesh (mitcad#472, `gears.rs`),
             // run as the `add_motion_link` worked out from the gears. It has
@@ -493,6 +493,15 @@ impl<K: Kernel> DispatchOps<K> for Document<K> {
                     super::construction_sets::run(doc, parse(value, "command")?)
                 },
             },
+            // Gear Drive: placed drives of gears with their joints and
+            // motion links (mitcad#2608, `gear_drives.rs`).
+            CommandFamily {
+                names: super::gear_drives::GearDriveCommand::NAMES,
+                prefix: None,
+                run: |doc: &mut Self, value: Value| -> Result<Value, ApiError> {
+                    super::gear_drives::run(doc, parse(value, "command")?)
+                },
+            },
         ]
     }
 }
@@ -633,7 +642,7 @@ mod tests {
             ),
             "{error}"
         );
-        assert!(error.ends_with("`add_glue_flap`"), "{error}");
+        assert!(error.ends_with("`keep_fields_not_read`"), "{error}");
         let error = doc
             .command(r#"{"cmd": "sketch.fly"}"#)
             .unwrap_err()

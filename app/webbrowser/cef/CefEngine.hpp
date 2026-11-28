@@ -28,6 +28,11 @@ bool startEngine(const QString& componentFolder, const QString& profileFolder, Q
 bool engineRunning();
 // MitCad's request context: its own cache and cookies in the profile.
 CefRefPtr<CefRequestContext> requestContext();
+// A new request context for one tutorial's page (mitcad#2615): in memory
+// (no cookies, storage or cache shared with Component from Web, another
+// tutorial or a later run), no prefetching or preconnecting, WebRTC only
+// through a proxy (no local addresses).
+CefRefPtr<CefRequestContext> tutorialRequestContext();
 // Asks the loop to run soon: CEF has work (after a browser's creation).
 void pumpSoon();
 

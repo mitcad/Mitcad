@@ -22,7 +22,7 @@ const std::pair<const char*, const char*> kShortLabels[] = {
     {"insert.mesh", QT_TRANSLATE_NOOP("RibbonLabel", "Mesh")},
     {"insert.dxf", QT_TRANSLATE_NOOP("RibbonLabel", "DXF")},
     {"file.render_image", QT_TRANSLATE_NOOP("RibbonLabel", "Render")},
-    // Surface and Sheet Metal
+    // Surface and Sheet Parts
     {"surface.extrude", QT_TRANSLATE_NOOP("RibbonLabel", "Extrude")},
     {"sheet.flat_pattern", QT_TRANSLATE_NOOP("RibbonLabel", "Flat")},
     {"sheet.rules", QT_TRANSLATE_NOOP("RibbonLabel", "Rules")},

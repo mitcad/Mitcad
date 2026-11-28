@@ -98,6 +98,7 @@
           "group": "ASSEMBLE",
           "entries": [
             {"command": "solid.new_component", "button": true},
+            "assemble.replace_component",
             "-",
             {"command": "assemble.joint", "button": true},
             "assemble.as_built_joint",
@@ -283,7 +284,7 @@
       ]
     },
     {
-      "tab": "SHEET METAL",
+      "tab": "SHEET PARTS",
       "groups": [
         {
           "group": "CREATE",
@@ -305,6 +306,7 @@
           "entries": [
             "sheet.cut",
             "sheet.perforate",
+            "sheet.bead",
             "-",
             "sheet.corner_relief",
             "sheet.corner_round",
@@ -405,6 +407,7 @@
           "entries": [
             {"command": "build.connector", "button": true},
             {"command": "build.fasteners", "button": true},
+            {"command": "build.joint", "button": true},
             "build.swap_fastener"
           ]
         },
@@ -1025,6 +1028,8 @@
         "sketch.paste",
         "sketch.delete",
         "-",
+        "edit.invert_selection",
+        "-",
         "solid.parameters",
         "solid.configurations",
         "view.search_timeline",
@@ -1152,6 +1157,7 @@
         "help.open_log_folder",
         "help.check_updates",
         "help.send_feedback",
+        "help.send_feedback_region",
         "help.discord",
         "-",
         {"extra": "about"},

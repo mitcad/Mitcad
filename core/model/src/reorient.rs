@@ -899,6 +899,8 @@ pub(crate) fn turn_analysis(def: &mut AnalysisDef, ctx: &Turned<'_>) -> bool {
         }
         // Bodies and faces by their names (mitcad#2517): nothing turns.
         AnalysisDef::Curvature(_) | AnalysisDef::Isocurve(_) | AnalysisDef::Environment(_) => false,
+        // Bodies by their uids (mitcad#2664): nothing turns.
+        AnalysisDef::Interference(_) => false,
     }
 }
 

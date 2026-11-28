@@ -1,0 +1,125 @@
+# SPDX-License-Identifier: MIT
+# Profile Boundary (mitcad#2596, after mitcad#2551 and GitHub
+# mitcad/Mitcad#712): curves of the face's outline a sketch got when it was
+# made bound profiles once chosen, on sketch-profile-boundary.json (a
+# 60 x 40 x 20 block, Body1, with four bosses of diameter 8 and height 5
+# about (15, 10), (45, 10), (15, 30) and (45, 30) on its top face; the
+# sketch's x and y there are the design's):
+#   1. Create Sketch on the block's top face, the preference Project the
+#      face's edges into a sketch on a face on (the wrapper sets
+#      MITCAD_SKETCH_PROJECT_FACE=1): Sketch3 starts with the face's
+#      outline, its four lines and the four bosses' circles.
+#   2. A rectangle drawn around the bosses, (4, 3) to (56, 37): two
+#      profiles, the rectangle (the circles of the outline do not split
+#      it) and the face's leftover around it.
+#   3. The four circles selected with a window (8, 5) to (52, 35), which
+#      takes sketch geometry wholly inside it and no body edges (the
+#      bosses' top edges lie over the circles in this view, so a click on a
+#      rim takes the edge), then Profile Boundary: one undo step, and six
+#      profiles (the rectangle less four holes, the four discs, the
+#      leftover). Undo gives the two back, Redo the six.
+#   4. Finish; Extrude: a click between the bosses takes the rectangle with
+#      its holes; 8 mm, OK: the Join adds (52 x 34 - 4 x 16 pi) x 8 =
+#      12535.50 mm3 and leaves the bosses' footprints clear (filled, the
+#      plate would cover the bosses: 62144 mm3 in all). Undo takes the
+#      Extrude back.
+# A new Extrude starts at 0 mm and waits for a distance (mitcad#2481), so
+# that typing it makes the first preview.
+# Run by tools/ui-sketch-profile-boundary-test.sh (Linux).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+expect-model-bodies 1 49005.30964914873
+
+# 1. Create Sketch on the top face: the outline with the circles.
+mark
+command sketch.create
+wait-log '^Create Sketch: select a plane'
+wait-log '^Pick face F2[.]b0/F2:end[(]'
+mark
+click-logged '^Pick face F2[.]b0/F2:end[(]'
+wait-log '^Sketch started on '
+wait-log '^Sketch Sketch3 starts with the face.s outline: c[0-9]+(, c[0-9]+){7}, p'
+wait-log '^Sketch Sketch3: 1 linked projection\(s\)'
+wait-idle
+
+# 2. A rectangle around the bosses is one profile.
+mark
+command sketch.rectangle
+wait-log '^Sketch tool 2-Point Rectangle'
+wait-idle
+sketch-click 4 3
+sketch-click 56 37
+wait-log '^Added rectangle '
+key Escape
+wait-log '^Sketch tool ended: 2-Point Rectangle'
+wait-idle
+expect-profiles 2
+
+# 3. The four circles bound profiles once chosen; undo and redo. A window
+# dragged to the right around them, from inside the rectangle, takes what
+# lies wholly inside it: the four circles and their centres; the sketch's
+# selection filter lets a window take sketch geometry but not the bodies'
+# edges (Visible Edges: click only). A click on a circle's rim takes the
+# boss's top edge in front of it in this view.
+key Escape
+wait-idle
+mark
+sketch-drag 8 5 52 35
+wait-log '^Selected: ' 10
+wait-idle
+expect-no-log '^Selected: .*\bedge E\{'
+capture-undo-depth choosing
+mark
+command sketch.profile_boundary
+wait-log '^Profile boundary on: \["c[0-9]+","c[0-9]+","c[0-9]+","c[0-9]+"\]$'
+wait-idle
+expect-undo-depth ${choosing} 1
+expect-profiles 6
+key Escape
+wait-idle
+mark
+key ctrl+z
+wait-log '^Undo: Profile Boundary in Sketch3'
+wait-idle
+expect-profiles 2
+mark
+command edit.redo
+wait-log '^Redo: Profile Boundary in Sketch3'
+wait-idle
+expect-profiles 6
+mark
+command sketch.finish
+wait-log '^Sketch finished'
+wait-idle
+
+# 4. Extrude of the rectangle leaves the footprints clear; undo.
+capture-model-text plate '{"query": "profiles", "sketch": "Sketch3", "point": [30, 20]}' 0.region
+mark
+command solid.extrude
+expect-log '^Command Extrude started'
+wait-idle
+# Extrude may preselect a profile: cleared, so that the click adds this one.
+mark
+button '.*' clear_profiles
+wait-log '^Extrude Profiles: nothing$'
+wait-log '^Pick profile F[0-9]+/${plate:re} ' 20
+mark
+click-pick 'profile F[0-9]+/${plate:re} '
+wait-log '^Extrude Profiles: 1 profile \[profile ${plate:re}'
+mark
+type-in '^Panel Extrude input distance at ' '8 mm'
+wait-log '^Preview Extrude: ok' 30
+screenshot '${MITCAD_TEST_WORK}/plate-preview.png'
+mark
+button '^OK$'
+wait-log '^Added extrude \(Join\)' 30
+wait-idle
+expect-model-bodies 1 61540.814210510754
+mark
+key ctrl+z
+wait-log '^Undo: Add Extrude'
+wait-idle
+expect-model-bodies 1 49005.30964914873
+expect-never 'Preview Extrude: failed|Recompute failed|TestDriver: FAIL'

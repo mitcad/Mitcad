@@ -1,0 +1,96 @@
+# SPDX-License-Identifier: MIT
+# Send Feedback on a Region (mitcad#2616), the shared input script of
+# tools/ui-feedback-region-test.sh (Linux),
+# tools/ui-windows-feedback-region-test.ps1 (Windows) and
+# tools/ui-macos-feedback-region-test.sh (macOS), on
+# tools/ui-scripts/feedback-region.json (Body1):
+#   1. F9 pressed once, then a drag from the 3D view up and left to Body1's
+#      browser row: the overlay takes the drag (the camera and the
+#      selection stay as they were), the region's picture is taken, and
+#      Send Feedback's form opens with the kind Bug, the region's
+#      screenshot on at the picture's size, the description with the
+#      keyboard; Preview gives the report with the screenshot private.
+#   2. The command from its id (as the Help menu and the command search
+#      run it), then Esc: canceled, no form; again, then a click without a
+#      drag: canceled, no form.
+#   3. F9 held: a drag over the view and F9 released before the mouse
+#      button takes the region; the form opens with it.
+expect-ever 'View area'
+wait-idle
+focus-main
+
+# 1. Pressed once, then the drag over the view and a browser row.
+capture-view-orientation before
+mark
+key F9
+wait-log '^Feedback region: picking$'
+view-pointer move 60 60 none
+view-pointer press 60 60 left
+view-pointer move 50 50 left
+view-pointer move 30 30 left
+pointer-logged move '^Browser Root/Bodies/Body1 at ' left
+pointer-logged release '^Browser Root/Bodies/Body1 at ' left
+wait-log '^Feedback region: [0-9]+x[0-9]+ at the window.s [(]-?[0-9]+, -?[0-9]+[)]$'
+wait-log '^Feedback region image: [0-9]+x[0-9]+ from '
+capture w '^Feedback region image: ([0-9]+)x[0-9]+ from '
+capture h '^Feedback region image: [0-9]+x([0-9]+) from '
+wait-log '^Send Feedback: the form shows$'
+wait-log '^Feedback form for a region: kind bug, screenshot on, the description has the keyboard$'
+expect-no-log '^Feedback region: canceled'
+focus-dialog '^Send Feedback$'
+wait-log "^Feedback screenshot ${w}x${h}$"
+type 'Wrong color here'
+button '^Preview'
+wait-log "^Feedback form: kind bug, summary '', description 16 characters, contact none, diagnostics on, screenshot ${w}x${h}, design off, logs off, screenshot private$"
+wait-log '^Report preview: Bug: Feedback$'
+focus-dialog '^Review Report$'
+button '^Cancel$'
+wait-log '^Report not sent: the preview was cancelled$'
+focus-dialog '^Send Feedback$'
+button '^Cancel$'
+wait-log '^Send Feedback cancelled$'
+focus-main
+expect-dialog-gone '^Send Feedback$'
+expect-view-orientation ${before} unchanged
+expect-selection 0 0
+wait-idle
+
+# 2. From the command (the menu, the command search): Esc cancels, and a
+#    click without a drag cancels.
+mark
+command help.send_feedback_region
+wait-log '^Feedback region: picking$'
+key Escape
+wait-log '^Feedback region: canceled [(]Esc[)]$'
+mark
+command help.send_feedback_region
+wait-log '^Feedback region: picking$'
+click 50 50
+wait-log '^Feedback region: canceled [(]a click without a drag[)]$'
+expect-no-log '^Send Feedback: the form shows$'
+expect-no-log '^Feedback region image: '
+expect-selection 0 0
+wait-idle
+
+# 3. F9 held through the drag: its release takes the region.
+mark
+key F9
+wait-log '^Feedback region: picking$'
+view-pointer move 30 30 none
+view-pointer press 30 30 left
+view-pointer move 45 40 left
+view-pointer move 60 55 left
+key-up F9
+wait-log '^Feedback region: [0-9]+x[0-9]+ at the window.s [(]-?[0-9]+, -?[0-9]+[)]$'
+wait-log '^Feedback region image: [0-9]+x[0-9]+ from '
+capture w '^Feedback region image: ([0-9]+)x[0-9]+ from '
+capture h '^Feedback region image: [0-9]+x([0-9]+) from '
+wait-log '^Send Feedback: the form shows$'
+focus-dialog '^Send Feedback$'
+wait-log "^Feedback screenshot ${w}x${h}$"
+button '^Cancel$'
+wait-log '^Send Feedback cancelled$'
+focus-main
+expect-dialog-gone '^Send Feedback$'
+expect-never '^Feedback region: not '
+expect-never 'TestDriver: FAIL'

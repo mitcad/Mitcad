@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: MIT
 # Renamed UI controls retain their existing commands and serialized policy ids.
 wait-idle
-expect-ribbon-labels Start Solid Surface 'Sheet Metal' Build '3D Print' Laser CNC Manage
+expect-ribbon-labels Start Solid Surface 'Sheet Parts' Build '3D Print' Laser CNC Manage
 screenshot '${MITCAD_TEST_SHOTS}/solid.png'
 click-logged '^Ribbon tab BUILD at '
-expect-ribbon-labels Start Solid Surface 'Sheet Metal' Build '3D Print' Laser CNC Manage
+expect-ribbon-labels Start Solid Surface 'Sheet Parts' Build '3D Print' Laser CNC Manage
 screenshot '${MITCAD_TEST_SHOTS}/build.png'
 click-logged '^Ribbon tab SOLID at '
 expect-ever '^Browser Root/Design Settings at '

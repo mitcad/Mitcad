@@ -9,7 +9,7 @@
 # tools/ui-windows-language-test.ps1 (Windows).
 expect-ever '^Language: en [(]${MITCAD_TEST_LANGUAGE_REASON}[)]$' 30
 wait-idle
-expect-ribbon-labels Start Solid Surface 'Sheet Metal' Build '3D Print' Laser CNC Manage
+expect-ribbon-labels Start Solid Surface 'Sheet Parts' Build '3D Print' Laser CNC Manage
 command tools.search
 focus-widget commandSearchInput
 type preferences

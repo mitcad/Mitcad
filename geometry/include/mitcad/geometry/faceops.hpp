@@ -102,7 +102,10 @@ ShapePtr draft(const std::string& feature, const Shape& body, const DraftSpec& s
 // they come within 1e-6 mm of it and cross the body's other faces as Move
 // Face's do (move_faces_rigidly): flush with the side of the base under a
 // raised block's end, or past it, the overhang's underside named
-// <feature>:step(<moved face>).
+// <feature>:step(<moved face>). A face on the offset of a surface continuous
+// only in its first derivative, which the kernel counts as only C0 (a
+// shelled merged loft's inner wall), is split at its creases first and
+// comes out in those pieces ("#k"; mitcad#2546).
 ShapePtr offset_faces(const std::string& feature, const Shape& body,
                       const std::vector<std::string>& faces, double distance,
                       bool tangent_chain = false);

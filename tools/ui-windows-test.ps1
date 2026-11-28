@@ -507,15 +507,24 @@ function Cube-Run([string]$Choice, [string]$Chrome = 'docked') {
   return $runLog
 }
 
+# Follow the View (mitcad#2641): drawn as the camera's projection, centred
+# on the cube: the orthographic cube in the orthographic view, the
+# perspective cube in the perspective view (compared with them below).
 $followLog = Cube-Run 'follow-view'
-$followOrtho = Cube-Outline $followLog 'orthographic' 'follow-view'
-$followPersp = Cube-Outline $followLog 'perspective' 'follow-view'
+$followOrtho = Cube-Outline $followLog 'orthographic' 'follow-view \(orthographic\)'
+$followPersp = Cube-Outline $followLog 'perspective' 'follow-view \(perspective\)'
+$followIsoPersp = Cube-Outline $followLog 'perspective' 'follow-view \(perspective\)' '-0.577 0.577 -0.577'
+$followIsoOrtho = Cube-Outline $followLog 'orthographic' 'follow-view \(orthographic\)' '-0.577 0.577 -0.577'
 if ((Cube-Check $followOrtho 'Following the orthographic view') -and
     (Cube-Check $followPersp 'Following the perspective view')) {
-  if ((Cube-Apart $followOrtho $followPersp 4) -gt 0) {
-    Pass 'Following the perspective view: the cube drawn in its perspective'
-  } else { Fail 'Following the perspective view: the cube drawn as in the orthographic view' }
+  # Seen from straight in front of its middle: face on as the orthographic
+  # cube.
+  if ((Cube-Apart $followOrtho $followPersp 4) -eq 0) {
+    Pass 'Following the perspective view: face on, the cube drawn as in the orthographic view'
+  } else { Fail 'Following the perspective view: face on, the cube drawn off its own axis' }
 }
+$null = Cube-Check $followIsoPersp 'Following the perspective view, isometric view'
+$null = Cube-Check $followIsoOrtho 'Following the orthographic view, isometric view'
 
 $orthoLog = Cube-Run 'orthographic'
 $orthoOrtho = Cube-Outline $orthoLog 'orthographic' 'orthographic'
@@ -555,6 +564,26 @@ if ((Cube-Check $perspIso 'Perspective cube, isometric view') -and $null -ne $or
     Pass ("Perspective cube: from the isometric view drawn in its perspective ({0} x {1}, orthographic {2} x {3})" -f
       $sizes[0], $sizes[1], $sizes[2], $sizes[3])
   } else { Fail 'Perspective cube: from the isometric view as large as the orthographic cube' }
+}
+# Following the view from the isometric view (mitcad#2641): as the
+# orthographic cube in the orthographic view (the same layout: its place
+# too), as the perspective cube in the perspective view (another layout: its
+# size).
+if ($null -ne $followIsoOrtho -and $null -ne $orthoIso) {
+  if ((Cube-Apart $orthoIso $followIsoOrtho 8) -eq 0) {
+    Pass 'Following the orthographic view: from the isometric view drawn and picked as the orthographic cube'
+  } else { Fail 'Following the orthographic view: from the isometric view not as the orthographic cube' }
+}
+if ($null -ne $followIsoPersp -and $null -ne $perspIso) {
+  $sizes = @(($followIsoPersp[2] - $followIsoPersp[0]), ($followIsoPersp[3] - $followIsoPersp[1]),
+    ($perspIso[2] - $perspIso[0]), ($perspIso[3] - $perspIso[1]))
+  if ([Math]::Abs($sizes[0] - $sizes[2]) -le 2 -and [Math]::Abs($sizes[1] - $sizes[3]) -le 2) {
+    Pass ("Following the perspective view: from the isometric view drawn as the perspective cube ({0} x {1})" -f
+      $sizes[0], $sizes[1])
+  } else {
+    Fail ("Following the perspective view: from the isometric view {0} x {1}, the perspective cube {2} x {3}" -f
+      $sizes[0], $sizes[1], $sizes[2], $sizes[3])
+  }
 }
 
 # The preference saved: Preferences > Display, Orientation cube two entries

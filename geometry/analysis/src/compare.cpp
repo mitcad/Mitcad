@@ -4,18 +4,26 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <limits>
+#include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
+#include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
-#include <BRepExtrema_DistShapeShape.hxx>
+#include <BRepExtrema_ExtPC.hxx>
+#include <BRepExtrema_ExtPF.hxx>
 #include <BRepTools.hxx>
 #include <BRepTopAdaptor_FClass2d.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
+#include <Bnd_Box.hxx>
+#include <Extrema_ExtAlgo.hxx>
+#include <Extrema_ExtFlag.hxx>
 #include <GProp_GProps.hxx>
 #include <Message_ProgressIndicator.hxx>
 #include <Message_ProgressScope.hxx>
@@ -27,6 +35,9 @@
 #include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
+#include <TopoDS_Edge.hxx>
+#include <TopoDS_Face.hxx>
+#include <TopoDS_Vertex.hxx>
 #include <gp_Pnt2d.hxx>
 
 #include "convert.hpp"
@@ -172,24 +183,168 @@ std::vector<gp_Pnt> sample(const TopoDS_Shape& shape, std::size_t target, double
   return points;
 }
 
+// The squared distance of a point from a box (0 inside it, and for a void
+// box, which bounds nothing it could leave out).
+double square_distance(const Bnd_Box& box, const gp_Pnt& p) {
+  if (box.IsVoid()) {
+    return 0.0;
+  }
+  double x0 = 0.0;
+  double y0 = 0.0;
+  double z0 = 0.0;
+  double x1 = 0.0;
+  double y1 = 0.0;
+  double z1 = 0.0;
+  box.Get(x0, y0, z0, x1, y1, z1);
+  const double dx = std::max({x0 - p.X(), 0.0, p.X() - x1});
+  const double dy = std::max({y0 - p.Y(), 0.0, p.Y() - y1});
+  const double dz = std::max({z0 - p.Z(), 0.0, p.Z() - z1});
+  return dx * dx + dy * dy + dz * dz;
+}
+
+// Distances of points from the faces of a shape, their edges and their
+// vertices: the nearest of the points on a face where the distance has a
+// minimum inside it, the nearest points on the edges and the vertices, as
+// BRepExtrema_DistShapeShape measures them from a vertex. That one sets up
+// each face's projection again for every point, and for a B-spline face
+// the projection first evaluates a grid of the surface's points over all
+// its spans: a side lofted along rails has 320 spans of degree 3 along the
+// loft and 12 of degree 9 around it, some 100 000 points, and a comparison
+// of such a body with its mirror image took two minutes, all of it in
+// these grids (mitcad#2595). Here each face's and edge's projection is
+// set up once, its grid built at its first point and kept for the others,
+// and as BRepExtrema_DistShapeShape does, a face or edge whose bounding box
+// lies farther than the nearest distance found so far is left out.
+class SurfaceDistance {
+public:
+  explicit SurfaceDistance(const TopoDS_Shape& shape) {
+    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> vertices;
+    TopExp::MapShapes(shape, TopAbs_VERTEX, vertices);
+    for (int i = 1; i <= vertices.Extent(); ++i) {
+      m_vertices.push_back(BRep_Tool::Pnt(TopoDS::Vertex(vertices(i))));
+    }
+    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> edges;
+    TopExp::MapShapes(shape, TopAbs_EDGE, edges);
+    for (int i = 1; i <= edges.Extent(); ++i) {
+      const TopoDS_Edge& edge = TopoDS::Edge(edges(i));
+      if (BRep_Tool::Degenerated(edge) || !BRep_Tool::IsGeometric(edge)) {
+        continue;
+      }
+      Edge item;
+      BRepBndLib::Add(edge, item.box, false);
+      // The projection keeps the edge's curve; it does not move once set up.
+      item.projection = std::make_unique<BRepExtrema_ExtPC>();
+      item.projection->Initialize(edge);
+      m_edges.push_back(std::move(item));
+    }
+    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> faces;
+    TopExp::MapShapes(shape, TopAbs_FACE, faces);
+    for (int i = 1; i <= faces.Extent(); ++i) {
+      Face item;
+      item.face = TopoDS::Face(faces(i));
+      BRepBndLib::Add(item.face, item.box, false);
+      // The nearest point inside a face is a minimum of the distance (or on
+      // its boundary, which the edges give): the maxima are left out. The
+      // projection points to its own surface adaptor, so it stays put.
+      item.projection = std::make_unique<BRepExtrema_ExtPF>();
+      item.projection->Initialize(item.face, Extrema_ExtFlag_MIN, Extrema_ExtAlgo_Grad);
+      m_faces.push_back(std::move(item));
+    }
+  }
+
+  // The distance of `p` from the shape; nothing when no vertex, edge or
+  // face gave one.
+  std::optional<double> operator()(const gp_Pnt& p) {
+    double best = std::numeric_limits<double>::infinity();
+    for (const gp_Pnt& vertex : m_vertices) {
+      best = std::min(best, p.SquareDistance(vertex));
+    }
+    const TopoDS_Vertex at = BRepBuilderAPI_MakeVertex(p).Vertex();
+    // The faces first, nearest box first: a point on or near a face finds
+    // its distance there, and the boxes of the others leave them out.
+    for (const std::size_t k : nearest_first(m_faces, p)) {
+      Face& item = m_faces[k];
+      if (square_distance(item.box, p) > best) {
+        break;
+      }
+      item.projection->Perform(at, item.face);
+      if (!item.projection->IsDone()) {
+        continue;
+      }
+      // The extrema the projection keeps are inside the face or on it.
+      for (int i = 1; i <= item.projection->NbExt(); ++i) {
+        best = std::min(best, item.projection->SquareDistance(i));
+      }
+    }
+    for (const std::size_t k : nearest_first(m_edges, p)) {
+      Edge& item = m_edges[k];
+      if (square_distance(item.box, p) > best) {
+        break;
+      }
+      item.projection->Perform(at);
+      if (!item.projection->IsDone()) {
+        continue;
+      }
+      for (int i = 1; i <= item.projection->NbExt(); ++i) {
+        best = std::min(best, item.projection->SquareDistance(i));
+      }
+    }
+    if (!std::isfinite(best)) {
+      return std::nullopt;
+    }
+    return std::sqrt(best);
+  }
+
+private:
+  struct Face {
+    TopoDS_Face face;
+    Bnd_Box box;
+    std::unique_ptr<BRepExtrema_ExtPF> projection;
+  };
+  struct Edge {
+    Bnd_Box box;
+    std::unique_ptr<BRepExtrema_ExtPC> projection;
+  };
+
+  // The items' indices by the distance of their boxes from `p`.
+  template <class Item>
+  static std::vector<std::size_t> nearest_first(const std::vector<Item>& items, const gp_Pnt& p) {
+    std::vector<std::pair<double, std::size_t>> order;
+    order.reserve(items.size());
+    for (std::size_t k = 0; k < items.size(); ++k) {
+      order.emplace_back(square_distance(items[k].box, p), k);
+    }
+    std::sort(order.begin(), order.end());
+    std::vector<std::size_t> indices;
+    indices.reserve(order.size());
+    for (const auto& entry : order) {
+      indices.push_back(entry.second);
+    }
+    return indices;
+  }
+
+  std::vector<gp_Pnt> m_vertices;
+  std::vector<Edge> m_edges;
+  std::vector<Face> m_faces;
+};
+
 Deviation deviation(const std::vector<gp_Pnt>& points, const TopoDS_Shape& surface,
                     const Deadline& deadline) {
   Deviation result;
   if (points.empty() || !TopExp_Explorer(surface, TopAbs_FACE).More()) {
     return result;
   }
-  BRepExtrema_DistShapeShape distance;
-  distance.LoadS2(surface);
+  SurfaceDistance distance(surface);
   double sum = 0.0;
   for (const gp_Pnt& p : points) {
     if (over(deadline)) {
       break;
     }
-    distance.LoadS1(BRepBuilderAPI_MakeVertex(p).Vertex());
-    if (!distance.Perform() || !distance.IsDone()) {
+    const std::optional<double> found = distance(p);
+    if (!found) {
       continue;
     }
-    const double d = distance.Value();
+    const double d = *found;
     sum += d * d;
     ++result.samples;
     if (d > result.max || result.samples == 1) {
@@ -204,6 +359,17 @@ Deviation deviation(const std::vector<gp_Pnt>& points, const TopoDS_Shape& surfa
 }
 
 } // namespace
+
+std::vector<std::optional<double>> surface_distances(const std::vector<gp_Pnt>& points,
+                                                     const TopoDS_Shape& shape) {
+  std::vector<std::optional<double>> result;
+  result.reserve(points.size());
+  SurfaceDistance distance(surface_of(shape));
+  for (const gp_Pnt& p : points) {
+    result.push_back(distance(p));
+  }
+  return result;
+}
 
 bool plausible_differences(double differences, double max_deviation, double area, double fuzzy) {
   return differences <= 4.0 * (max_deviation + fuzzy) * area;

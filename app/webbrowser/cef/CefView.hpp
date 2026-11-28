@@ -122,7 +122,14 @@ signals:
   void titleChanged(const QString& title);
   void loadFinished(bool ok);
   void navigationChanged();
-  void consoleMessage(const QString& message);
+  // A line of the page's console that starts with "mitcad:"; `fromMitCad`
+  // when MitCad's own script (runJavaScript) logged it, not the page
+  // (mitcad#2615: only those make MitCad act).
+  void consoleMessage(const QString& message, bool fromMitCad);
+  // A tutorial's page (mitcad#2615): the user clicked a link to the web,
+  // which the page does not follow; the owner may open it in the system's
+  // browser.
+  void webLinkClicked(const QUrl& url);
   // WebGL failed on the GPU this run: it is drawn in software from the next
   // start of MitCad (mitcad#1906).
   void gpuFailed();
@@ -210,10 +217,14 @@ private:
   void loadEnded(bool ok);
   void cursorChanged(int type);
   // A message of the page's console (`error`: of the error level; `source`
-  // and `line`: where it came from): MitCad's own scripts' "mitcad:" lines
-  // to consoleMessage() unless they are the diagnostics' (the WebGL probe),
-  // the rest to the diagnostics (mitcad#1906).
+  // and `line`: where it came from): "mitcad:" lines to consoleMessage()
+  // unless they are the diagnostics' (the WebGL probe of MitCad's own
+  // script, never in a tutorial's page), the rest to the diagnostics
+  // (mitcad#1906).
   void logged(bool error, const QString& message, const QString& source, int line);
+  // A tutorial page's navigation or window refused (mitcad#2615): a link to
+  // the web the user clicked to webLinkClicked(), the rest logged.
+  void navigationRefused(const QString& url, bool userGesture);
   QString downloadStarting(std::uint32_t id, const QString& suggestedName, const QUrl& url);
   bool downloadRefused(std::uint32_t id) const { return m_downloads.refused(id); }
   // `reason` in words (the user's), `detail` the log's (the bytes and

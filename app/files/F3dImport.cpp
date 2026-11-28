@@ -416,26 +416,35 @@ int runImportWorker(int argc, char* argv[]) {
   const bool dwg = isDwgFile(QString::fromUtf8(path));
   // A .3dm model's bodies likewise.
   const bool threeDm = isThreeDmFile(QString::fromUtf8(path));
-  // The timeline's length, for the progress dialog.
-  try {
-    if (!freecad && !ipt && !ifc && !rvt && !solidcraft && !dwg && !threeDm) {
-      const QJsonObject designs = parseObject(document->import_f3d_timeline(rustStr(path), "{\"list\": true}"));
-      int items = 0;
-      for (const QJsonValue& design : designs.value(QStringLiteral("designs")).toArray()) {
-        items = std::max(items, design.toObject().value(QStringLiteral("items")).toInt());
-      }
-      std::printf("import-items %d\n", items);
-      std::fflush(stdout);
-    }
-  } catch (const std::exception&) {
-    // The import itself says what is wrong with the file.
-  }
   QJsonObject moreOptions;
   if (parser.isSet(more)) {
     QFile file(parser.value(more));
     if (file.open(QIODevice::ReadOnly)) {
       moreOptions = QJsonDocument::fromJson(file.readAll()).object();
     }
+  }
+  // For tests: an .f3d design's timeline from a dump (import_f3d's `dump`)
+  // instead of its own streams, as a synthetic design has none
+  // (tools/ui-import-deviations-test.sh, mitcad#379).
+  const QString testDump = qEnvironmentVariable("MITCAD_TEST_IMPORT_DUMP");
+  // The timeline's length, for the progress dialog: the items the import
+  // replays, the design's and those of each document it refers to that it
+  // imports, once each (mitcad#2635; import_f3d's `count_items` with the
+  // import's own options), not the largest design's of a package.
+  try {
+    if (!freecad && !ipt && !ifc && !rvt && !solidcraft && !dwg && !threeDm) {
+      QJsonObject count = moreOptions;
+      count.insert(QStringLiteral("count_items"), true);
+      if (!testDump.isEmpty()) {
+        count.insert(QStringLiteral("dump"), testDump);
+      }
+      const QJsonObject counted =
+          parseObject(document->import_f3d_timeline(rustStr(path), rustStr(compactJson(count))));
+      std::printf("import-items %d\n", counted.value(QStringLiteral("items")).toInt());
+      std::fflush(stdout);
+    }
+  } catch (const std::exception&) {
+    // The import itself says what is wrong with the file.
   }
   QJsonObject command =
       freecad ? QJsonObject{{QStringLiteral("cmd"), QStringLiteral("import_fcstd")},
@@ -473,12 +482,9 @@ int runImportWorker(int argc, char* argv[]) {
   if (isIamFile(QString::fromUtf8(path)) && moreOptions.contains(QStringLiteral("history"))) {
     command.insert(QStringLiteral("history"), moreOptions.value(QStringLiteral("history")).toBool());
   }
-  // For tests: an .f3d design's timeline from a dump (import_f3d's `dump`)
-  // instead of its own streams, as a synthetic design has none
-  // (tools/ui-import-deviations-test.sh, mitcad#379).
-  if (const QString dump = qEnvironmentVariable("MITCAD_TEST_IMPORT_DUMP");
-      !dump.isEmpty() && !freecad && !ipt && !ifc && !rvt && !solidcraft && !dwg && !threeDm) {
-    command.insert(QStringLiteral("dump"), dump);
+  // (For tests, the dump above.)
+  if (!testDump.isEmpty() && !freecad && !ipt && !ifc && !rvt && !solidcraft && !dwg && !threeDm) {
+    command.insert(QStringLiteral("dump"), testDump);
   }
   QJsonObject answer;
   document->attach_job(**control);

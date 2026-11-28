@@ -1,0 +1,5 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"One box for Send Feedback on a Region (mitcad#2616): Body1, 40 x 30 x 20 mm, whose browser row the region's drag ends on."},
+  {"cmd":"add_feature","def":{"type":"box","plane":"xy","corner":[-20,-15],"length":40,"width":30,"height":20,"operation":"new_body"}}
+]

@@ -31,6 +31,29 @@ inline CefMessageRouterConfig bridgeRouterConfig() {
 // that get the bridge ("file:///.../tutorials/<id>/").
 inline constexpr char kBridgePrefixKey[] = "mitcad_bridge_prefix";
 
+// The strict policy of every tutorial's pages, whatever their source (a
+// git source's or a course from MitCad Cloud, mitcad#2401; the service
+// serves a course's pages with the same, its folder's address for 'self',
+// docs/tutorials.md "The strict policy"): the files of the tutorial's own
+// folder are given by the browser side (CefView.cpp) with this header;
+// scripts, styles, pictures, media and fonts only from there or inline,
+// never from an address and never by eval (no 'unsafe-eval'); no frames,
+// objects, workers, forms or <base>. A file page's 'self' is every local
+// file, so the browser side also refuses a tutorial page's requests for
+// anything outside its folder.
+inline constexpr char kTutorialPolicy[] =
+    "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; "
+    "object-src 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'; base-uri 'none'; "
+    "form-action 'none'";
+
+// What a tutorial's frames do not get (mitcad#2615, CefHelper.cpp): WebRTC,
+// whose connections to STUN and TURN servers pass by the browser side's
+// request filter.
+inline constexpr const char* kTutorialRemovedGlobals[] = {
+    "RTCPeerConnection", "webkitRTCPeerConnection", "RTCDataChannel", "RTCSessionDescription",
+    "RTCIceCandidate"};
+
 // Whether a frame's address is under the prefix: on Windows without regard
 // to case (a drive letter, a folder name written otherwise).
 inline bool bridgePrefixMatches(const std::string& url, const std::string& prefix) {

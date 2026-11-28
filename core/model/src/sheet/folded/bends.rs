@@ -1478,10 +1478,26 @@ pub(crate) fn flange<K: Kernel>(
                 .into(),
         );
     }
+    // On a Lofted Flange's sheet (mitcad#2575): one straight edge of a flat
+    // facet, the lofted chart laid in the facet's plane.
+    let lofted = super::lofted::flange_base(ctx, d)?;
+    if lofted.is_some() && (several || d.run || d.corner == Some(SheetFlangeCorner::HalfOpen)) {
+        return Err(
+            "a flange on a lofted flange's sheet goes on one straight edge of a flat facet, with \
+             its ends free: several edges, a run of edges and half open corners are not taken yet"
+                .into(),
+        );
+    }
     if several {
         return super::flange_edges::flange_edges(d, ctx);
     }
-    let (mut state, rules) = read(ctx, d.body)?;
+    let (mut state, rules, lofted) = match lofted {
+        Some((base, rules)) => (base.proxy.clone(), rules, Some(base)),
+        None => {
+            let (state, rules) = read(ctx, d.body)?;
+            (state, rules, None)
+        }
+    };
     // The fold's own allowance in place of the rules' (mitcad#1939).
     let rules = rules.with_fold_allowance(d.allowance.as_ref());
     free(&state, &d.boundary)?;
@@ -1491,6 +1507,13 @@ pub(crate) fn flange<K: Kernel>(
     // short of it, as an end that meets an existing flange across a bend
     // does.
     if super::flange_edges::meets_wall_beside(d, ctx, &state, &rules) {
+        if lofted.is_some() {
+            return Err(
+                "the flange would pass into a wall beside its edge: on a lofted flange's sheet a \
+                 flange's ends stay free"
+                    .into(),
+            );
+        }
         return super::flange_edges::flange_edges(d, ctx);
     }
     let run = if d.run {
@@ -1740,6 +1763,11 @@ pub(crate) fn flange<K: Kernel>(
             .map(|other| [own, other])
             .collect();
         state = super::relief::flange_corner_reliefs(ctx, state, &rules, &corners)?;
+    }
+    // On a Lofted Flange's sheet: its body joined with the bends and walls
+    // (mitcad#2575).
+    if let Some(base) = lofted {
+        return super::lofted::published_flange(ctx, base, state, &rules);
     }
     // Walls that pass into each other: what to change (mitcad#2445).
     publish(ctx, state, &rules, None)

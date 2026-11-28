@@ -11,8 +11,10 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QRegularExpression>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QUrl>
 
 #include "../files/Libraries.hpp"
 
@@ -267,6 +269,65 @@ QString defaultTutorialLanguage(const QStringList& languages, const QString& int
   const bool any = std::any_of(languages.cbegin(), languages.cend(),
                                [&base](const QString& language) { return tutorialInLanguage(language, base); });
   return any ? base.toLower() : QString();
+}
+
+bool tutorialListsDesign(const QJsonObject& manifest, const QString& relative) {
+  const QString wanted = QDir::cleanPath(relative);
+  if (wanted.isEmpty() || wanted == QLatin1String("..") || wanted.startsWith(QLatin1String("../"))) {
+    return false;
+  }
+  const QJsonArray designs = manifest.value(QStringLiteral("designs")).toArray();
+  return std::any_of(designs.begin(), designs.end(), [&wanted](const QJsonValue& value) {
+    const QString listed = value.toString();
+    return !listed.isEmpty() && QDir::cleanPath(listed) == wanted;
+  });
+}
+
+QString tutorialSourceName(const QString& url) {
+  const QString given = url.trimmed();
+  if (given.isEmpty()) {
+    return QString();
+  }
+  const bool fileAddress = given.startsWith(QLatin1String("file:"), Qt::CaseInsensitive);
+  const bool network = !fileAddress && (given.contains(QLatin1String("://")) ||
+                                        (given.contains(QLatin1Char('@')) && given.contains(QLatin1Char(':'))));
+  if (network) {
+    // Its host and path, without user information or ".git".
+    return repositoryKey(given);
+  }
+  // A folder: its own name.
+  QString path = fileAddress ? QUrl(given).toLocalFile() : given;
+  path.replace(QLatin1Char('\\'), QLatin1Char('/'));
+  while (path.size() > 1 && path.endsWith(QLatin1Char('/'))) {
+    path.chop(1);
+  }
+  QString name = path.section(QLatin1Char('/'), -1);
+  if (name.endsWith(QLatin1String(".git"), Qt::CaseInsensitive) && name.size() > 4) {
+    name.chop(4);
+  }
+  return name;
+}
+
+bool tutorialFromPublicSource(const QString& url) {
+  return !url.trimmed().isEmpty() && repositoryKey(url) == repositoryKey(QString::fromLatin1(kPublicTutorials));
+}
+
+bool guideCommandOutward(const QString& id) {
+  static const QStringList outward = {
+      QStringLiteral("export"),   QStringLiteral("publish"),     QStringLiteral("cloud"),
+      QStringLiteral("feedback"), QStringLiteral("account"),     QStringLiteral("accounts"),
+      QStringLiteral("settings"), QStringLiteral("preferences"), QStringLiteral("ini"),
+      QStringLiteral("order"),    QStringLiteral("orders"),      QStringLiteral("upload"),
+      QStringLiteral("share"),    QStringLiteral("sync"),        QStringLiteral("remote"),
+      QStringLiteral("send"),     QStringLiteral("script"),      QStringLiteral("macro"),
+      QStringLiteral("quit"),     QStringLiteral("exit"),        QStringLiteral("updates"),
+      QStringLiteral("assistant"), QStringLiteral("web"),        QStringLiteral("print3d"),
+      QStringLiteral("discord"),  QStringLiteral("sign"),        QStringLiteral("login"),
+      QStringLiteral("logout")};
+  // The command's words: its group and its name's parts ("file.export_step":
+  // file, export, step).
+  const QStringList words = id.toLower().split(QRegularExpression(QStringLiteral("[._]")), Qt::SkipEmptyParts);
+  return std::any_of(words.cbegin(), words.cend(), [](const QString& word) { return outward.contains(word); });
 }
 
 } // namespace mitcad

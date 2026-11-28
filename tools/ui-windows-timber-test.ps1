@@ -251,7 +251,7 @@ Ui-Step 'Profile (F3)'                   { Ui-Key 'F3' }
 Ui-ExpectNew 'BUILD parts profile: 1 (0 in the design)' "the design's timber is not in Profile's picker"
 Ui-Step 'Close (Escape)'                 { Ui-Key 'Escape' }
 Ui-Mark
-Ui-Step 'Cut List (F9)'                  { Ui-Key 'F9' }
+Ui-Step 'Cut List (Shift+F12)'           { Ui-Key 'Shift+F12' }
 Ui-FocusDialog '^Cut List$'
 Ui-ExpectNew 'Cut list row: ' "the cut list's rows"
 Ui-ExpectNew 'x Timber 48x98 test' 'the members in it'

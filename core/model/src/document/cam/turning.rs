@@ -22,6 +22,7 @@ use serde_json::{Value, json};
 
 use super::super::{Document, ModelError, invalid};
 use super::{NO_MACHINE, hex, state};
+use crate::cam::engine::turning::TurnLimits;
 use crate::cam::engine::turning::{
     self as turn, FaceOp, FinishOp, GrooveOp, PartOp, RoughOp, ThreadOp, TurnMove, TurnPart,
     TurnPath, TurnSide, TurnSpindle, TurningProgram, TurningProgramOp, TurningTool,
@@ -409,6 +410,54 @@ impl<K: Kernel> Document<K> {
         Ok(outline::chains(half(segs)))
     }
 
+    /// The section's outside and bore, spun about the axis of `frame`
+    /// when the setup asks for it (mitcad#2629, `LatheSetup::spun_target`):
+    /// the bodies' meshes (in work coordinates) widen the outside and
+    /// narrow the bore wherever a feature off the section's plane reaches
+    /// beyond them ([`turn::spun::spun`]); as they are otherwise. The
+    /// bodies are left as they are, for the live tools.
+    fn turn_spun(
+        &self,
+        setup: &CamSetup,
+        bodies: &[(BodyUid, Transform)],
+        frame: &WorkFrame,
+        outside: Vec<turn::PV>,
+        inside: Vec<turn::PV>,
+    ) -> Result<(Vec<turn::PV>, Vec<turn::PV>), String> {
+        if !setup.lathe.as_ref().is_some_and(|l| l.spun_target) {
+            return Ok((outside, inside));
+        }
+        let tolerance = crate::exchange::MeshTolerance {
+            deviation: super::CAM_SURFACE_DEVIATION,
+            angle: 10.0_f64.to_radians(),
+            face_triangles: 0,
+            max_edge: 0.0,
+        };
+        let mut triangles: Vec<turn::spun::Triangle> = Vec::new();
+        for (body, placement) in bodies {
+            let shape = self.body_shape(*body).ok_or_else(|| {
+                "A body of the setup is not in the design at the timeline marker.".to_owned()
+            })?;
+            let mesh = self
+                .kernel()
+                .triangle_mesh(shape, &tolerance)
+                .map_err(|_| {
+                    "A body of the setup cannot be meshed for its spun target.".to_owned()
+                })?;
+            let work: Vec<[f64; 3]> = mesh
+                .vertices
+                .iter()
+                .map(|p| frame.to_work(placement.apply_point(*p)))
+                .collect();
+            triangles.extend(mesh.triangles.iter().filter_map(|t| {
+                let corner = |i: u32| work.get(i as usize).copied();
+                Some([corner(t[0])?, corner(t[1])?, corner(t[2])?])
+            }));
+        }
+        let spun = turn::spun::spun(&outside, &inside, &triangles, super::CAM_SURFACE_DEVIATION);
+        Ok((spun.outside, spun.inside))
+    }
+
     /// A lathe setup's frame, part and stock at the marker.
     pub(super) fn turn_frame(&self, setup: &CamSetup) -> Result<TurnFrame, String> {
         let params = self.parameters();
@@ -490,6 +539,8 @@ impl<K: Kernel> Document<K> {
                     .to_owned()
             })?;
         let (outside, inside) = split_profile(&chain.contour)?;
+        // Spun about the axis when the setup asks for it (mitcad#2629).
+        let (outside, inside) = self.turn_spun(setup, &bodies, &frame, outside, inside)?;
         let face = outside.first().map_or(0.0, |v| v.z);
         let back = outside.last().map_or(0.0, |v| v.z);
         let radius = outside.iter().map(|v| v.x).fold(0.0, f64::max);
@@ -627,16 +678,44 @@ impl<K: Kernel> Document<K> {
         Ok((z, x))
     }
 
-    /// A Turn Roughing's engine operation and tool, from the operation
-    /// whose kind has `side` and `plunge`: for the roughing itself and for
-    /// the finishes after it (mitcad#2549).
+    /// A Turn Roughing's or Turn Finishing's limits along Z (mitcad#2629):
+    /// its `limit_from` and `limit_to`, and how steeply the tool goes down
+    /// into the stock at the limit towards the face: as it plunges into
+    /// undercuts (`plunge`, degrees), else as steeply as its insert's back
+    /// angle allows (less `PLUNGE_CLEARANCE`), straight down for a tool
+    /// without its insert and holder.
+    fn turn_limits(
+        &self,
+        op: &CamOperation,
+        tool: &crate::cam::CamTool,
+        plunge: f64,
+    ) -> Result<TurnLimits, String> {
+        use ValueKind::Length;
+        let t = op.turning.clone().unwrap_or_default();
+        let entry = if plunge > 0.0 {
+            plunge
+        } else {
+            tool.back_angle()
+                .map_or(90.0, |b| (b - crate::cam::PLUNGE_CLEARANCE).max(0.0))
+        };
+        Ok(TurnLimits {
+            from: self.cam_value(&t.limit_from, Length)?,
+            to: self.cam_value(&t.limit_to, Length)?,
+            entry,
+        })
+    }
+
+    /// A Turn Roughing's engine operation, tool and limits, from the
+    /// operation whose kind has `side` and `plunge`: for the roughing
+    /// itself and for the finishes after it (mitcad#2549, limits
+    /// mitcad#2629).
     fn turn_rough_op(
         &self,
         machine: &CamMachine,
         op: &CamOperation,
         side: TurnSide,
         plunge: crate::cam::Plunge,
-    ) -> Result<(RoughOp, TurningTool), String> {
+    ) -> Result<(RoughOp, TurningTool, TurnLimits), String> {
         use ValueKind::Length;
         let tool = machine.tools.get(op.tool).ok_or_else(|| {
             "The operation's tool is not in the machine's tool library.".to_owned()
@@ -661,7 +740,8 @@ impl<K: Kernel> Document<K> {
             // Into undercuts as the Plunge choice and the tool allow.
             plunge: plunge.angle(tool)?,
         };
-        Ok((rough_op, engine_tool))
+        let limits = self.turn_limits(op, tool, rough_op.plunge)?;
+        Ok((rough_op, engine_tool, limits))
     }
 
     /// One turning operation's toolpath and its program entry; `earlier`
@@ -754,9 +834,10 @@ impl<K: Kernel> Document<K> {
             ),
             OperationKind::TurnRough { side, plunge } => {
                 // Into undercuts too (mitcad#2549): written as moves then.
-                let (rough_op, _) = self.turn_rough_op(machine, op, *side, *plunge)?;
+                // Within its limits along Z (mitcad#2629).
+                let (rough_op, _, limits) = self.turn_rough_op(machine, op, *side, *plunge)?;
                 (
-                    turn::rough(part, &rough_op, &engine_tool),
+                    turn::rough_within(part, &rough_op, &engine_tool, &limits),
                     spindle_for(part.stock_radius),
                 )
             }
@@ -770,11 +851,13 @@ impl<K: Kernel> Document<K> {
                     plunge: plunge.angle(tool)?,
                     roughed: false,
                 };
+                // Within its limits along Z (mitcad#2629).
+                let limits = self.turn_limits(op, tool, finish_op.plunge)?;
                 // The roughings of the side before it on its spindle
                 // (mitcad#2549): what they leave in an undercut deeper
                 // than the insert cuts is what the finish takes. One that
                 // cannot be computed leaves nothing known.
-                let roughings: Vec<(RoughOp, TurningTool)> = earlier
+                let roughings: Vec<(RoughOp, TurningTool, TurnLimits)> = earlier
                     .iter()
                     .filter(|o| !o.suppressed && o.sub_spindle == op.sub_spindle)
                     .filter_map(|o| match &o.kind {
@@ -787,16 +870,21 @@ impl<K: Kernel> Document<K> {
                 // An undercut deeper than the insert cuts, or than it
                 // cuts after the roughings: the depths in words, the
                 // deepest point as the place, its Z in the detail.
-                if let Some(deep) =
-                    turn::ops::too_deep_after(part, &finish_op, &engine_tool, &roughings)
-                        .map_err(|e| e.message)?
+                if let Some(deep) = turn::ops::too_deep_after_within(
+                    part,
+                    &finish_op,
+                    &engine_tool,
+                    &limits,
+                    &roughings,
+                )
+                .map_err(|e| e.message)?
                 {
                     return Err(too_deep_refusal(&tf.frame, &deep));
                 }
                 // Checked with the roughings: the engine need not refuse.
                 finish_op.roughed = true;
                 (
-                    turn::finish(part, &finish_op, &engine_tool),
+                    turn::finish_within(part, &finish_op, &engine_tool, &limits),
                     spindle_for(part.stock_radius),
                 )
             }
@@ -1034,6 +1122,7 @@ impl<K: Kernel> Document<K> {
             .max_by(|a, b| widest(a).total_cmp(&widest(b)))
             .ok_or_else(|| "The part's back cannot be cut through the spindle axis.".to_owned())?;
         let (outside, inside) = split_profile(&chain.contour)?;
+        let (outside, inside) = self.turn_spun(setup, &bodies, &frame, outside, inside)?;
         let live = |o: &&CamOperation| !o.suppressed;
         let first = setup
             .operations

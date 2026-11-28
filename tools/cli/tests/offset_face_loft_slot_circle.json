@@ -1,0 +1,39 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. Offset Face on the outer wall of a hollow loft (GitHub mitcad/Mitcad#723, mitcad#2546), the reported design rebuilt from its features. Sketch1 F1 on XY: a circle of radius 15. Plane1 F2 50 mm up and Sketch2 F3 on it: a slot 120 x 40 (the upper line c1 from (40, 20) to (-40, 20), the arcs c2 about (40, 0) and c4 about (-40, 0) of radius 20, the lower line c3). Loft1 F4 from the slot to the circle, both ends square to their sections (Direction, angle 0, weight 1), the tangent edges merged: one side face. Shell1 F5 hollows it 2 mm inside with both ends removed: the inner wall is the offset of the side, which is continuous only in its first derivative along the slot's former joins, so the geometry kernel counts the inner wall as only C0 and its offset refused the whole body."},
+  {"cmd": "add_feature", "def": {"type": "sketch", "plane": "xy", "entities": [
+    {"id": "p1", "type": "point", "at": [0, 0], "fixed": true},
+    {"id": "c2", "type": "circle", "center": "p1", "radius": 15}]}},
+  {"cmd": "add_feature", "def": {"type": "construction_plane", "definition": {"type": "offset", "plane": "xy", "distance": 50}}},
+  {"cmd": "add_feature", "def": {"type": "sketch", "plane": "F2", "entities": [
+    {"id": "p5", "type": "point", "at": [-40, 0]}, {"id": "p6", "type": "point", "at": [40, 0]},
+    {"id": "p7", "type": "point", "at": [-40, 20]}, {"id": "p8", "type": "point", "at": [40, 20]},
+    {"id": "p9", "type": "point", "at": [40, -20]}, {"id": "p10", "type": "point", "at": [-40, -20]},
+    {"id": "c1", "type": "line", "start": "p8", "end": "p7"},
+    {"id": "c2", "type": "arc", "center": "p6", "start": "p9", "end": "p8"},
+    {"id": "c3", "type": "line", "start": "p10", "end": "p9"},
+    {"id": "c4", "type": "arc", "center": "p5", "start": "p7", "end": "p10"}]}},
+  {"cmd": "add_feature", "def": {"type": "loft", "sections": [
+    {"type": "profile", "sketch": "F3", "region": "r{c1[c2,c4],c2[c3,c1],c3[c4,c2],c4[c1,c3]}"},
+    {"type": "profile", "sketch": "F1", "region": "r{c2}"}],
+    "start_condition": {"type": "direction", "angle": 0, "weight": 1},
+    "end_condition": {"type": "direction", "angle": 0, "weight": 1},
+    "operation": "new_body", "tangent_edges": "merge"}},
+  {"expect": {"feature": "F4", "status": "ok"}},
+  {"expect": {"body": "F4.b0", "has_face": "F4:side(c1[c2,c4])"}},
+  {"cmd": "add_feature", "def": {"type": "shell", "body": "F4.b0",
+    "faces": ["F4:start(r{c1[c2,c4],c2[c3,c1],c3[c4,c2],c4[c1,c3]})", "F4:end(r{c2})"], "inside": 2}},
+  {"expect": {"feature": "F5", "status": "ok"}},
+  {"expect": {"body": "F4.b0", "bbox": {"min": [-60, -20, 0], "max": [60, 20, 50]}, "tolerance": 1e-3}},
+
+  {"comment": "The outer wall 2 mm out with Tangent Chain on, as the report asks: previewed, then committed. A valid single body; the rims at both ends extend to the moved wall and stay open; 2 mm out round the slot's end, where the wall leaves the slot square to it. The inner wall stays on its surface (in pieces split where it creases as the kernel counts it)."},
+  {"preview": {"cmd": "add_feature", "def": {"type": "offset_face", "body": "F4.b0",
+    "faces": ["F4:side(c1[c2,c4])"], "distance": 2, "tangent_chain": true}}},
+  {"cmd": "add_feature", "def": {"type": "offset_face", "body": "F4.b0",
+    "faces": ["F4:side(c1[c2,c4])"], "distance": 2, "tangent_chain": true}},
+  {"expect": {"feature": "F6", "status": "ok"}},
+  {"expect": {"bodies": 1}},
+  {"expect": {"body": "F4.b0", "has_face": "F4:side(c1[c2,c4])",
+    "no_face": "F4:start(r{c1[c2,c4],c2[c3,c1],c3[c4,c2],c4[c1,c3]})"}},
+  {"expect": {"body": "F4.b0", "no_face": "F4:end(r{c2})"}},
+  {"expect": {"body": "F4.b0", "bbox": {"min": [-62, -22, 0], "max": [62, 22, 50]}, "tolerance": 1e-3}}
+]

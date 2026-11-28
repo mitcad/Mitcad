@@ -3,12 +3,15 @@
 # check-all sources: app/sketch app/commands/SketchCommands.cpp app/framework/TestDriver.cpp tools/cli
 # check-all sources: core/sketch core/model-api/src/sketch.rs
 # A Center to Center Slot's typed length and width become its dimensions
-# (mitcad#1225), through the real UI: the shared input script
-# tools/ui-scripts/sketch-slot-dimensions.mitcad-ui (also run by
-# tools/ui-windows-sketch-slot-dimensions-test.ps1) on an empty sketch that
-# mitcad-cli makes; mitcad-cli then checks the saved design
-# (tools/ui-scripts/sketch-slot-dimensions-check.json): the slot keeps only
-# its place free, and dimensions that move it keep its length.
+# (mitcad#1225), and an Overall Slot's typed length its overall length
+# between the far sides of its end arcs (mitcad#2622), through the real UI:
+# the shared input script tools/ui-scripts/sketch-slot-dimensions.mitcad-ui
+# (also run by tools/ui-windows-sketch-slot-dimensions-test.ps1) on two
+# empty sketches that mitcad-cli makes; mitcad-cli then checks the saved
+# design (tools/ui-scripts/sketch-slot-dimensions-check.json): the slots
+# keep only their place free, dimensions that move the first keep its
+# length, and a changed width or overall length of the second keeps its
+# overall length or moves its ends.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-sketch-slot-dimensions-test.sh
@@ -23,7 +26,8 @@ trap 'ui_cleanup; rm -rf -- "${WORK:?}"' EXIT
 export MITCAD_TEST_WORK=$WORK
 export MITCAD_TEST_STEP_MS=100
 export MITCAD_TEST_INPUT=$WORK/workflow.mitcad-ui
-sed "s/^ENTER_SKETCH$/dblclick-logged '^Timeline Sketch1 at '/" \
+sed -e "s/^ENTER_SKETCH$/dblclick-logged '^Timeline Sketch1 at '/" \
+  -e "s/^ENTER_SKETCH2$/dblclick-logged '^Timeline Sketch2 at '/" \
   "$here/ui-scripts/sketch-slot-dimensions.mitcad-ui" > "$MITCAD_TEST_INPUT"
 "$CLI" run "$here/ui-scripts/sketch-slot-dimensions.json" --save "$WORK/slots.mitcad" || exit 1
 ui_start_display

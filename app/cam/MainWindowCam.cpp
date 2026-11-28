@@ -63,6 +63,7 @@
 #include "CamManualCode.hpp"
 #include "CamSimulateDialog.hpp"
 #include "CamStock.hpp"
+#include "CamToolFit.hpp"
 #include "CamToolpaths.hpp"
 
 namespace mitcad {
@@ -183,30 +184,93 @@ Choices toolChoices(const QJsonObject& data, int setup) {
   return choices;
 }
 
-// The tool an operation starts with: a drill for drilling, a ball end mill
-// for raster and waterline finishing, an end mill (flat, bull nose, ball;
-// not a ball for 3D roughing) for the others; else the first.
-QString defaultTool(const QJsonObject& data, int setup, const QString& type) {
-  const QJsonArray tools = toolsOf(data, setup);
-  if (type == QStringLiteral("raster_finish") || type == QStringLiteral("waterline_finish")) {
-    for (const QJsonValue& value : tools) {
-      if (str(value.toObject().value(QStringLiteral("shape")).toObject(), "kind") == QStringLiteral("ball")) {
-        return QString::number(value.toObject().value(QStringLiteral("number")).toInt());
-      }
-    }
+// The tool an operation starts with (cam/CamToolFit.hpp): a drill for
+// drilling, a ball end mill for raster and waterline finishing, else a
+// flat or bull nose end mill (on a contour's line an engraving cutter or a
+// chamfer mill when there is none); empty when none fits (mitcad#2590).
+QString defaultTool(const QJsonObject& data, int setup, const QString& type, const QString& side) {
+  return cam::defaultTool(toolsOf(data, setup), type, side);
+}
+
+// The Tool choices of an operation panel (mitcad#2590): the tools of the
+// setup's machine the operation's generator takes, and the one chosen
+// when it does not (a saved operation's, flagged to be replaced).
+Choices operationToolChoices(const CommandState& state, const QString& type) {
+  const QString chosen = state.choice(QStringLiteral("tool"));
+  const int current = chosen.isEmpty() ? -1 : chosen.toInt();
+  const cam::Cutters cutters = cam::cuttersOf(type, state.choice(QStringLiteral("side")));
+  Choices choices;
+  const QJsonArray tools = toolsOf(camData(state), state.choice(QStringLiteral("setup")).toInt());
+  for (const QJsonValue& value : cam::offeredTools(tools, cutters, current)) {
+    choices.append(qMakePair(QString::number(value.toObject().value(QStringLiteral("number")).toInt()),
+                             toolLabel(value.toObject())));
   }
-  const bool ballAllowed = type != QStringLiteral("roughing_3d");
-  for (const QJsonValue& value : tools) {
-    const QString kind = str(value.toObject().value(QStringLiteral("shape")).toObject(), "kind");
-    const bool drill = kind == QStringLiteral("drill");
-    const bool mill = kind == QStringLiteral("flat") || kind == QStringLiteral("bull") ||
-                      (ballAllowed && kind == QStringLiteral("ball"));
-    if (type == QStringLiteral("drill") ? drill : mill) {
-      return QString::number(value.toObject().value(QStringLiteral("number")).toInt());
-    }
+  return choices;
+}
+
+// Whether an operation panel's chosen tool is one its generator takes on
+// the setup's machine.
+bool chosenToolFits(const CommandState& state, const QString& type) {
+  const QString chosen = state.choice(QStringLiteral("tool"));
+  if (chosen.isEmpty()) {
+    return false;
   }
-  return tools.isEmpty() ? QString()
-                         : QString::number(tools.first().toObject().value(QStringLiteral("number")).toInt());
+  const QJsonObject tool =
+      cam::toolOf(toolsOf(camData(state), state.choice(QStringLiteral("setup")).toInt()), chosen.toInt());
+  return !tool.isEmpty() && cam::toolFits(tool, cam::cuttersOf(type, state.choice(QStringLiteral("side"))));
+}
+
+// Why an operation panel's tool cannot be used (mitcad#2590): the machine
+// has no tool the operation takes, or the one chosen is not one of them;
+// empty when it fits (Drill takes any).
+QString toolProblem(const CommandState& state, const QString& type) {
+  const QString side = state.choice(QStringLiteral("side"));
+  const cam::Cutters cutters = cam::cuttersOf(type, side);
+  const QJsonArray tools = toolsOf(camData(state), state.choice(QStringLiteral("setup")).toInt());
+  const QString chosen = state.choice(QStringLiteral("tool"));
+  if (tools.isEmpty()) {
+    return MainWindow::tr("The setup's machine has no tools yet: add them with Machines and Tools….");
+  }
+  if (cutters == cam::Cutters::Any) {
+    return chosen.isEmpty() ? MainWindow::tr("Choose a tool of the setup's machine.") : QString();
+  }
+  if (cam::defaultTool(tools, type, side).isEmpty()) {
+    switch (cutters) {
+    case cam::Cutters::EndMillOrVBit:
+      return MainWindow::tr("The setup's machine has no flat or bull nose end mill, engraving cutter or chamfer "
+                            "mill for this contour: add one with Machines and Tools….");
+    case cam::Cutters::Finishing:
+      return MainWindow::tr("The setup's machine has no flat, ball or bull nose end mill for this operation: add "
+                            "one with Machines and Tools….");
+    case cam::Cutters::EndMill:
+    case cam::Cutters::Any:
+      break;
+    }
+    return MainWindow::tr("The setup's machine has no flat or bull nose end mill for this operation: add one with "
+                          "Machines and Tools….");
+  }
+  if (chosenToolFits(state, type)) {
+    return QString();
+  }
+  const QJsonObject tool = chosen.isEmpty() ? QJsonObject() : cam::toolOf(tools, chosen.toInt());
+  if (tool.isEmpty()) {
+    return MainWindow::tr("Choose a tool of the setup's machine.");
+  }
+  if (type == QStringLiteral("contour") && cam::isVBit(tool)) {
+    return MainWindow::tr("An engraving cutter or a chamfer mill cuts a contour only on the line: choose a flat or "
+                          "bull nose end mill, or set Side to On the Line.");
+  }
+  switch (cutters) {
+  case cam::Cutters::EndMillOrVBit:
+    return MainWindow::tr("On the line, a contour cuts with a flat or bull nose end mill, an engraving cutter or a "
+                          "chamfer mill: choose one as the Tool.");
+  case cam::Cutters::Finishing:
+    return MainWindow::tr("This operation cuts with a flat, ball or bull nose end mill: choose one as the Tool.");
+  case cam::Cutters::EndMill:
+  case cam::Cutters::Any:
+    break;
+  }
+  return MainWindow::tr("This operation cuts with a flat or bull nose end mill: choose one as the Tool.");
 }
 
 Choices machineChoices(const QJsonObject& data) {
@@ -383,6 +447,30 @@ QJsonObject withOccurrence(QJsonObject input, const QString& occurrence, const c
   return input;
 }
 
+// A whole sketch text picked as a sketch curve (the view draws a text as
+// one shape, its geometry `text`): no outline an operation can follow
+// (mitcad#2588, GitHub mitcad/Mitcad#745). Explode Text turns it into
+// sketch curves, which are.
+bool isSketchText(const SelectionItem& item) {
+  return item.kind == SelectKind::SketchCurve && item.geometry == QStringLiteral("text");
+}
+
+// A sketch text's id (`t3`) in a stored operation's curves, which the
+// model refuses: loaded as a text, so that the panel says why.
+bool isSketchTextId(const QString& name) {
+  if (name.size() < 2 || name.at(0) != QLatin1Char('t')) {
+    return false;
+  }
+  return std::all_of(name.begin() + 1, name.end(), [](QChar c) { return c.isDigit(); });
+}
+
+// What to do with a sketch text instead: the click's hint, the panel's
+// message and the note on a text selected before the command.
+QString sketchTextRefusal() {
+  return MainWindow::tr("A sketch text cannot be an outline: in its sketch, Explode Text in the text's context menu "
+                        "turns it into sketch curves to pick.");
+}
+
 // An operation's geometric inputs (the model's `inputs`) from its picks:
 // a face, a sketch profile, the edges of each body, the curves of each
 // sketch (each in its occurrence: a component placed twice gives two
@@ -476,8 +564,9 @@ Selection camItems(const QJsonArray& inputs, const CommandContext& context) {
       }
     } else if (kind == QStringLiteral("curves")) {
       for (const QJsonValue& curve : input.value(QStringLiteral("curves")).toArray()) {
-        items.append(
-            SelectionItem{SelectKind::SketchCurve, str(input, "sketch"), curve.toString(), QString(), occurrence});
+        const QString name = curve.toString();
+        items.append(SelectionItem{SelectKind::SketchCurve, str(input, "sketch"), name,
+                                   isSketchTextId(name) ? QStringLiteral("text") : QString(), occurrence});
       }
     } else if (kind == QStringLiteral("point")) {
       const QJsonValue at = input.value(QStringLiteral("at"));
@@ -637,6 +726,12 @@ QJsonObject setupFields(const CommandState& state, QString* why, QString* input)
     if (!number.isNull()) {
       lathe.insert(QStringLiteral("program_number"), static_cast<int>(std::lround(number.toDouble())));
     }
+    // The spun target (mitcad#2629): written only when on.
+    if (state.checked(QStringLiteral("spun_target"))) {
+      lathe.insert(QStringLiteral("spun_target"), true);
+    } else {
+      lathe.remove(QStringLiteral("spun_target"));
+    }
     // The hand-over to the sub-spindle (mitcad#2319), its values kept.
     if (machineHasSub(state) && state.checked(QStringLiteral("hand_over"))) {
       lathe.insert(QStringLiteral("hand_over"), lathe.value(QStringLiteral("hand_over")).toObject());
@@ -690,14 +785,22 @@ QJsonObject operationFields(const CommandState& state, const QString& type, QStr
     kind.insert(QStringLiteral("adaptive"), true);
   }
   op.insert(QStringLiteral("kind"), kind);
-  const QString tool = state.choice(QStringLiteral("tool"));
-  if (tool.isEmpty()) {
-    *why = MainWindow::tr("The setup's machine has no tools yet: add them with Machines and Tools….");
+  // A tool the operation's generator takes (mitcad#2590).
+  const QString toolWhy = toolProblem(state, type);
+  if (!toolWhy.isEmpty()) {
+    *why = toolWhy;
     *input = QStringLiteral("tool");
     return {};
   }
-  op.insert(QStringLiteral("tool"), tool.toInt());
+  op.insert(QStringLiteral("tool"), state.choice(QStringLiteral("tool")).toInt());
   const Selection& picks = state.items(QStringLiteral("geometry"));
+  // A sketch text loaded with an operation (mitcad#2588): the panel's
+  // message says what to do, as a click on one does.
+  if (std::any_of(picks.begin(), picks.end(), isSketchText)) {
+    *why = sketchTextRefusal();
+    *input = QStringLiteral("geometry");
+    return {};
+  }
   QJsonArray inputs = camInputs(picks, drill);
   // The bodies a 3-axis operation machines (none: the setup's), each in
   // its occurrence; its picks are its boundary (none: the stock).
@@ -1072,6 +1175,11 @@ CommandDef MainWindow::camSetupCommand() {
           .withAuto([](const CommandState&, const CommandContext&) { return QStringLiteral("1000"); })
           .withTooltip(tr("The number the lathe's control keeps the program under"))
           .withVisible(onLathe),
+      // The bodies spun about the spindle axis as the turned profile
+      // (mitcad#2629): the material live tools mill afterwards is left.
+      checkInput(QStringLiteral("spun_target"), tr("Spun target"))
+          .withTooltip(tr("Turns to the bodies spun about the axis, leaving features at any angle for milling"))
+          .withVisible(onLathe),
       // The sub-spindle taking the part over (mitcad#2319).
       checkInput(QStringLiteral("hand_over"), tr("Hand over to the sub-spindle"))
           .withTooltip(tr("The sub-spindle grips the part before it is parted off and turns its back"))
@@ -1181,6 +1289,7 @@ CommandDef MainWindow::camSetupCommand() {
     loadCamValue(state, QStringLiteral("program_number"), lathe.value(QStringLiteral("program_number")),
                  ValueKind::Unitless, context);
     state.setChecked(QStringLiteral("hand_over"), lathe.contains(QStringLiteral("hand_over")));
+    state.setChecked(QStringLiteral("spun_target"), lathe.value(QStringLiteral("spun_target")).toBool());
     // Every block of manual G-code as a row, in order (mitcad#2506).
     cam::loadManualCode(state, lathe.value(QStringLiteral("manual_code")).toArray());
   };
@@ -1296,6 +1405,10 @@ CommandDef MainWindow::camOperationCommand(const QString& type) {
   // axis (cylinders) a live tool mills there (mitcad#2067, the pick rule
   // below takes the ones of the place chosen).
   const auto accepts = [drill](const SelectionItem& item) {
+    // A whole sketch text is no outline (mitcad#2588): the hint below.
+    if (isSketchText(item)) {
+      return false;
+    }
     if (item.kind == SelectKind::Face) {
       return drill ? item.geometry == QStringLiteral("cylinder")
                    : item.geometry == QStringLiteral("plane") || item.geometry == QStringLiteral("cylinder");
@@ -1305,13 +1418,13 @@ CommandDef MainWindow::camOperationCommand(const QString& type) {
     }
     return true;
   };
-  const auto setupChanged = [type](CommandState& state, const CommandContext&) {
-    // Another setup's machine: its own tools.
-    const int setup = state.choice(QStringLiteral("setup")).toInt();
-    const Choices tools = toolChoices(camData(state), setup);
-    const QString tool = state.choice(QStringLiteral("tool"));
-    if (std::none_of(tools.begin(), tools.end(), [&tool](const QPair<QString, QString>& c) { return c.first == tool; })) {
-      state.setChoice(QStringLiteral("tool"), defaultTool(camData(state), setup, type));
+  // Another setup's machine (its own tools) or another side of a contour:
+  // the tool of the number chosen stays when the operation takes that
+  // cutter, else the default (mitcad#2590).
+  const auto recheckTool = [type](CommandState& state, const CommandContext&) {
+    if (!chosenToolFits(state, type)) {
+      state.setChoice(QStringLiteral("tool"), defaultTool(camData(state), state.choice(QStringLiteral("setup")).toInt(),
+                                                          type, state.choice(QStringLiteral("side"))));
     }
   };
   const auto entryIs = [](const char* kind) {
@@ -1323,7 +1436,7 @@ CommandDef MainWindow::camOperationCommand(const QString& type) {
   def.inputs = {
       choiceInput(QStringLiteral("setup"), tr("Setup"), {}, QString())
           .withChoices([](const CommandState& state) { return setupChoices(camData(state)); })
-          .withOnChange(setupChanged)
+          .withOnChange(recheckTool)
           .withTooltip(tr("The setup the operation belongs to")),
       textInput(QStringLiteral("name"), tr("Name")).withTooltip(tr("Empty: the kind and a number")),
   };
@@ -1393,33 +1506,64 @@ CommandDef MainWindow::camOperationCommand(const QString& type) {
       [](int, const CommandState&, const CommandContext&) {}));
   // On the diameter a contour or a pocket takes the faces round the
   // spindle axis it mills (their floors), a drilling its holes.
-  def.inputs.append(selectionInput(QStringLiteral("geometry"), pickLabel, picks, least, 0)
-                        .withAccepts(accepts)
-                        // Sketch profiles and curves too, wrapped onto the
-                        // diameter (mitcad#2319).
-                        .withPickRule(
-                            [picks](const CommandState&) -> SelectFilter { return picks; },
-                            [drill](const SelectionItem& item, const CommandState& state) {
-                              if (drill || item.kind != SelectKind::Face) {
-                                return true;
-                              }
-                              return item.geometry == (liveOnDiameter(state) ? QStringLiteral("cylinder")
-                                                                             : QStringLiteral("plane"));
-                            })
-                        .withTooltip(pickTip));
+  InputDef geometry = selectionInput(QStringLiteral("geometry"), pickLabel, picks, least, 0)
+                          .withAccepts(accepts)
+                          // Sketch profiles and curves too, wrapped onto the
+                          // diameter (mitcad#2319).
+                          .withPickRule(
+                              [picks](const CommandState&) -> SelectFilter { return picks; },
+                              [drill](const SelectionItem& item, const CommandState& state) {
+                                if (drill || item.kind != SelectKind::Face) {
+                                  return true;
+                                }
+                                return item.geometry == (liveOnDiameter(state) ? QStringLiteral("cylinder")
+                                                                               : QStringLiteral("plane"));
+                              })
+                          .withTooltip(pickTip);
+  if (contour) {
+    // A click on a sketch text in Outlines: what to pick instead
+    // (mitcad#2588), on the face, the diameter or a plane alike.
+    geometry.withRefusedHint([](const SelectionItem& item, const CommandState&) {
+      return isSketchText(item) ? sketchTextRefusal() : QString();
+    });
+  }
+  def.inputs.append(geometry);
+  // A sketch text selected before Contour (mitcad#2588) is left out of the
+  // picks, the rest taken: this note says so and what to do instead.
+  if (contour) {
+    def.inputs.append(noteInput(
+        QStringLiteral("text_left_out"),
+        [](const CommandState& state) {
+          InputNote note;
+          if (state.checked(QStringLiteral("text_left_out"))) {
+            note.notice = MainWindow::tr("The selected sketch text was left out. %1").arg(sketchTextRefusal());
+            note.noticeLevel = NoticeLevel::Warning;
+          }
+          return note;
+        },
+        [](int, const CommandState&, const CommandContext&) {}));
+    def.preselected = [](const Selection& before, CommandState& state, const CommandContext&) {
+      const auto found = std::find_if(before.begin(), before.end(), isSketchText);
+      if (found != before.end()) {
+        state.setChecked(QStringLiteral("text_left_out"), true);
+        qDebug().noquote() << QStringLiteral("Contour: %1 left out: a sketch text").arg(found->logDescription());
+      }
+    };
+  }
   if (contour) {
     def.inputs.append(choiceInput(QStringLiteral("side"), tr("Side"),
                                   {{QStringLiteral("outside"), tr("Outside")},
                                    {QStringLiteral("inside"), tr("Inside")},
                                    {QStringLiteral("on"), tr("On the Line")}},
                                   QStringLiteral("outside"))
+                          .withOnChange(recheckTool)
                           .withTooltip(tr("Which side of the outline the tool runs on")));
   }
+  // The tools the operation's generator takes (mitcad#2590); Drill any.
   def.inputs.append(choiceInput(QStringLiteral("tool"), tr("Tool"), {}, QString())
-                        .withChoices([](const CommandState& state) {
-                          return toolChoices(camData(state), state.choice(QStringLiteral("setup")).toInt());
-                        })
-                        .withTooltip(tr("A tool of the setup's machine")));
+                        .withChoices([type](const CommandState& state) { return operationToolChoices(state, type); })
+                        .withTooltip(drill ? tr("A tool of the setup's machine")
+                                           : tr("A tool of the setup's machine that this operation cuts with")));
   if (type == QStringLiteral("rest")) {
     def.inputs.append(choiceInput(QStringLiteral("from_tool"), tr("Bigger Tool"), {}, QString())
                           .withChoices([](const CommandState& state) {
@@ -1557,7 +1701,8 @@ CommandDef MainWindow::camOperationCommand(const QString& type) {
     state.setObject(QStringLiteral("cam"), camPanelData());
     const int setup = camDefaultSetup();
     state.setChoice(QStringLiteral("setup"), QString::number(setup));
-    state.setChoice(QStringLiteral("tool"), defaultTool(camData(state), setup, type));
+    state.setChoice(QStringLiteral("tool"),
+                    defaultTool(camData(state), setup, type, state.choice(QStringLiteral("side"))));
     qInfo().noquote() << QStringLiteral("CAM operation panel %1: setup %2, tool %3")
                              .arg(type, str(setupOf(camData(state), setup), "name"), state.choice(QStringLiteral("tool")));
     // A live tool on a lathe with a C axis (mitcad#2067).

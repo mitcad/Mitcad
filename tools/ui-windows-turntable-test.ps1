@@ -17,6 +17,9 @@ param(
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 Ui-Init $App $Out $QtBin @{}
 $work = Join-Path $script:UiOut 'files'
+# An empty folder each run (mitcad#2611): an earlier run's frames make Export
+# ask to replace them, and the script waits for a line that never comes.
+if (Test-Path $work) { Remove-Item -Recurse -Force $work }
 New-Item -ItemType Directory -Force $work | Out-Null
 $design = Join-Path $work 'turntable.mitcad'
 & $Cli run (Join-Path $PSScriptRoot 'ui-scripts/turntable.json') --save $design

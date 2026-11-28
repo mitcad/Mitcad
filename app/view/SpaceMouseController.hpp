@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -10,7 +11,10 @@
 #include <QString>
 
 #include "../platform/SpaceMouseDevice.hpp"
+#include "SpaceMouseButtons.hpp"
 #include "SpaceMouseNavigation.hpp"
+
+class QTimer;
 
 namespace mitcad {
 
@@ -60,6 +64,8 @@ public:
 
   // Whether the backend runs, and its name.
   bool running() const { return m_backend != nullptr; }
+  // The connected device's name as the backend gave it (empty: none).
+  const QString& device() const { return m_device; }
   QString backendName() const;
   // The active design's controller, which gets the input (null: none).
   SpaceMouseController* current() const;
@@ -91,6 +97,7 @@ private:
   // The controllers whose settings have the 3D mouse on.
   std::vector<SpaceMouseController*> m_wanting;
   bool m_loggedOff = false;
+  QString m_device;
 };
 
 // The 3D mouse of the window (mitcad#951): runs the platform's backend
@@ -109,7 +116,17 @@ private:
 // when the cap comes to rest; mitcad#1720), "3D mouse: rotation locked"
 // and "3D mouse: rotation unlocked" (debug, Lock Rotation; " in the
 // sketch" in a sketch), "3D mouse: button <n> runs <command> by default"
-// (a device's known rotation lock key; mitcad#1910).
+// (a device's known labeled keys; mitcad#1910, mitcad#2642), "3D mouse:
+// button <n> waits for a tap or a hold" and "3D mouse: button <n> held
+// runs <command>" (debug, a QuickView key; mitcad#2642).
+//
+// QuickView keys (mitcad#2642, SpaceMouseButtons.hpp): a key of the
+// connected device that sends one press for a tap and a hold, bound to a
+// standard view, runs that view when tapped and the opposite one when
+// held kSpaceMouseHoldMs; nothing runs at its press. A key waiting so is
+// forgotten, running nothing, when the device goes, the 3D mouse is
+// turned off, another design gets the input or the application goes to
+// the background.
 //
 // Lock Rotation (mitcad#1910): outside a sketch it toggles the settings'
 // Lock rotation (saved through the `change` hook, as Preferences saves
@@ -143,6 +160,10 @@ public:
     // any axis, switched off, locked or not (mitcad#1981: the view ignores
     // the wheel then, which the driver may emulate from the cap).
     std::function<void(bool deflected)> deflected;
+    // A steady clock in milliseconds for the QuickView keys' tap and hold
+    // (mitcad#2642); without it the process's steady clock. A unit test
+    // gives its own and calls keysDue().
+    std::function<std::int64_t()> now;
   };
   using Factory = SpaceMouseConnection::Factory;
 
@@ -162,8 +183,12 @@ public:
   // controller's own: the connection gives each its input
   // (SpaceMouseConnection::motion).
   void motion(const SpaceMouseAxes& axes, bool device = true);
-  // A button (0 the first) went down or up: a press runs its command.
+  // A button (0 the first) went down or up: a press runs its command; a
+  // QuickView key's waits for its release or its hold (mitcad#2642).
   void button(int index, bool pressed);
+  // The QuickView keys held long enough by now run their hold's view
+  // (the hold timer's; a unit test calls it after moving its clock).
+  void keysDue();
   // Whether a backend runs for this design, and its name.
   bool running() const { return m_wanted && m_connection->running(); }
   QString backendName() const;
@@ -195,6 +220,12 @@ private:
   // rotation is forgotten.
   bool inSketch();
   void reportRotationLock();
+  // The QuickView keys (mitcad#2642): the clock, a key's view run, the hold
+  // timer set for the next key due, and every waiting key forgotten.
+  std::int64_t nowMs() const;
+  void runKey(const SpaceMouseKeyGestures::Run& run);
+  void scheduleKeys();
+  void cancelKeys();
 
   Hooks m_hooks;
   std::shared_ptr<SpaceMouseConnection> m_connection;
@@ -208,6 +239,10 @@ private:
   bool m_fromDevice = false;
   // Lock Rotation freed the rotation in the sketch being edited.
   bool m_sketchFree = false;
+  // The QuickView keys waiting for their release or hold, and the timer of
+  // the next hold due (mitcad#2642).
+  SpaceMouseKeyGestures m_keys;
+  QTimer* m_keyTimer = nullptr;
 };
 
 } // namespace mitcad

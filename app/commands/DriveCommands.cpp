@@ -424,10 +424,17 @@ CommandDef gearPairCommand(const CommandContext& context, DocumentHost& host) {
   const auto find = [](CommandState& state, const CommandContext& model) {
     QJsonObject query{{QStringLiteral("query"), QStringLiteral("gear_pair")}};
     const QString kind = state.choice(QStringLiteral("kind"));
-    if (kind != QStringLiteral("any")) {
-      query.insert(QStringLiteral("kind"), kind);
+    if (kind == QStringLiteral("cycloid")) {
+      // Spur or helical gears with cycloidal teeth (mitcad#2607): no
+      // pressure angle.
+      query.insert(QStringLiteral("tooth_form"), QStringLiteral("cycloid"));
+    } else {
+      if (kind != QStringLiteral("any")) {
+        query.insert(QStringLiteral("kind"), kind);
+      }
+      query.insert(QStringLiteral("pressure_angle"),
+                   state.choice(QStringLiteral("pressure_angle")).toDouble() * kDegree);
     }
-    query.insert(QStringLiteral("pressure_angle"), state.choice(QStringLiteral("pressure_angle")).toDouble() * kDegree);
     if (state.choice(QStringLiteral("modules")) == QStringLiteral("range")) {
       const double low = state.value(QStringLiteral("module_min"));
       const double high = state.value(QStringLiteral("module_max"));
@@ -483,7 +490,8 @@ CommandDef gearPairCommand(const CommandContext& context, DocumentHost& host) {
       choiceInput(QStringLiteral("kind"), QObject::tr("Type"),
                   {{QStringLiteral("any"), QStringLiteral("Spur or Helical")},
                    {QStringLiteral("spur"), QStringLiteral("Spur")},
-                   {QStringLiteral("helical"), QStringLiteral("Helical")}},
+                   {QStringLiteral("helical"), QStringLiteral("Helical")},
+                   {QStringLiteral("cycloid"), QStringLiteral("Cycloid")}},
                   QStringLiteral("any"))
           .withOnChange(find)
           .withVisible(folded),
@@ -493,7 +501,9 @@ CommandDef gearPairCommand(const CommandContext& context, DocumentHost& host) {
                    {QStringLiteral("25"), QStringLiteral("25") + QChar(0x00B0)}},
                   QStringLiteral("20"))
           .withOnChange(find)
-          .withVisible(folded),
+          .withVisible([folded](const CommandState& state) {
+            return folded(state) && state.choice(QStringLiteral("kind")) != QStringLiteral("cycloid");
+          }),
       choiceInput(QStringLiteral("modules"), QObject::tr("Modules"),
                   {{QStringLiteral("standard"), QStringLiteral("All Standard")},
                    {QStringLiteral("range"), QStringLiteral("From To")}},

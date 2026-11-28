@@ -99,6 +99,19 @@ impl Tool {
         self.diameter / 2.0
     }
 
+    /// The width across which the end cuts a flat floor (mm): the
+    /// diameter of a flat end mill, a bull nose's diameter less twice its
+    /// corner radius, a V-bit's tip; zero for a ball end mill and a drill
+    /// (mitcad#2591).
+    pub fn flat_width(&self) -> f64 {
+        match self.shape {
+            ToolShape::FlatEndMill => self.diameter,
+            ToolShape::BullNose { corner_radius } => (self.diameter - 2.0 * corner_radius).max(0.0),
+            ToolShape::VBit { tip_diameter, .. } => tip_diameter.clamp(0.0, self.diameter),
+            ToolShape::BallEndMill | ToolShape::Drill { .. } => 0.0,
+        }
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if !(self.diameter.is_finite() && self.diameter > 0.0) {
             return Err(format!("Tool {} has no diameter.", self.number));
@@ -210,5 +223,17 @@ mod tests {
         let mut b = Tool::flat_end_mill(5, 6.0);
         b.shape = ToolShape::BullNose { corner_radius: 4.0 };
         assert!(b.validate().is_err());
+    }
+
+    #[test]
+    fn flat_width_is_the_diameter_less_the_corners() {
+        let mut t = Tool::flat_end_mill(1, 6.0);
+        assert_eq!(t.flat_width(), 6.0);
+        t.shape = ToolShape::BullNose { corner_radius: 1.0 };
+        assert_eq!(t.flat_width(), 4.0);
+        t.shape = ToolShape::BullNose { corner_radius: 3.0 };
+        assert_eq!(t.flat_width(), 0.0);
+        t.shape = ToolShape::BallEndMill;
+        assert_eq!(t.flat_width(), 0.0);
     }
 }

@@ -69,6 +69,11 @@ gp_Pnt OcctViewer::GravityPoint(const occ::handle<AIS_InteractiveContext>& conte
   if (input.OrbitRotation.ToRotate && !input.OrbitRotation.ToStart && m_lastOrbitPivot) {
     return *m_lastOrbitPivot;
   }
+  // A trackpad orbit taken up where the last one ended (trackpadScroll).
+  if (m_scrollDragging && m_scrollKeepsPivot && m_lastOrbitPivot && !m_orbitCenter) {
+    qDebug().noquote() << QStringLiteral("Orbit continues about %1").arg(pointText(*m_lastOrbitPivot));
+    return *m_lastOrbitPivot;
+  }
   // The cube's drag starts on the cube: no model point under it.
   std::optional<NCollection_Vec2<int>> cursor;
   if (!m_cubePress) {

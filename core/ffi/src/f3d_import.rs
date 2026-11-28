@@ -2507,6 +2507,19 @@ pub struct TimelineOptions {
     /// Not passed on to the documents the design refers to.
     #[serde(default)]
     pub accept_deviations: Option<AcceptDeviationsOption>,
+    /// Only count the timeline items the import replays (mitcad#2635,
+    /// `f3d_references::replayed_items`), importing nothing: the design's
+    /// and those of each document it refers to that the import imports,
+    /// once however often it is referred to. `{"items", "designs": [{"file",
+    /// "design", "items"}]}`. Takes the import's own options (`design`,
+    /// `dump`, `references`, `reference_files`, `no_references`).
+    #[serde(default)]
+    pub count_items: bool,
+    /// The name of the document this import is for, when it is a document
+    /// the design opened refers to (`f3d_references`): its items' traces
+    /// name it for the progress dialog (mitcad#2635).
+    #[serde(skip)]
+    pub(crate) document_name: Option<String>,
 }
 
 /// The import's `own_start_scale` of
@@ -2857,15 +2870,23 @@ struct Prepared {
     others: Vec<String>,
 }
 
-/// Reads the design to import and its bodies.
-fn prepare(path: &str, options: &TimelineOptions) -> Result<Prepared, ApiError> {
+/// The design of a file's `package` that its import replays, opened and
+/// decoded, with its index in `labels` (the package's labels): the one
+/// `options.design` names, else a package's root design where its manifest
+/// names it (mitcad#229), else the one with the most timeline items.
+fn chosen_design<'p>(
+    package: &'p mitcad_f3d_design::Package,
+    labels: &[String],
+    options: &TimelineOptions,
+) -> Result<
+    (
+        usize,
+        mitcad_f3d_design::PackageDocument<'p>,
+        mitcad_f3d_design::FileDesign,
+    ),
+    ApiError,
+> {
     let fail = |e: String| ApiError(e);
-    let clock = Instant::now();
-    let package = mitcad_f3d_design::package(std::path::Path::new(path)).map_err(fail)?;
-    if package.is_empty() {
-        return Err(ApiError(format!("{path} holds no design")));
-    }
-    let labels: Vec<String> = package.labels().map(str::to_owned).collect();
     // The design asked for, else a package's root design where its
     // manifest names it (mitcad#229).
     let named = match &options.design {
@@ -2889,7 +2910,7 @@ fn prepare(path: &str, options: &TimelineOptions) -> Result<Prepared, ApiError> 
     // chosen one's inputs are found in the bodies' history (mitcad#103).
     // A package's designs are inflated one at a time, the best so far kept
     // (mitcad#923).
-    let (chosen, opened, mut decoded) = match named {
+    Ok(match named {
         Some(index) => {
             let doc = package.open(index).map_err(fail)?;
             let design = mitcad_f3d_design::decode_streams(&doc, &labels[index]).map_err(fail)?;
@@ -2908,7 +2929,57 @@ fn prepare(path: &str, options: &TimelineOptions) -> Result<Prepared, ApiError> 
             let (index, _, doc, design) = best.expect("the package holds a design");
             (index, doc, design)
         }
+    })
+}
+
+/// The external dump an import replays instead of the file's design
+/// (`options.dump`), if it is given.
+fn external_dump(options: &TimelineOptions) -> Result<Option<Dump>, ApiError> {
+    match &options.dump {
+        Some(dump_path) => {
+            let text = std::fs::read_to_string(dump_path)
+                .map_err(|e| ApiError(format!("{dump_path}: {e}")))?;
+            Ok(Some(
+                Dump::from_json(&text).map_err(|e| ApiError(format!("{dump_path}: {e}")))?,
+            ))
+        }
+        None => Ok(None),
+    }
+}
+
+/// The design an import of `path` replays, its label and timeline as
+/// [`prepare`] reads them, without the bodies or the items' inputs: for
+/// counting the items the import replays (mitcad#2635,
+/// [`crate::f3d_references::replayed_items`]). None: the file has no
+/// design segment, and its stored bodies come in as they are.
+pub(crate) fn design_to_replay(
+    path: &str,
+    options: &TimelineOptions,
+) -> Result<(String, Option<Dump>), ApiError> {
+    let package = mitcad_f3d_design::package(std::path::Path::new(path)).map_err(ApiError)?;
+    if package.is_empty() {
+        return Err(ApiError(format!("{path} holds no design")));
+    }
+    let labels: Vec<String> = package.labels().map(str::to_owned).collect();
+    let (chosen, opened, decoded) = chosen_design(&package, &labels, options)?;
+    drop(opened);
+    let dump = match external_dump(options)? {
+        Some(external) => Some(external),
+        None => decoded.dump,
     };
+    Ok((labels[chosen].clone(), dump))
+}
+
+/// Reads the design to import and its bodies.
+fn prepare(path: &str, options: &TimelineOptions) -> Result<Prepared, ApiError> {
+    let fail = |e: String| ApiError(e);
+    let clock = Instant::now();
+    let package = mitcad_f3d_design::package(std::path::Path::new(path)).map_err(fail)?;
+    if package.is_empty() {
+        return Err(ApiError(format!("{path} holds no design")));
+    }
+    let labels: Vec<String> = package.labels().map(str::to_owned).collect();
+    let (chosen, opened, mut decoded) = chosen_design(&package, &labels, options)?;
     let doc: &F3dFile = &opened;
     let label = labels[chosen].clone();
     let others: Vec<String> = labels
@@ -2920,14 +2991,7 @@ fn prepare(path: &str, options: &TimelineOptions) -> Result<Prepared, ApiError> 
     trace_reading("design streams decoded", clock);
     // (An external dump stands in for the file's design.)
     let resolve = options.dump.is_none();
-    let external = match &options.dump {
-        Some(dump_path) => {
-            let text = std::fs::read_to_string(dump_path)
-                .map_err(|e| ApiError(format!("{dump_path}: {e}")))?;
-            Some(Dump::from_json(&text).map_err(|e| ApiError(format!("{dump_path}: {e}")))?)
-        }
-        None => None,
-    };
+    let external = external_dump(options)?;
     // Its items name the history's operations where they carry the file's
     // result numbers (`_f3d.result_no`, as the decoder's own dump does; a
     // synthetic design of the tests, mitcad#379); else the file's design
@@ -3094,6 +3158,10 @@ impl Document {
             .map_err(|e| ApiError(format!("invalid import options: {e}")))?;
         if options.list {
             return list_designs(path);
+        }
+        if options.count_items {
+            let counted = crate::f3d_references::replayed_items(path, &options)?;
+            return Ok(serde_json::to_string_pretty(&counted).expect("serializes"));
         }
         if options.list_references {
             // The application runs the listing in the import process
@@ -3471,6 +3539,7 @@ impl Document {
             // keep their coordinates, which its placements of them assume
             // (mitcad#1937).
             upright: options.stack.is_empty(),
+            document_name: options.document_name.clone(),
             learn: options
                 .learn
                 .clone()

@@ -9,13 +9,16 @@
 // the command search does) reads nothing (the load counter). An earlier version's toolbar pins move
 // into the user layer once. A repeat (mitcad#1975: a command's second place, marked "repeat") is
 // never the command's home while it has another place. The tabs the user hid and
-// Reset Toolbar of one tab (mitcad#1975) are kept in the same layer.
+// Reset Toolbar of one tab (mitcad#1975) are kept in the same layer. A layer
+// saved under the Sheet Parts tab's earlier key (SHEET METAL, mitcad#2602) is
+// read under its key now.
 #include "UnitTests.hpp"
 #include "framework/CommandLayout.hpp"
 
 #include <cstdio>
 #include <initializer_list>
 
+#include <QByteArray>
 #include <QCoreApplication>
 #include <QFile>
 #include <QJsonDocument>
@@ -113,11 +116,12 @@ void shippedDefaultTests() {
   for (const mitcad::LayoutTab& tab : layout.tabs) {
     tabs.append(tab.key);
   }
-  // The tabs of mitcad#1975: Surface and Sheet Metal after Solid, Manage
-  // after Make's; the Make tab split into 3D Print, Laser and CNC (the
-  // owner, 18.11.2026); the Render workspace's tab last (mitcad#1990).
+  // The tabs of mitcad#1975: Surface and Sheet Parts (Sheet Metal until
+  // mitcad#2602) after Solid, Manage after Make's; the Make tab split into
+  // 3D Print, Laser and CNC (the owner, 18.11.2026); the Render workspace's
+  // tab last (mitcad#1990).
   CHECK(tabs == (QStringList{QStringLiteral("START"), QStringLiteral("SOLID"), QStringLiteral("SURFACE"),
-                             QStringLiteral("SHEET METAL"), QStringLiteral("BUILD"), QStringLiteral("MAKE_PRINT"),
+                             QStringLiteral("SHEET PARTS"), QStringLiteral("BUILD"), QStringLiteral("MAKE_PRINT"),
                              QStringLiteral("MAKE_LASER"), QStringLiteral("MAKE_CNC"), QStringLiteral("MANAGE"),
                              QStringLiteral("SKETCH"), QStringLiteral("DRAWING"), QStringLiteral("CUT SHEET"),
                              QStringLiteral("RENDER")}));
@@ -147,9 +151,9 @@ void shippedDefaultTests() {
   // Second places (mitcad#1975) leave the home where it was: New Component
   // also first in Solid › Create, Thicken also there, Material and
   // Appearance also in Solid › Modify and the Make tabs' Materials, the sheet rules
-  // also on the Sheet Metal tab, Export Flat Pattern… also there, Print
+  // also on the Sheet Parts tab, Export Flat Pattern… also there, Print
   // Analysis also in Solid › Inspect, Create Sketch also on Surface and
-  // Sheet Metal, Measure also in the sketch.
+  // Sheet Parts, Measure also in the sketch.
   const auto home = [&layout](const char* id) {
     const mitcad::LayoutPlace place = layout.home(QString::fromLatin1(id));
     return place.tab + QLatin1Char('/') + place.group;
@@ -262,7 +266,7 @@ void shippedDefaultTests() {
   CHECK(home("sketch.create") == QStringLiteral("SOLID/CREATE"));
   CHECK(home("inspect.measure") == QStringLiteral("SOLID/INSPECT"));
   CHECK(home("construct.offset_plane") == QStringLiteral("SOLID/CONSTRUCT"));
-  CHECK(home("sheet.face") == QStringLiteral("SHEET METAL/CREATE"));
+  CHECK(home("sheet.face") == QStringLiteral("SHEET PARTS/CREATE"));
   CHECK(home("solid.parameters") == QStringLiteral("MANAGE/PARAMETERS"));
   CHECK(home("file.design_properties") == QStringLiteral("MANAGE/DESIGN"));
   // Off the toolbar (mitcad#1975): acted on through their objects' menus.
@@ -277,6 +281,9 @@ void shippedDefaultTests() {
   for (const char* id : {"sketch.cut", "sketch.copy", "sketch.paste", "sketch.delete"}) {
     CHECK(edit.contains(QString::fromLatin1(id)));
   }
+  // Invert Selection after Delete (mitcad#2647), in the Edit menu only.
+  CHECK(edit.indexOf(QStringLiteral("edit.invert_selection")) > edit.indexOf(QStringLiteral("sketch.delete")));
+  CHECK(layout.placesOf(QStringLiteral("edit.invert_selection")) == QStringList{QStringLiteral("menu/EDIT")});
   CHECK(idsOf(layout.entries(QStringLiteral("menu/VIEW/PANELS"))) == QStringList{QStringLiteral("view.comments")});
   CHECK(!idsOf(layout.entries(QStringLiteral("menu/VIEW"))).contains(QStringLiteral("view.export_snapshot")));
   CHECK(idsOf(layout.entries(QStringLiteral("menu/FILE"))).contains(QStringLiteral("view.export_snapshot")));
@@ -439,6 +446,39 @@ void customizeTests() {
   CHECK(button.isEmpty());
 }
 
+void renamedTabTests() {
+  // A layer saved while the Sheet Parts tab was SHEET METAL (mitcad#2602):
+  // its changes, pins and hidden tab are read under the tab's key now, and
+  // its button change applies to the shipped layout's Sheet Parts tab.
+  const QByteArray saved = R"({"version": 1,
+    "changes": [{"op": "button", "place": "SHEET METAL/MODIFY", "id": "sheet.unfold", "on": false},
+                {"op": "button", "place": "SOLID/CREATE", "id": "solid.sweep", "on": true}],
+    "pins": {"SHEET METAL": ["sheet.hem"], "SHEET PARTS": ["sheet.hem", "sheet.fold"]},
+    "hiddenTabs": ["SHEET METAL", "SHEET PARTS", "SURFACE"]})";
+  QString error;
+  const LayoutUserLayer layer = LayoutUserLayer::fromJson(QJsonDocument::fromJson(saved).object(), &error);
+  CHECK(error.isEmpty());
+  CHECK(layer.changes.size() == 2);
+  CHECK(layer.changes.front().place == QStringLiteral("SHEET PARTS/MODIFY"));
+  CHECK(layer.changes.back().place == QStringLiteral("SOLID/CREATE"));
+  CHECK(!layer.pins.contains(QStringLiteral("SHEET METAL")));
+  CHECK(layer.pins.value(QStringLiteral("SHEET PARTS")) ==
+        (QStringList{QStringLiteral("sheet.hem"), QStringLiteral("sheet.fold")}));
+  CHECK(layer.hiddenTabs == (QStringList{QStringLiteral("SHEET PARTS"), QStringLiteral("SURFACE")}));
+  // Saved again under the new key only.
+  const QByteArray again = QJsonDocument(layer.toJson()).toJson(QJsonDocument::Compact);
+  CHECK(!again.contains("SHEET METAL"));
+
+  QFile file(QStringLiteral(":/layout/default.json"));
+  CHECK(file.open(QIODevice::ReadOnly));
+  const CommandLayout defaults = CommandLayout::fromJson(QJsonDocument::fromJson(file.readAll()).object(), &error);
+  CHECK(error.isEmpty());
+  CHECK(defaults.hasButton(QStringLiteral("SHEET PARTS/MODIFY"), QStringLiteral("sheet.unfold")));
+  const CommandLayout applied = layer.applied(defaults);
+  CHECK(!applied.hasButton(QStringLiteral("SHEET PARTS/MODIFY"), QStringLiteral("sheet.unfold")));
+  CHECK(applied.hasButton(QStringLiteral("SHEET PARTS/MODIFY"), QStringLiteral("sheet.flat_pattern")));
+}
+
 void storeTests(const QTemporaryDir& directory) {
   const QString path = writeLayout(directory);
   QSettings().remove(CommandLayoutStore::settingsKey());
@@ -566,6 +606,7 @@ int commandLayoutTests() {
   userLayerTests();
   repeatTests();
   customizeTests();
+  renamedTabTests();
   storeTests(directory);
   pinMigrationTests(directory);
   QSettings::setDefaultFormat(format);

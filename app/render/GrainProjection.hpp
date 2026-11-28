@@ -19,7 +19,10 @@
 //    kGrainSquare of the largest) takes as u the longest of X, Y and Z
 //    seen in its plane (the first on a tie), v = (u x v) x u;
 // 5. a point p's grain coordinates are (p . u, p . v) in mm; the
-//    texture's rotation and size apply as in the other projections.
+//    texture's rotation and size apply as in the other projections;
+// 6. each placed body adds its grain offset (grainOffset, mitcad#2605) to
+//    its points' grain coordinates, so neighbouring bodies of one wood do
+//    not read as one board.
 //
 // Plain C++17, header only: the render worker is compiled without the
 // application.
@@ -30,6 +33,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
+#include <string>
 #include <vector>
 
 #include "render/Renderer.hpp"
@@ -200,17 +204,65 @@ inline std::array<double, 2> grainPoint(const GrainAxes& axes, const std::array<
   return {grain_detail::dot(p, axes.u), grain_detail::dot(p, axes.v)};
 }
 
+// The span (mm) a body's grain offset lies in along u and along v
+// (grainOffset): several repeats of every built-in set.
+constexpr double kGrainOffsetSpan = 10000.0;
+
+// What names a placed body for its grain offset: its uid, with '@' and the
+// path of occurrence uids that places it ("F3.b0@O1/O4") when an
+// occurrence does; the shaded view's and the render scene's body key (the
+// model's appearance::grain_key).
+inline std::string grainKey(const std::string& body, const std::string& occurrence) {
+  return occurrence.empty() ? body : body + "@" + occurrence;
+}
+
+// A placed body's offset into the images it lays along the grain
+// (mitcad#2605), in mm along u and along v, added to each of its points'
+// grain coordinates before the rotation and the repeat apply: separate
+// bodies of one wood show different parts of its images, each with its
+// repeat size and grain directions. It depends on the body's key
+// (grainKey) only, so a body keeps it on a redraw, a move and when the
+// design is reopened; all maps and all faces of the body take the same.
+// The model's rule (core/model-base/src/appearance/grain.rs,
+// `grain_offset`) exactly: the key's bytes by 64-bit FNV-1a, mixed by
+// MurmurHash3's final step; the low 32 bits over 2^32 times
+// kGrainOffsetSpan along u, the high 32 bits along v.
+inline std::array<double, 2> grainOffset(const std::string& key) {
+  std::uint64_t hash = 0xcbf29ce484222325ULL;
+  for (const char c : key) {
+    hash ^= static_cast<std::uint64_t>(static_cast<unsigned char>(c));
+    hash *= 0x100000001b3ULL;
+  }
+  hash ^= hash >> 33;
+  hash *= 0xff51afd7ed558ccdULL;
+  hash ^= hash >> 33;
+  hash *= 0xc4ceb9fe1a85ec53ULL;
+  hash ^= hash >> 33;
+  const auto low = static_cast<double>(hash & 0xffffffffULL);
+  const auto high = static_cast<double>(hash >> 32);
+  return {low / 4294967296.0 * kGrainOffsetSpan, high / 4294967296.0 * kGrainOffsetSpan};
+}
+
+// Whether a render body or one of its face groups lays its images along
+// the grain.
+inline bool alongGrain(const BodyData& body) {
+  return body.material.textureGrain || std::any_of(body.faces.begin(), body.faces.end(), [](const FaceMaterial& group) {
+           return group.material.textureGrain;
+         });
+}
+
 // A mesh's grain coordinates (mm, two per vertex) and each vertex's face
 // directions (three floats each for u and for v), face by face
 // (MeshData::faceTriangles; faces keep their own vertices). A mesh without
-// faceTriangles is one face.
+// faceTriangles is one face. The coordinates include the body's grain
+// offset (`offset`, mm: grainOffset; none for a mesh alone).
 struct GrainMesh {
   std::vector<float> coordinates;
   std::vector<float> u;
   std::vector<float> v;
 };
 
-inline GrainMesh grainMeshOf(const MeshData& mesh) {
+inline GrainMesh grainMeshOf(const MeshData& mesh, const std::array<double, 2>& offset = {0.0, 0.0}) {
   GrainMesh result;
   const std::size_t vertices = mesh.positions.size() / 3;
   const std::size_t triangles = mesh.indices.size() / 3;
@@ -240,8 +292,8 @@ inline GrainMesh grainMeshOf(const MeshData& mesh) {
           continue;
         }
         const std::array<double, 2> uv = grainPoint(axes, point(index));
-        result.coordinates[index * 2] = static_cast<float>(uv[0]);
-        result.coordinates[index * 2 + 1] = static_cast<float>(uv[1]);
+        result.coordinates[index * 2] = static_cast<float>(uv[0] + offset[0]);
+        result.coordinates[index * 2 + 1] = static_cast<float>(uv[1] + offset[1]);
         for (int k = 0; k < 3; ++k) {
           result.u[index * 3 + k] = static_cast<float>(axes.u[k]);
           result.v[index * 3 + k] = static_cast<float>(axes.v[k]);

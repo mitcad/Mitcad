@@ -1,0 +1,103 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+ShapeUpgrade_UnifySameDomain: faces joined on a surface that closes on
+itself without being periodic are bounded and trimmed on the periodic
+B-spline made of that surface, not on the surface itself; a B-spline
+surface is made periodic on a copy (mitcad#2623, follow-up of mitcad#2538).
+
+When the merge joins B-spline faces (ConcatBSplines, as the booleans'
+SimplifyResult asks for) and the faces meet at an edge with two pcurves on
+their surface where it closes on itself smoothly, IntUnifyFaces makes the
+surface periodic in that direction: a B-spline in place, any other surface
+(an offset surface, say) approximated by a B-spline first. The relocation
+to a new origin that follows, when the faces' union falls into two
+intervals of the new period, took the bounds from the surface the faces
+started from and trimmed that surface from the new origin over one
+period. On a surface that was approximated the trim reached past the
+original surface's bounds, and Geom_RectangularTrimmedSurface threw
+("V parameters out of range"; a tab joined into a shelled bowl, whose
+rounding and the rib ends on it lie on one such surface); the boolean's
+caller then kept the faces unmerged. The relocation now bounds and trims
+the surface the merged face is built on (the periodic B-spline when one
+was made). A surface that already was a B-spline was made periodic in
+place, so the faces' surface, shared with the input shape and with the
+faces that were not merged, changed under them; it is copied first.
+
+The patch's test and its before/after proof:
+third_party/vcpkg-ports/docs/opencascade-patch-tests.md, section 2623.
+
+diff --git a/src/ModelingAlgorithms/TKShHealing/ShapeUpgrade/ShapeUpgrade_UnifySameDomain.cxx b/src/ModelingAlgorithms/TKShHealing/ShapeUpgrade/ShapeUpgrade_UnifySameDomain.cxx
+index d98e339a..c4e4a8e9 100644
+--- a/src/ModelingAlgorithms/TKShHealing/ShapeUpgrade/ShapeUpgrade_UnifySameDomain.cxx
++++ b/src/ModelingAlgorithms/TKShHealing/ShapeUpgrade/ShapeUpgrade_UnifySameDomain.cxx
+@@ -4029,6 +4029,11 @@ void ShapeUpgrade_UnifySameDomain::IntUnifyFaces(
+         aIsEdgeWith2pcurvesSmooth = (anOrderOfCont >= GeomAbs_G1);
+       }
+ 
++      // The surface of the merged face: the faces' own surface, or the
++      // periodic B-spline made of it below. The relocation to a new origin
++      // bounds and trims this one (MitCad, mitcad#2623).
++      occ::handle<Geom_Surface> aMergeSurface = aBaseSurface;
++
+       if (aIsEdgeWith2pcurvesSmooth)
+       {
+         occ::handle<Geom2d_Curve> aPC1, aPC2;
+@@ -4051,9 +4056,16 @@ void ShapeUpgrade_UnifySameDomain::IntUnifyFaces(
+ 
+         if (aToMakeUPeriodic || aToMakeVPeriodic)
+         {
++          // A B-spline is made periodic on a copy: the faces' surface is
++          // shared with the input shape and the faces not merged (MitCad,
++          // mitcad#2623).
+           occ::handle<Geom_BSplineSurface> aBSplineSurface =
+             occ::down_cast<Geom_BSplineSurface>(aBaseSurface);
+-          if (aBSplineSurface.IsNull())
++          if (!aBSplineSurface.IsNull())
++          {
++            aBSplineSurface = occ::down_cast<Geom_BSplineSurface>(aBSplineSurface->Copy());
++          }
++          else
+           {
+             double        aTol   = 1.e-4;
+             GeomAbs_Shape aUCont = GeomAbs_C1, aVCont = GeomAbs_C1;
+@@ -4096,6 +4108,7 @@ void ShapeUpgrade_UnifySameDomain::IntUnifyFaces(
+             }
+             F_RefFace = RefFace;
+             F_RefFace.Orientation(TopAbs_FORWARD);
++            aMergeSurface = aBSplineSurface;
+           }
+         }
+       } // if (myConcatBSplines && !EdgeWith2pcurves.IsNull() && !SeamFound)
+@@ -4105,7 +4118,7 @@ void ShapeUpgrade_UnifySameDomain::IntUnifyFaces(
+       double aPeriods[2]      = {Uperiod, Vperiod};
+       bool   anIsSeamFound[2] = {UseamFound, VseamFound};
+       double aSurfMin[2], aSurfMax[2];
+-      aBaseSurface->Bounds(aSurfMin[0], aSurfMax[0], aSurfMin[1], aSurfMax[1]);
++      aMergeSurface->Bounds(aSurfMin[0], aSurfMax[0], aSurfMin[1], aSurfMax[1]);
+ 
+       for (int ii = 0; ii < 2; ii++)
+       {
+@@ -4149,7 +4162,7 @@ void ShapeUpgrade_UnifySameDomain::IntUnifyFaces(
+                 // the period, on a copy of the surface (the edges keep their
+                 // pcurves on the faces merged).
+                 occ::handle<Geom_Surface> NewSurf =
+-                  occ::down_cast<Geom_Surface>(aBaseSurface->Copy());
++                  occ::down_cast<Geom_Surface>(aMergeSurface->Copy());
+                 TopoDS_Face               OldRefFace = RefFace;
+                 occ::handle<Geom2d_Curve> NullPCurve;
+                 RefFace.Nullify();
+@@ -4258,11 +4271,11 @@ void ShapeUpgrade_UnifySameDomain::IntUnifyFaces(
+                 bool                      anIsInU = (ii == 0);
+                 if (NewCoordOrigin == aSurfMin[ii])
+                 {
+-                  NewSurf = aBaseSurface;
++                  NewSurf = aMergeSurface;
+                 }
+                 else
+                 {
+-                  NewSurf = new Geom_RectangularTrimmedSurface(aBaseSurface,
++                  NewSurf = new Geom_RectangularTrimmedSurface(aMergeSurface,
+                                                                NewCoordOrigin,
+                                                                NewCoordOrigin + aPeriods[ii],
+                                                                anIsInU); // trim in U or V

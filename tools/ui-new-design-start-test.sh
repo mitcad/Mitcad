@@ -130,7 +130,7 @@ design ', "display": {"origin": true}' > "$WORK/shown.mitcad"
 # New replaces the window's design (no second window to follow).
 ui_open_in_current_window
 # View > Front and View > Top on keys of their own.
-printf '[shortcuts]\nview.front=F8\nview.top=F9\n' >> "$UI_CONFIG/Mitcad/Mitcad.conf"
+printf '[shortcuts]\nview.front=F8\nview.top=F12\n' >> "$UI_CONFIG/Mitcad/Mitcad.conf"
 ui_start_display
 
 echo "--- The untitled design at the start: the default view, the origin shown"
@@ -181,7 +181,7 @@ ui_start_app "$WORK/shown.mitcad"
 expect_origin "$SHOWN_ON" "the opened design's origin stays shown, its light bulb on"
 ! grep -q "View: new design" "$UI_LOG" || ui_fail "an opened design was framed as a new one: $(grep "View: new design" "$UI_LOG" | tail -1)"
 ui_mark
-ui_step "top view (F9)"                  ui_key F9
+ui_step "top view (F12)"                  ui_key F12
 ui_expect_new "Camera direction 0 0 -1" "the opened design seen from the top"
 ui_mark
 ui_step "new design (Ctrl+N)"            ui_key ctrl+n

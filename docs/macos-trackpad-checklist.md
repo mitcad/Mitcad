@@ -22,8 +22,11 @@ off.
       vertical direction (if it does, the orbit goes sideways for a vertical
       scroll); horizontal scroll turns about the vertical axis.
 - [ ] Orbit with "Constrained orbit (Z stays up)" on: Z stays up.
-- [ ] Letting go of Option while the orbit coasts: the coasting continues as
-      an orbit, it does not turn into a pan.
+- [ ] The orbit follows the fingers smoothly, also slowly and on a long
+      part seen along its length (no steps of whole pixels), and stops when
+      the fingers lift: no coasting, also when Option is let go first (no
+      pan either). Scrolling on at once from the same cursor place turns
+      about the same centre.
 - [ ] Shift + two-finger scroll zooms (up: in, down: out, with the
       reverse-zoom setting flipping it); Command + scroll the same. Zoom
       about the cursor follows the "Zoom about the cursor" setting.
@@ -40,6 +43,8 @@ off.
       leaves the canvas unchanged, even if the pointer crosses onto it.
 - [ ] Option + left drag orbits; Shift + Option + left drag pans; a middle drag (if
       there is a mouse) pans; a right drag orbits.
+- [ ] An Option-drag orbit follows the pointer smoothly, also slowly on a
+      long part seen along its length (no steps of whole pixels).
 - [ ] Left click selects; left drag selects with a window; Shift and
       Command + click add to the selection as in the other schemes.
 - [ ] Two-finger click (right click) and Control + click on a body, a face
@@ -68,8 +73,8 @@ events and do not establish physical-input acceptance.
       with Chamfer. Release Command before the trackpad click in one run,
       and release the click before Command in another.
 - [ ] Repeat immediately after an intentional orbit (Option-drag and the
-      preset's two-finger orbit), both after an ordinary stop and after
-      momentum. Lifting the fingers ends the gesture; after both the click
+      preset's two-finger orbit), both after an ordinary stop and after a
+      flick (the orbit has no momentum). Lifting the fingers ends the gesture; after both the click
       and Command are released, pointer motion leaves the camera still and
       the next click selects normally.
 - [ ] Repeat with Trackpad, Shift orbit, and a saved Custom navigation table.
@@ -105,8 +110,9 @@ mitcad#1571-#1573) sends application events; these need the real devices.
 - [ ] Choose "Trackpad (two-finger scroll pans, pinch zooms, Shift orbits)"
       in Navigation, close Settings and reopen it: the choice is retained,
       including after restarting the app.
-- [ ] Shift + two-finger scroll orbits in both directions; releasing Shift
-      during momentum keeps orbiting. Repeat with constrained orbit on.
+- [ ] Shift + two-finger scroll orbits in both directions and stops when
+      the fingers lift, also when Shift is released first. Repeat with
+      constrained orbit on.
 - [ ] Option or Command + scroll zooms; plain scroll pans and pinch zooms.
       Mouse button shortcuts and Shift + click selection still work as in
       the default Trackpad scheme.

@@ -88,7 +88,10 @@ const QString kMakeCnc = QStringLiteral("MAKE_CNC");
 // with SOLID's Construct and Select groups; MANAGE, the design's
 // parameters, configurations, materials and rules, after MAKE.
 const QString kSurface = QStringLiteral("SURFACE");
-const QString kSheetMetal = QStringLiteral("SHEET METAL");
+// SHEET PARTS: the sheet-parts tab (mitcad#2602, SHEET METAL until then): one
+// system whose material and process (sheet metal, board, laser-cut sheet,
+// mitcad#1939) decide its folds, joints and output.
+const QString kSheetParts = QStringLiteral("SHEET PARTS");
 const QString kManage = QStringLiteral("MANAGE");
 // The tabs' data: the index of their page.
 constexpr int kSolidPage = 0;
@@ -102,7 +105,7 @@ constexpr int kMakePrintPage = 5;
 const QString kStart = QStringLiteral("START");
 constexpr int kStartPage = 6;
 constexpr int kSurfacePage = 7;
-constexpr int kSheetMetalPage = 8;
+constexpr int kSheetPartsPage = 8;
 constexpr int kManagePage = 9;
 // The Render workspace's tab (mitcad#1990): alone in the bar while that
 // workspace is chosen in the toolbar panel, as a drawing's tab is.
@@ -148,8 +151,8 @@ const QString& tabName(int page) {
     return kStart;
   case kSurfacePage:
     return kSurface;
-  case kSheetMetalPage:
-    return kSheetMetal;
+  case kSheetPartsPage:
+    return kSheetParts;
   case kManagePage:
     return kManage;
   case kRenderPage:
@@ -166,8 +169,8 @@ int modelPage(const QString& tab) {
   if (tab == kSurface) {
     return kSurfacePage;
   }
-  if (tab == kSheetMetal) {
-    return kSheetMetalPage;
+  if (tab == kSheetParts) {
+    return kSheetPartsPage;
   }
   if (tab == kBuild) {
     return kBuildPage;
@@ -1967,7 +1970,7 @@ namespace {
 
 // The names of the tabs, the groups and the menus' subgroups as the
 // interface shows them, for the translations (mitcad#1460): the commands
-// name their tab and group by an id in capitals ("SHEET METAL") and a
+// name their tab and group by an id in capitals ("SHEET PARTS") and a
 // subgroup by its English name, which code compares and keys settings on;
 // displayName gives the shown name, in the interface language.
 [[maybe_unused]] const char* const kRibbonNames[] = {
@@ -1978,7 +1981,7 @@ namespace {
     QT_TRANSLATE_NOOP("RibbonName", "Cut Sheet"), QT_TRANSLATE_NOOP("RibbonName", "Manage"),
     // Groups.
     QT_TRANSLATE_NOOP("RibbonName", "Create"), QT_TRANSLATE_NOOP("RibbonName", "Modify"),
-    QT_TRANSLATE_NOOP("RibbonName", "Sheet Metal"), QT_TRANSLATE_NOOP("RibbonName", "Surface"),
+    QT_TRANSLATE_NOOP("RibbonName", "Sheet Parts"), QT_TRANSLATE_NOOP("RibbonName", "Surface"),
     QT_TRANSLATE_NOOP("RibbonName", "Assemble"), QT_TRANSLATE_NOOP("RibbonName", "Construct"),
     QT_TRANSLATE_NOOP("RibbonName", "Inspect"), QT_TRANSLATE_NOOP("RibbonName", "Insert"),
     QT_TRANSLATE_NOOP("RibbonName", "Render"), QT_TRANSLATE_NOOP("RibbonName", "Select"),
@@ -2452,9 +2455,9 @@ void Ribbon::createPages() {
   // START (mitcad#1258): an empty page; SOLID is shown at first, the
   // window shows START when the Start page opens at launch.
   m_pages->addWidget(createPage(kStart));
-  // SURFACE, SHEET METAL and MANAGE (mitcad#1975).
+  // SURFACE, SHEET PARTS and MANAGE (mitcad#1975).
   m_pages->addWidget(createPage(kSurface));
-  m_pages->addWidget(createPage(kSheetMetal));
+  m_pages->addWidget(createPage(kSheetParts));
   m_pages->addWidget(createPage(kManage));
   // RENDER (mitcad#1990): the Render workspace's tab, shown while that
   // workspace is chosen in the toolbar panel (setRenderMode).
@@ -2526,11 +2529,11 @@ void Ribbon::rebuild() {
 }
 
 QStringList Ribbon::modelTabOrder() const {
-  // START, SOLID, SURFACE and SHEET METAL (mitcad#1975), BUILD
+  // START, SOLID, SURFACE and SHEET PARTS (mitcad#1975), BUILD
   // (mitcad#375), MAKE_PRINT, MAKE_LASER and MAKE_CNC (mitcad#1049, the
   // owner 18.11.2026) and MANAGE (mitcad#1975) in the layout's order;
   // SKETCH comes after them while sketching, a drawing's tab alone.
-  static const QStringList model = {kStart, kSolid, kSurface, kSheetMetal, kBuild,
+  static const QStringList model = {kStart, kSolid, kSurface, kSheetParts, kBuild,
                                     kMakePrint, kMakeLaser, kMakeCnc, kManage};
   // Those the user hid (mitcad#1975) are left out; Start never is.
   QStringList hidden = CommandLayoutStore::instance().userLayer().hiddenTabs;
@@ -2574,7 +2577,7 @@ void Ribbon::addModelTabs() {
              : page == kMakeLaserPage  ? tr("Laser: flat patterns and faces exported for cutting")
              : page == kMakeCncPage    ? tr("CNC: setups, milling and turning operations and their toolpaths")
              : page == kSurfacePage    ? tr("Surface: surfaces made, trimmed, stitched and thickened")
-             : page == kSheetMetalPage ? tr("Sheet Metal: faces, flanges and bends, their rules and flat patterns")
+             : page == kSheetPartsPage ? tr("Sheet Parts: sheet metal, board and laser-cut sheet, their folds, joints and flat patterns")
              : page == kManagePage     ? tr("Manage: the design's parameters, configurations, materials and rules")
                                        : tr("Solid modeling"));
     inserted.append(key);
@@ -2592,7 +2595,7 @@ void Ribbon::addModelTabs() {
 }
 
 QStringList Ribbon::hideableTabs() {
-  return {kSolid, kSurface, kSheetMetal, kBuild, kMakePrint, kMakeLaser, kMakeCnc, kManage};
+  return {kSolid, kSurface, kSheetParts, kBuild, kMakePrint, kMakeLaser, kMakeCnc, kManage};
 }
 
 void Ribbon::setTabContent(const QString& tab, QWidget* leading, QWidget* trailing) {
@@ -4829,7 +4832,7 @@ QString Ribbon::workspaceOfTab(const QString& tab) {
   if (tab == kMakePrint || tab == kMakeLaser || tab == kMakeCnc) {
     return kMakeWorkspace;
   }
-  if (tab == kSolid || tab == kSurface || tab == kSheetMetal || tab == kBuild || tab == kManage) {
+  if (tab == kSolid || tab == kSurface || tab == kSheetParts || tab == kBuild || tab == kManage) {
     return kDesignWorkspace;
   }
   return QString();
@@ -5875,12 +5878,18 @@ void Ribbon::logLayoutIfChanged() const {
 // The toolbar's places for a tutorial's guide steps (mitcad#2370).
 namespace {
 
-// A name as a guide step may write it: "Sheet Metal", "sheet_metal" and
-// "SHEET METAL" alike.
+// A name as a guide step may write it: "Sheet Parts", "sheet_parts" and
+// "SHEET PARTS" alike.
 QString guideNameKey(const QString& name) {
   QString key = name.toLower();
   key.replace(QLatin1Char('_'), QLatin1Char(' '));
   return key.simplified();
+}
+
+// A tab's earlier name, as a tutorial written before the rename names it:
+// Sheet Metal is the Sheet Parts tab (mitcad#2602).
+QString renamedGuideTab(const QString& wanted) {
+  return wanted == QLatin1String("sheet metal") ? kSheetParts : QString();
 }
 
 } // namespace
@@ -5896,7 +5905,7 @@ QString Ribbon::workspaceOfName(const QString& name) {
 }
 
 QStringList Ribbon::guideTabs() {
-  return {kStart,    kSolid,   kSurface, kSheetMetal, kBuild,    kMakePrint, kMakeLaser,
+  return {kStart,    kSolid,   kSurface, kSheetParts, kBuild,    kMakePrint, kMakeLaser,
           kMakeCnc,  kManage,  kSketch,  kDrawing,    kCutSheet, kRender};
 }
 
@@ -5908,7 +5917,7 @@ QString Ribbon::tabOfName(const QString& name) {
       return key;
     }
   }
-  return QString();
+  return renamedGuideTab(wanted);
 }
 
 QWidget* Ribbon::workspaceSelector() const { return m_workspaces ? m_workspaceButton : nullptr; }

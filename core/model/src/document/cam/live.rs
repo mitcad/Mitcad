@@ -275,8 +275,7 @@ impl<K: Kernel> Document<K> {
                         .sketch_output(*sketch)
                         .ok_or_else(|| "A sketch of the operation is gone or failed.".to_owned())?;
                     for name in curves {
-                        let uid = crate::ids::EntityUid::parse_curve(name)
-                            .map_err(|_| "A sketch curve is named like c3.".to_owned())?;
+                        let uid = crate::cam::curve_input_uid(name)?;
                         let curve =
                             output.solved.curves.get(&uid).ok_or_else(|| {
                                 "A sketch curve of the operation is gone.".to_owned()

@@ -323,7 +323,10 @@ QJsonObject turningFields(const CommandState& state, const QString& type, QStrin
         std::tuple<const char*, ValueKind, QString>{"depth_of_cut", ValueKind::Length, MainWindow::tr("Depth of Cut")},
         std::tuple<const char*, ValueKind, QString>{"peck", ValueKind::Length, MainWindow::tr("Peck")},
         std::tuple<const char*, ValueKind, QString>{"stock_to_leave_z", ValueKind::Length,
-                                                    MainWindow::tr("Stock to Leave along Z")}}) {
+                                                    MainWindow::tr("Stock to Leave along Z")},
+        // A Turn Roughing's or Turn Finishing's limits along Z (mitcad#2629).
+        std::tuple<const char*, ValueKind, QString>{"limit_from", ValueKind::Length, MainWindow::tr("Limit from Z")},
+        std::tuple<const char*, ValueKind, QString>{"limit_to", ValueKind::Length, MainWindow::tr("Limit to Z")}}) {
     const QJsonValue v = value(id, kindOf, label);
     if (!v.isNull()) {
       turning.insert(QLatin1String(id), v);
@@ -451,6 +454,18 @@ CommandDef MainWindow::camTurningCommand(const QString& type) {
                           return latheTools(camData(state), state.choice(QStringLiteral("setup")).toInt());
                         })
                         .withTooltip(tr("A tool on the lathe's turret")));
+  if (type == QStringLiteral("turn_finish") || type == QStringLiteral("turn_rough")) {
+    // A stretch of the profile along Z (mitcad#2629): the stock beyond
+    // the limits is left; at the limit towards the face the tool goes down
+    // into the stock as steeply as its Plunge choice or insert allows.
+    def.inputs.append(valueInput(QStringLiteral("limit_from"), tr("Limit from Z"), ValueKind::Length, QString())
+                          .withHeading(tr("Limits"))
+                          .withAuto([](const CommandState&, const CommandContext&) { return MainWindow::tr("The face"); })
+                          .withTooltip(tr("Where the cut starts towards the face, in the work's Z")));
+    def.inputs.append(valueInput(QStringLiteral("limit_to"), tr("Limit to Z"), ValueKind::Length, QString())
+                          .withAuto([](const CommandState&, const CommandContext&) { return MainWindow::tr("The part's end"); })
+                          .withTooltip(tr("Where the cut ends towards the chuck, in the work's Z")));
+  }
   if (type == QStringLiteral("turn_groove")) {
     def.inputs.append(valueInput(QStringLiteral("z_from"), tr("Z From"), ValueKind::Length, QString())
                           .withHeading(tr("Groove"))
@@ -609,7 +624,7 @@ CommandDef MainWindow::camTurningCommand(const QString& type) {
     for (const char* key : {"surface_speed", "max_rpm"}) {
       loadTurningValue(state, QString::fromLatin1(key), turning.value(QLatin1String(key)), ValueKind::Unitless, context);
     }
-    for (const char* key : {"feed_per_rev", "depth_of_cut", "peck", "stock_to_leave_z"}) {
+    for (const char* key : {"feed_per_rev", "depth_of_cut", "peck", "stock_to_leave_z", "limit_from", "limit_to"}) {
       loadTurningValue(state, QString::fromLatin1(key), turning.value(QLatin1String(key)), ValueKind::Length, context);
     }
     state.setChecked(QStringLiteral("constant_rpm"), turning.value(QStringLiteral("constant_rpm")).toBool());

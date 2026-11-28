@@ -2,9 +2,10 @@
 # check-all sources: app/sketch app/commands/SketchCommands.cpp app/framework/TestDriver.cpp tools/cli
 # check-all sources: core/sketch core/model-api/src/sketch.rs
 # A Center to Center Slot's typed length and width become its dimensions
-# (mitcad#1225) in the build VM, as tools/ui-sketch-slot-dimensions-test.sh
+# (mitcad#1225), and an Overall Slot's typed length its overall length
+# (mitcad#2622), in the build VM, as tools/ui-sketch-slot-dimensions-test.sh
 # on Linux: the shared steps tools/ui-scripts/sketch-slot-dimensions.mitcad-ui
-# on an empty sketch that mitcad-cli makes, then mitcad-cli's check of the
+# on two empty sketches that mitcad-cli makes, then mitcad-cli's check of the
 # saved design (tools/ui-scripts/sketch-slot-dimensions-check.json).
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-sketch-slot-dimensions-test.ps1 -App build\dev\mitcad.exe -Cli build\dev\tools\cli\mitcad-cli.exe [-Out dir] [-QtBin dir]
@@ -22,6 +23,7 @@ $design = Join-Path $work 'slots.mitcad'
 if ($LASTEXITCODE -ne 0) { Ui-Fail 'slot fixture creation failed' }
 $workflow = Join-Path $work 'workflow.mitcad-ui'
 $source = Get-Content -Raw (Join-Path $PSScriptRoot 'ui-scripts/sketch-slot-dimensions.mitcad-ui')
+$source = $source.Replace('ENTER_SKETCH2', "dblclick-logged '^Timeline Sketch2 at '")
 Set-Content -Encoding ascii $workflow ($source.Replace('ENTER_SKETCH', "dblclick-logged '^Timeline Sketch1 at '"))
 $env:MITCAD_TEST_WORK = $work
 $env:MITCAD_TEST_INPUT = $workflow

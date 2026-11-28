@@ -37,3 +37,6 @@ mod weld_symbol_tests;
 // A section's extent: of the whole plane or limited to its line
 // (mitcad#2479).
 mod section_extent_tests;
+// ASME's radius and diameter callouts on a shoulder and short vertical
+// dimensions on an elbow (mitcad#2621).
+mod asme_leader_tests;

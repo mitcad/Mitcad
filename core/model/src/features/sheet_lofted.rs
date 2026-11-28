@@ -12,6 +12,9 @@
 //! mitcad#2560: press brake folds may be bends of the rules' radius
 //! (`bends`); die formed profiles without a developable surface between
 //! them may be laid flat by triangulation (`development: triangulated`).
+//!
+//! mitcad#2576: where bends meet in a point of a profile a corner relief
+//! opens there (`relief`, or the rules' corner relief width).
 
 use super::extrude::ProfileRef;
 use super::mapping::map_params;
@@ -96,6 +99,12 @@ pub struct SheetLoftedFlangeDef<P = ParamId> {
     /// The triangles of a `triangulated` development; none: 64.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub triangles: Option<P>,
+    /// With bends: the size of the corner relief where bends meet in a
+    /// point of a profile (mm, how far from the point its cut runs across
+    /// the facets meeting there, mitcad#2576); none: the rules' corner
+    /// relief width.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relief: Option<P>,
 }
 
 fn is_press_brake(method: &LoftedMethod) -> bool {
@@ -118,6 +127,7 @@ impl<P> SheetLoftedFlangeDef<P> {
             bends: copy,
             development: copy,
             triangles: option,
+            relief: option,
         }
     }
 }
@@ -205,6 +215,13 @@ impl FeatureInfo for SheetLoftedFlangeDef {
                     .into(),
             );
         }
+        if self.relief.is_some() && !self.bends {
+            return Err(
+                "a lofted flange's corner relief is where its bends meet in a point: turn Bends on \
+                 or leave the corner relief out"
+                    .into(),
+            );
+        }
         if self.triangles.is_some() && !triangulated {
             return Err(
                 "the number of triangles is for a die formed lofted flange laid flat by \
@@ -238,6 +255,11 @@ impl FeatureInfo for SheetLoftedFlangeDef {
             && !(g.is_finite() && g > crate::sheet::TOLERANCE)
         {
             return Err(format!("the seam's gap must be positive, got {g}"));
+        }
+        if let Some(r) = self.relief.map(value)
+            && !(r.is_finite() && r > crate::sheet::TOLERANCE)
+        {
+            return Err(format!("the corner relief must be positive, got {r}"));
         }
         if let Some(n) = self.triangles.map(value)
             && !(n.fract() == 0.0 && (2.0..=MAX_TRIANGLES).contains(&n))
@@ -311,6 +333,25 @@ mod tests {
             .unwrap_err();
         assert!(
             error.to_string().contains("for a die formed one"),
+            "{error}"
+        );
+        // A corner relief is where bends meet (mitcad#2576): refused
+        // without them, and not positive.
+        let relieved = |bends: bool, relief: f64| {
+            json!({"type": "sheet_lofted_flange", "rules": rules.uid.to_string(),
+                   "bends": bends, "relief": relief,
+                   "profiles": [{"sketch": first.uid.to_string(), "region": "r{c2}"},
+                                {"sketch": second.uid.to_string(), "region": "r{c2}"}]})
+        };
+        let error = doc
+            .add_feature(&def(relieved(false, 8.0)), None)
+            .unwrap_err();
+        assert!(error.to_string().contains("turn Bends on"), "{error}");
+        let error = doc
+            .add_feature(&def(relieved(true, 0.0)), None)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("corner relief must be positive"),
             "{error}"
         );
     }

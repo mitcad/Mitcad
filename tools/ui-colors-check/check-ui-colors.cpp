@@ -99,6 +99,9 @@ const Allowed kAllowed[] = {
     {"materials/TextureBrowser.cpp", 1, "a neutral grey placeholder of a texture still loading"},
     {"print/PurgeVolumesDialog.cpp", 1, "a neutral shadow line"},
     {"report/ReportDialogs.cpp", 1, "the dimming around a crop"},
+    {"report/RegionPicker.cpp", 3,
+     "Send Feedback on a Region's overlay over any screen content (mitcad#2616): the dimming, the region's "
+     "almost clear fill (never wholly clear, so the window keeps the mouse) and the dark plate of its size"},
     {"view/PrintOverlay.cpp", 2,
      "the white halo under the thinnest point's marker and the white the overlay's texture is multiplied by"},
     {"framework/Ribbon.cpp", 1, "the selected tab's light text on the dark accent pill"},

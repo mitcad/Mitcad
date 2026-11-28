@@ -1,0 +1,134 @@
+# SPDX-License-Identifier: MIT
+# Invert Selection (mitcad#2647) on invert-selection.json: Body1 (F1.b0)
+# and Body2 (F2.b0) shown, Body3 (F3.b0) hidden, and Sketch1 (F4) with a
+# 30 x 20 mm rectangle (its bottom line at y 40, its top line at y 60).
+#   0. Keyboard Shortcuts: Invert Selection has no key; F7 given to it.
+#   1. Bodies: Body1's row selected, Edit > Invert Selection selects Body2
+#      alone (the hidden Body3 is not taken); F7 in the view selects Body1
+#      again.
+#   2. Faces in a body: Body1 isolated, one of its faces clicked; Invert
+#      Selection selects its five other faces, none of Body2 (not shown).
+#   3. Sketch curves in a sketch: the rectangle's bottom line clicked; F7
+#      selects its three other lines; Invert Selection in the view's
+#      context menu (opened on the top line) selects the bottom line again.
+#   4. In a command's input: Interference's Bodies input empty, Invert
+#      Selection takes both shown bodies (only bodies: what the input
+#      takes), and again none.
+# Run by tools/ui-invert-selection-test.sh (Linux),
+# tools/ui-windows-invert-selection-test.ps1 (Windows) and
+# tools/ui-macos-invert-selection-test.sh (macOS).
+wait-idle 30
+command view.iso
+command view.fit
+wait-idle
+expect-command-enabled edit.invert_selection true
+
+# 0. Keyboard Shortcuts: F7 for Invert Selection.
+mark
+command tools.shortcuts
+focus-dialog '^Keyboard Shortcuts$'
+focus-widget shortcutSearch
+type 'Invert Selection'
+key Down
+wait-log '^Keyboard Shortcuts row: Invert Selection \| [^|]+ \| \(none\)$'
+key Return
+wait-log '^Keyboard Shortcuts recording: Invert Selection \| '
+key F7
+wait-log '^Keyboard Shortcuts key: Invert Selection \| [^|]+ = F7$'
+focus-widget shortcutSearch
+key Return
+wait-log '^Keyboard Shortcuts saved$'
+expect-dialog-gone '^Keyboard Shortcuts$'
+focus-main
+expect-no-log '^Keyboard Shortcuts conflict'
+
+# 1. Bodies: the hidden Body3 is not taken.
+mark
+click-logged '^Browser Root/Bodies/Body1 at '
+wait-log '^Selected: 1 body \[body F1\.b0\]$'
+mark
+menu 'Edit/Invert Selection'
+wait-log '^Invert Selection: 1 body to 1 body$'
+wait-log '^Selected: 1 body \[body F2\.b0\]$'
+expect-no-log '^Selected: .*F3\.b0'
+focus-widget modelView
+mark
+key F7
+wait-log '^Invert Selection: 1 body to 1 body$'
+wait-log '^Selected: 1 body \[body F1\.b0\]$'
+
+# 2. Faces in a body: Body1 isolated, so Body2's faces are not shown.
+mark
+command view.isolate
+wait-log '^Isolated body F1\.b0'
+wait-log '^Bodies shown: F1\.b0$'
+command view.fit
+wait-idle
+mark
+click-visible-face
+wait-log '^Selected: 1 face \[face F1:[^ ]+ of F1\.b0\]$'
+mark
+menu 'Edit/Invert Selection'
+wait-log '^Invert Selection: 1 face to 5 faces$'
+wait-log '^Selected: 5 faces \[face F1:[^;]+ of F1\.b0(; face F1:[^;]+ of F1\.b0){4}\]$'
+expect-selection 5 0
+screenshot '${MITCAD_TEST_WORK}/invert-selection-faces.png'
+mark
+command view.unisolate
+wait-log '^Unisolated'
+wait-log '^Bodies shown: F1\.b0, F2\.b0$'
+focus-widget modelView
+key Escape
+wait-idle
+expect-selection 0 0
+
+# 3. Sketch curves in a sketch: by the key, then by the context menu.
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F4 \(Sketch1\)'
+command view.fit
+wait-idle
+mark
+sketch-click 15 40
+wait-log '^Selected: 1 sketch curve \[sketch curve c[0-9]+ of F4\]$'
+capture bottom '^Selected: 1 sketch curve \[sketch curve (c[0-9]+) of F4\]$'
+focus-widget modelView
+mark
+key F7
+wait-log '^Invert Selection: 1 sketch curve to 3 sketch curves$'
+wait-log '^Selected: 3 sketch curves \['
+expect-no-log '^Selected: .*sketch curve ${bottom} of F4'
+expect-selection 3 0
+screenshot '${MITCAD_TEST_WORK}/invert-selection-sketch.png'
+mark
+sketch-click 15 60 right
+wait-log '^Context menu: .*Invert Selection'
+popup 'Invert Selection'
+wait-log '^Invert Selection: 3 sketch curves to 1 sketch curve$'
+wait-log '^Selected: 1 sketch curve \[sketch curve ${bottom} of F4\]$'
+mark
+command sketch.finish
+wait-log '^Sketch finished$'
+wait-idle
+focus-widget modelView
+key Escape
+wait-idle
+
+# 4. In a command: Interference's Bodies input takes the shown bodies.
+mark
+command inspect.interference
+wait-log '^Command Interference started'
+wait-idle
+mark
+menu 'Edit/Invert Selection'
+wait-log '^Invert Selection in Interference Bodies: nothing to 2 bodies$'
+wait-log '^Interference Bodies: 2 bodies \[body F1\.b0; body F2\.b0\]$'
+mark
+menu 'Edit/Invert Selection'
+wait-log '^Invert Selection in Interference Bodies: 2 bodies to nothing$'
+wait-log '^Interference Bodies: nothing$'
+mark
+key Escape
+wait-log '^Command Interference cancelled'
+wait-idle
+expect-never 'OCCT view event failed|Recompute failed|TestDriver: FAIL'

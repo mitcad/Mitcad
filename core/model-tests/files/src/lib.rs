@@ -64,3 +64,6 @@ mod threemf_face_colors_2385_tests;
 // colouring pattern of the reporter's circuit board of GitHub
 // mitcad/Mitcad#677 (mitcad#2423).
 mod body_colors_2423_tests;
+// Recovered work keeps what its file has that this build does not read
+// (mitcad#2587).
+mod recovered_fields_not_read_2587_tests;

@@ -770,7 +770,9 @@ int runApplication(int argc, char* argv[]) {
         // Hide/Show of the selection (mitcad#2356), in the 3D view.
         {"view.toggle_visibility", "V"},
         // Isolate and Unisolate (mitcad#2482): no key; the user binds them.
-        {"view.isolate", ""},                                 {"view.unisolate", ""}};
+        {"view.isolate", ""},                                 {"view.unisolate", ""},
+        // Invert Selection (mitcad#2647): no key; the user binds it.
+        {"edit.invert_selection", ""}};
     bool expectedKeys = true;
     for (const auto& entry : expected) {
       const QString id = QString::fromLatin1(entry[0]);

@@ -128,6 +128,8 @@ const TestDriver::StepSpec kStepSpecs[] = {
     // A tutorial's guide step (mitcad#2370).
     {"guide-step", 1, 3, TestDriver::kIdle},
     {"guide-end", 0, 0, TestDriver::kIdle},
+    // A live MCP tool as an agent calls it (mitcad#2587).
+    {"mcp-tool", 2, 4, TestDriver::kInputOfMain},
 };
 
 } // namespace
@@ -410,6 +412,46 @@ void TestDriver::runCommandStep(const QString& name, const QStringList& a, int l
     }
     if (a.size() == 3) {
       fail(line, QStringLiteral("guide-step was not refused"));
+    }
+  } else if (name == QLatin1String("mcp-tool")) {
+    // A live MCP tool called in the design's window as an agent's request
+    // reaches it (mitcad#2587: document_save refused), without the bridge;
+    // `refused <regex>` expects the refusal, matching <regex>.
+    if (a.size() == 3 || (a.size() == 4 && a.at(2) != QLatin1String("refused"))) {
+      fail(line, QStringLiteral("mcp-tool <tool> <arguments' JSON> [refused <regex>]"));
+      return;
+    }
+    auto* window = qobject_cast<MainWindow*>(m_main.data());
+    if (window == nullptr) {
+      fail(line, QStringLiteral("mcp-tool needs a design's window"));
+      return;
+    }
+    QJsonParseError parseError{};
+    const QJsonDocument arguments = QJsonDocument::fromJson(a.at(1).toUtf8(), &parseError);
+    if (!arguments.isObject()) {
+      fail(line, QStringLiteral("mcp-tool needs its arguments as a JSON object: %1").arg(parseError.errorString()));
+      return;
+    }
+    try {
+      const QJsonObject result = window->mcpTool(a.at(0), arguments.object());
+      qDebug().noquote() << QStringLiteral("TestDriver: mcp-tool %1: %2")
+                                .arg(a.at(0), QString::fromUtf8(QJsonDocument(result).toJson(QJsonDocument::Compact)));
+    } catch (const std::exception& refused) {
+      const QString reason = QString::fromUtf8(refused.what());
+      QRegularExpression re;
+      if (a.size() == 4 && regex(a.at(3), re)) {
+        if (!re.match(reason).hasMatch()) {
+          fail(line, QStringLiteral("mcp-tool %1 refused with '%2', not '%3'").arg(a.at(0), reason, a.at(3)));
+        } else {
+          qDebug().noquote() << QStringLiteral("TestDriver: mcp-tool %1 refused: %2").arg(a.at(0), reason);
+        }
+        return;
+      }
+      fail(line, QStringLiteral("mcp-tool %1 refused: %2").arg(a.at(0), reason));
+      return;
+    }
+    if (a.size() == 4) {
+      fail(line, QStringLiteral("mcp-tool %1 was not refused").arg(a.at(0)));
     }
   }
 }

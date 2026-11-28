@@ -307,6 +307,24 @@ constexpr Aspect_VKeyFlags kScrollPan = Aspect_VKeyFlags_META | Aspect_VKeyFlags
 constexpr Aspect_VKeyFlags kScrollOrbit = Aspect_VKeyFlags_META | Aspect_VKeyFlags_CTRL;
 // A scroll that pauses this long ends its drag (ms).
 constexpr int kScrollEndMilliseconds = 150;
+// A trackpad orbit's drag follows its scroll with this time constant (ms):
+// a scroll step turns the view over a few frames instead of in one, which
+// a step of a whole point already shows on a model far from the orbit's
+// centre. A step takes at most one frame's time (ms), so that a scroll
+// after a pause starts gliding too, and at least a quarter of that, so that
+// a scroll event and a frame right after it still move the view.
+constexpr double kScrollGlideMilliseconds = 35.0;
+constexpr double kScrollGlideFrameMilliseconds = 16.0;
+constexpr double kScrollGlideMinMilliseconds = 4.0;
+// A trackpad orbit that begins this soon (ms) after the last one ended, with
+// the cursor where it was, turns about the same point (trackpadScroll).
+constexpr qint64 kScrollPivotKeepMilliseconds = 500;
+// An orbit has no momentum (trackpadScroll): macOS's after an orbit's end
+// lasts up to this long (ms), and Qt sends its start as a new scroll this
+// soon (ms, by the events' own times: drawing a frame between them does not
+// count) after the end at the latest.
+constexpr qint64 kScrollMomentumMilliseconds = 3000;
+constexpr quint64 kScrollMomentumBeginMilliseconds = 50;
 // The zoom steps (what a wheel notch of 15 gives, about 15 %) of a pixel of
 // scrolling with Shift or Ctrl, and of 1.0 of a pinch's magnification
 // (AIS_ViewController zooms by 1 + steps / 100).
@@ -323,19 +341,16 @@ constexpr int kReleaseFrameMilliseconds = 100;
 
 // The cube's place in the upper right corner: its centre's distance from the
 // corner (`cubeOffset` widget pixels) in device pixels (the overlay insets
-// move the corner). As the view
-// projects it, or drawn and picked orthographic also in a perspective view
-// (mitcad#766; mitcad#774: the cube's own perspective is made on its
-// geometry, which is then drawn orthographic).
-occ::handle<Graphic3d_TransformPers> cubePersistence(qreal ratio, int cubeOffset, const QMargins& insets,
-                                                     bool orthographic) {
+// move the corner). Drawn and picked orthographic also in a perspective or
+// stereo view (mitcad#766), in each of the cube's projections: its own
+// perspective is made on its geometry, centred on its middle (mitcad#774;
+// Follow the View too, mitcad#2641: the view's perspective would show it
+// from the view's middle, off its own axis).
+occ::handle<Graphic3d_TransformPers> cubePersistence(qreal ratio, int cubeOffset, const QMargins& insets) {
   const NCollection_Vec2<int> offset(qRound((cubeOffset + insets.right()) * ratio),
                                      qRound((cubeOffset + insets.top()) * ratio));
-  if (orthographic) {
-    return new Graphic3d_TransformPers(Graphic3d_TMF_TriedronPers | Graphic3d_TMF_OrthoPers,
-                                       Aspect_TOTP_RIGHT_UPPER, offset);
-  }
-  return new Graphic3d_TransformPers(Graphic3d_TMF_TriedronPers, Aspect_TOTP_RIGHT_UPPER, offset);
+  return new Graphic3d_TransformPers(Graphic3d_TMF_TriedronPers | Graphic3d_TMF_OrthoPers, Aspect_TOTP_RIGHT_UPPER,
+                                     offset);
 }
 
 // The camera math of the buttons that turn the view (mitcad#773). OCCT's
@@ -690,6 +705,14 @@ bool isTrackpadScroll(const QWheelEvent* event) {
 QPointF scrollPixels(const QWheelEvent* event) {
   QPointF pixels = !event->pixelDelta().isNull() ? QPointF(event->pixelDelta())
                                                  : QPointF(event->angleDelta()) / 6.0; // a notch (120): ~20 px
+#ifdef Q_OS_MACOS
+  // Cocoa cuts a trackpad's fractional deltas to whole points in
+  // pixelDelta, and a slow scroll's to none; its angleDelta is the same
+  // delta at 2 per point, which keeps the half points.
+  if (event->phase() != Qt::NoScrollPhase && !event->angleDelta().isNull()) {
+    pixels = QPointF(event->angleDelta()) / 2.0;
+  }
+#endif
   // xcb and Wayland swap a scroll's axes while Alt is held (a wheel then
   // scrolls sideways); a touchpad's fingers keep their own directions, so
   // Alt + scroll orbits the way they move (GitHub mitcad/Mitcad#381, #662).
@@ -1010,9 +1033,12 @@ ViewLook viewLookOf(const Appearance* appearance, const QColor& color) {
 
 // A body with textures in the shaded styles (mitcad#2186): its own look
 // and its face groups', when one of them is textured; null otherwise.
+// `grainOffset` is the placed body's offset into the images laid along the
+// grain (mitcad#2605).
 occ::handle<TexturedBody> texturedBodyOf(const geometry::Shape& named, const Appearance* appearance,
                                          const QColor& color, const std::vector<BodyDisplay::FaceLook>& faceLooks,
-                                         VisualStyle visual, const std::shared_ptr<const ViewEdges>& edges) {
+                                         VisualStyle visual, const std::shared_ptr<const ViewEdges>& edges,
+                                         const std::array<double, 2>& grainOffset) {
   if (!shadedFaces(visual)) {
     return occ::handle<TexturedBody>();
   }
@@ -1029,7 +1055,7 @@ occ::handle<TexturedBody> texturedBodyOf(const geometry::Shape& named, const App
   if (std::none_of(looks.begin(), looks.end(), [](const ViewLook& look) { return !look.texture.IsNull(); })) {
     return occ::handle<TexturedBody>();
   }
-  return new TexturedBody(std::move(looks), std::move(faceLook), edges, named.occt());
+  return new TexturedBody(std::move(looks), std::move(faceLook), edges, named.occt(), grainOffset);
 }
 
 // The same faces with the same look in the rendered view.
@@ -1117,7 +1143,8 @@ occ::handle<AIS_Shape> makeBodyObject(const geometry::Shape& named, BodyDisplay:
                                       const Appearance* appearance,
                                       const std::vector<BodyDisplay::FaceLook>& faceLooks, VisualStyle visual,
                                       const QColor& paper, bool sectioned,
-                                      const std::shared_ptr<const ViewEdges>& edges) {
+                                      const std::shared_ptr<const ViewEdges>& edges,
+                                      const std::array<double, 2>& grainOffset) {
   const TopoDS_Shape& shape = named.occt();
   // Its lines from the copies of its edges where it has them (mitcad#1633).
   const auto object = [&shape, &edges]() -> occ::handle<AIS_Shape> {
@@ -1154,7 +1181,8 @@ occ::handle<AIS_Shape> makeBodyObject(const geometry::Shape& named, BodyDisplay:
   // Textures (mitcad#2186): a body or face with a texture the view draws
   // takes the textured presentation, which draws the face groups' colours
   // too.
-  const occ::handle<TexturedBody> textured = texturedBodyOf(named, appearance, color, faceLooks, visual, edges);
+  const occ::handle<TexturedBody> textured =
+      texturedBodyOf(named, appearance, color, faceLooks, visual, edges, grainOffset);
   const bool faceColors = !faceLooks.empty() && shadedFaces(visual) && textured.IsNull();
   occ::handle<AIS_ColoredShape> colored;
   if (faceColors) {
@@ -1272,9 +1300,10 @@ occ::handle<AIS_Shape> makeBody(const geometry::Shape& named, BodyDisplay::Style
                                 const Appearance* appearance,
                                 const std::vector<BodyDisplay::FaceLook>& faceLooks, VisualStyle visual,
                                 const QColor& paper, bool sectioned,
-                                const std::shared_ptr<const ViewEdges>& edges) {
+                                const std::shared_ptr<const ViewEdges>& edges,
+                                const std::array<double, 2>& grainOffset) {
   occ::handle<AIS_Shape> body =
-      makeBodyObject(named, style, color, appearance, faceLooks, visual, paper, sectioned, edges);
+      makeBodyObject(named, style, color, appearance, faceLooks, visual, paper, sectioned, edges, grainOffset);
   if (!drawerMeshes(named)) {
     body->Attributes()->SetAutoTriangulation(false);
   }
@@ -2003,7 +2032,7 @@ OcctViewer::OcctViewer(QWidget* parent) : QOpenGLWidget(parent) {
   m_orientationCube->SetFixedAnimationLoop(false);
   m_orientationCube->SetAutoStartAnimation(true);
   // In the upper right corner, with its labels in capitals.
-  m_orientationCube->SetTransformPersistence(cubePersistence(1.0, cubeOffset(), QMargins(), false));
+  m_orientationCube->SetTransformPersistence(cubePersistence(1.0, cubeOffset(), QMargins()));
   m_cubeBaseSize = viewCubeSize(*m_orientationCube); // the nominal size, not the face's (mitcad#1620)
   m_cubeBaseFont = m_orientationCube->FontHeight();
   // The faces' names in the interface language (mitcad#1674), as UTF-8 (the
@@ -2921,17 +2950,22 @@ void OcctViewer::showBody(BodyEntry& entry) {
     // face that a split left.
     entry.edges = same ? same : std::make_shared<const ViewEdges>(shape, partners, entry.shape.get());
   }
-  // The component palette shows no textures (mitcad#2186).
+  // The component palette shows no textures (mitcad#2186). Each placed
+  // body its own part of the images laid along the grain (mitcad#2605), by
+  // its key as the render scene names it.
+  const std::array<double, 2> grainOffset = render::grainOffset(render::grainKey(entry.uid, entry.occurrence));
   entry.object = makeBody(*entry.shape, inactive || seeThrough ? BodyDisplay::Style::Ghost : entry.style, color,
                          componentColors ? nullptr : &entry.appearance,
                          componentColors ? std::vector<BodyDisplay::FaceLook>{} : entry.faceLooks,
-                         m_visualStyle, m_paper, entry.sectioned, entry.edges);
+                         m_visualStyle, m_paper, entry.sectioned, entry.edges, grainOffset);
   if (const auto* textured = dynamic_cast<const TexturedBody*>(entry.object.get())) {
     // For the UI tests (mitcad#2186): which bodies the view draws with
-    // textures.
-    const QString look = QStringLiteral("View textured body %1: %2 textured looks")
+    // textures, and (mitcad#2605) each one's grain offset.
+    const QString look = QStringLiteral("View textured body %1: %2 textured looks, grain offset %3 %4")
                              .arg(QString::fromStdString(entry.uid))
-                             .arg(textured->texturedLooks());
+                             .arg(textured->texturedLooks())
+                             .arg(textured->grainOffset()[0], 0, 'f', 1)
+                             .arg(textured->grainOffset()[1], 0, 'f', 1);
     if (!m_loggedTexturedBodies.contains(look)) {
       m_loggedTexturedBodies.insert(look);
       qDebug().noquote() << look;
@@ -6674,6 +6708,11 @@ void OcctViewer::keepCamera() {
 }
 
 void OcctViewer::fitAll() {
+  // A glide still on its way (Home, a standard view, a saved view) ends
+  // where it was going first: its next steps would put back the camera the
+  // fit made, and the Fit would be lost (F6 at once after Home, which a
+  // design opened at its Home view glides through in place, mitcad#2671).
+  endCameraGlide();
   m_fitPending = true;
   m_framingNewDesign = false;
   requestFrame();
@@ -7023,7 +7062,7 @@ void OcctViewer::logPreviewLook(const QString& what, bool culled) {
   }
 }
 
-void OcctViewer::settleCamera() {
+void OcctViewer::endCameraGlide() {
   const occ::handle<AIS_AnimationCamera>& animation = ViewAnimation();
   if (!animation.IsNull() && !animation->IsStopped()) {
     const occ::handle<Graphic3d_Camera> end = animation->CameraEnd();
@@ -7034,6 +7073,10 @@ void OcctViewer::settleCamera() {
     m_view->Invalidate();
     cameraMoved();
   }
+}
+
+void OcctViewer::settleCamera() {
+  endCameraGlide();
   if (m_fitPending) {
     applyPendingFit(); // as the next frame would (paintGL)
     cameraMoved();
@@ -7338,7 +7381,28 @@ void OcctViewer::goHome() {
   turnTo(defaultViewDirection(), defaultViewUp());
 }
 
-void OcctViewer::runViewOperation(const QString& operation, const std::function<void()>& run) {
+bool OcctViewer::openAtHome() {
+  if (!m_home) {
+    return false;
+  }
+  const CameraState home = *m_home;
+  if (!placeCamera(home, false)) {
+    return false;
+  }
+  // The saved camera wins over the framing the open asked for before
+  // (a new design's at the start, the last design's fit) and over the fit
+  // of the design's first bodies, also when they come into the view later.
+  m_fitPending = false;
+  m_framingNewDesign = false;
+  m_firstFit.disarm();
+  // A framing made: the view's first window keeps the height it shows
+  // (attachView), instead of the empty scene's 250 mm.
+  m_fitMade = true;
+  qInfo().noquote() << QStringLiteral("View: opened at the design's home view");
+  return true;
+}
+
+bool OcctViewer::runViewOperation(const QString& operation, const std::function<void()>& run) {
   occ::handle<Graphic3d_Camera> before = new Graphic3d_Camera();
   before->Copy(m_view->Camera());
   const char* outerStep = m_viewStep;
@@ -7357,7 +7421,7 @@ void OcctViewer::runViewOperation(const QString& operation, const std::function<
   const char* step = m_viewStep;
   m_viewStep = outerStep;
   if (failure.isEmpty()) {
-    return;
+    return true;
   }
   // "View operation failed: turn (the fit to the free area):
   // Standard_ConstructionError: …", for UI tests and reports (mitcad#773).
@@ -7370,6 +7434,7 @@ void OcctViewer::runViewOperation(const QString& operation, const std::function<
   m_view->Invalidate();
   cameraMoved();
   requestFrame();
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -7593,8 +7658,7 @@ void OcctViewer::applyCubePlacement() {
   const double scale = m_cubeRatio * m_cubeScale / 100.0;
   sizeViewCube(*m_orientationCube, m_cubeBaseSize * scale);
   m_orientationCube->SetFontHeight(m_cubeBaseFont * scale);
-  m_orientationCube->SetTransformPersistence(
-      cubePersistence(m_cubeRatio, cubeOffset(), m_overlayInsets, m_cubeProjection != CubeProjection::FollowView));
+  m_orientationCube->SetTransformPersistence(cubePersistence(m_cubeRatio, cubeOffset(), m_overlayInsets));
   if (displayed) {
     m_context->Display(m_orientationCube, 0, 0, false);
   }
@@ -8049,16 +8113,17 @@ void OcctViewer::logOrientationCube() {
     qDebug().noquote() << QStringLiteral("Orientation cube zones: %1").arg(zones.join(QStringLiteral(", ")));
   }
   // The cube's outline as drawn and the extent of its picks, in window
-  // pixels, with the camera's direction and projection and the cube's
-  // (mitcad#766, mitcad#774: an orthographic or perspective cube is the same
-  // in either view projection; UI tests compare them).
+  // pixels, with the camera's direction and projection and the cube's, and
+  // how the cube is drawn (mitcad#766, mitcad#774: an orthographic or
+  // perspective cube is the same in either view projection; mitcad#2641:
+  // Follow the View draws it as one of them; UI tests compare them).
   const QRectF outline = cubeOutline();
   if (!outline.isEmpty() && pickRight >= 0) {
     const QPoint from = mapTo(window(), QPoint(qRound(outline.left()), qRound(outline.top())));
     const QPoint to = mapTo(window(), QPoint(qRound(outline.right()), qRound(outline.bottom())));
     const occ::handle<Graphic3d_Camera>& camera = m_view->Camera();
     qDebug().noquote() << QStringLiteral("Orientation cube outline %1,%2 to %3,%4, picks %5,%6 to %7,%8, "
-                                         "looking %9 (%10), cube %11")
+                                         "looking %9 (%10), cube %11 (%12)")
                               .arg(from.x())
                               .arg(from.y())
                               .arg(to.x())
@@ -8067,8 +8132,10 @@ void OcctViewer::logOrientationCube() {
                               .arg(corner.y() + pickTop * kStep)
                               .arg(corner.x() + pickRight * kStep)
                               .arg(corner.y() + pickBottom * kStep)
-                              .arg(vectorText(camera->Direction().XYZ()),
-                                   projectionName(), cubeProjectionId(m_cubeProjection));
+                              .arg(vectorText(camera->Direction().XYZ()), projectionName(),
+                                   cubeProjectionId(m_cubeProjection),
+                                   cubeInPerspective() ? QStringLiteral("perspective")
+                                                       : QStringLiteral("orthographic"));
   }
   requestFrame();
 }
@@ -8156,13 +8223,15 @@ CameraState OcctViewer::pendingCamera() const {
   return state;
 }
 
-void OcctViewer::setCamera(const CameraState& state) {
+void OcctViewer::setCamera(const CameraState& state) { placeCamera(state, true); }
+
+bool OcctViewer::placeCamera(const CameraState& state, bool glide) {
   // Not a number (a stored view that is broken) fails these too.
   if (!(state.eye.Distance(state.target) > Precision::Confusion()) || !(state.height > 0.0) ||
       !std::isfinite(state.height)) {
-    return;
+    return false;
   }
-  runViewOperation(QStringLiteral("camera"), [this, &state] {
+  return runViewOperation(QStringLiteral("camera"), [this, &state, glide] {
     m_viewStep = "the camera";
     occ::handle<Graphic3d_Camera> end = new Graphic3d_Camera();
     end->Copy(m_view->Camera());
@@ -8188,7 +8257,15 @@ void OcctViewer::setCamera(const CameraState& state) {
     setVisibleHeight(*end, state.height);
     followFaces(*end);
     m_viewStep = "the camera's move";
-    moveCamera(end);
+    if (glide) {
+      moveCamera(end);
+      return;
+    }
+    AbortViewAnimation();
+    m_view->Camera()->Copy(end);
+    m_view->Invalidate();
+    cameraMoved();
+    requestFrame();
   });
 }
 
@@ -8421,12 +8498,9 @@ void OcctViewer::setCubeProjection(CubeProjection projection) {
     return;
   }
   m_cubeProjection = projection;
-  setViewCubePerspective(*m_orientationCube, projection == CubeProjection::Perspective);
-  setViewCubeEye(*m_orientationCube, m_view->Camera()->Direction().Reversed());
-  applyCubePlacement();
-  if (m_context->IsDisplayed(m_orientationCube)) {
-    m_context->RecomputeSelectionOnly(m_orientationCube); // picked as drawn
-  }
+  // Its own perspective or none, drawn and picked so (the transform
+  // persistence is the same in each).
+  updateCubeEye();
   qDebug().noquote() << QStringLiteral("Orientation cube projection %1").arg(cubeProjectionId(projection));
   // Its places and outline logged again when the camera rests (UI tests),
   // also where the camera did not move.
@@ -8435,15 +8509,37 @@ void OcctViewer::setCubeProjection(CubeProjection projection) {
   requestFrame();
 }
 
-void OcctViewer::updateCubeEye() {
-  if (m_cubeProjection != CubeProjection::Perspective ||
-      !setViewCubeEye(*m_orientationCube, m_view->Camera()->Direction().Reversed())) {
-    return;
+bool OcctViewer::cubeInPerspective() const {
+  switch (m_cubeProjection) {
+  case CubeProjection::Orthographic:
+    return false;
+  case CubeProjection::Perspective:
+    return true;
+  case CubeProjection::FollowView:
+    break;
+  }
+  // Follow the View (mitcad#2641): the camera's projection, centred on the
+  // cube as the cube's own Perspective is; Perspective with Orthographic
+  // Faces thus orthographic at a face and perspective off it. A stereo
+  // camera (Anaglyph 3D) by the mono projection it goes back to, the same
+  // for both eyes.
+  const occ::handle<Graphic3d_Camera>& camera = m_view->Camera();
+  return camera->IsStereo() ? m_monoPerspective : !camera->IsOrthographic();
+}
+
+bool OcctViewer::updateCubeEye() {
+  // The eye is kept also while the cube has no perspective of its own, so
+  // that one switched on starts from where the camera looks.
+  const bool eyeMoved = setViewCubeEye(*m_orientationCube, m_view->Camera()->Direction().Reversed());
+  const bool projectionChanged = setViewCubePerspective(*m_orientationCube, cubeInPerspective());
+  if (!eyeMoved && !projectionChanged) {
+    return false;
   }
   if (m_context->IsDisplayed(m_orientationCube)) {
     m_context->Redisplay(m_orientationCube, false);
-    m_context->RecomputeSelectionOnly(m_orientationCube);
+    m_context->RecomputeSelectionOnly(m_orientationCube); // picked as drawn
   }
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -9226,6 +9322,99 @@ std::vector<std::pair<SelectionItem, QPoint>> OcctViewer::refusedPickPoints(Sele
     }
   }
   return refused;
+}
+
+Selection OcctViewer::shownItems(SelectFilter kinds, bool asPicked) const {
+  Selection items;
+  if (m_pickingSuspended) {
+    return items; // the model's job owns the document's shapes
+  }
+  // As a window takes them: the filter's own kinds, not those Shift widens
+  // it to (activeKinds), and each item by the finer test.
+  const SelectFilter wanted = asPicked ? kinds & m_filter : kinds;
+  if (wanted == SelectFilter()) {
+    return items;
+  }
+  const auto passes = [this, asPicked](const SelectionItem& item) {
+    if (!asPicked || !m_pickTest) {
+      return true;
+    }
+    PickCase how;
+    how.window = true;
+    if (item.kind == SelectKind::Edge) {
+      // In sight or behind faces, as the view turns: either part counts.
+      how.sight = [] { return EdgeSight::Both; };
+    }
+    return m_pickTest(item, how);
+  };
+  // The objects the view shows and picks, in a fixed order: a map by the
+  // objects' addresses would order them differently every run.
+  std::vector<const PickInfo*> shown;
+  for (const auto& [object, info] : m_pickInfo) {
+    if (info.highlight || object == nullptr) {
+      continue; // a selection's own highlight: its items are its body's
+    }
+    const occ::handle<AIS_InteractiveObject> handle(const_cast<AIS_InteractiveObject*>(object));
+    if (m_context->IsDisplayed(handle)) {
+      shown.push_back(&info);
+    }
+  }
+  std::sort(shown.begin(), shown.end(), [](const PickInfo* a, const PickInfo* b) {
+    return std::tie(a->item.occurrence, a->item.owner, a->item.name) <
+           std::tie(b->item.occurrence, b->item.owner, b->item.name);
+  });
+  QSet<SelectionItem> taken;
+  const auto take = [&](const SelectionItem& item) {
+    if (wanted.testFlag(item.kind) && !taken.contains(item) && passes(item)) {
+      taken.insert(item);
+      items.append(item);
+    }
+  };
+  for (const PickInfo* info : shown) {
+    if (!info->body) {
+      take(info->item); // a sketch curve or point, a profile, a datum
+      continue;
+    }
+    const geometry::Shape& body = *info->body;
+    take(info->item); // the body itself
+    if (wanted.testFlag(SelectKind::Face)) {
+      for (int i = 0; i < body.face_count(); ++i) {
+        const geometry::NameList& names = body.names_of_face(body.face(i));
+        if (!names.empty()) {
+          SelectionItem face = info->item;
+          face.kind = SelectKind::Face;
+          face.name = QString::fromStdString(names.front());
+          face.geometry = surfaceType(body.face(i));
+          take(face);
+        }
+      }
+    }
+    if (wanted.testFlag(SelectKind::Edge)) {
+      for (int i = 0; i < body.edge_count(); ++i) {
+        // A free edge of a surface body has no name of its own: nothing
+        // refers to it outside an input that takes openings.
+        if (const auto name = body.name_of_edge(body.edge(i))) {
+          SelectionItem edge = info->item;
+          edge.kind = SelectKind::Edge;
+          edge.name = QString::fromStdString(*name);
+          edge.geometry = curveType(body.edge(i));
+          take(edge);
+        }
+      }
+    }
+    if (wanted.testFlag(SelectKind::Vertex)) {
+      for (int i = 0; i < body.vertex_count(); ++i) {
+        if (const auto name = body.name_of_vertex(body.vertex(i))) {
+          SelectionItem vertex = info->item;
+          vertex.kind = SelectKind::Vertex;
+          vertex.name = QString::fromStdString(*name);
+          vertex.geometry = QStringLiteral("point");
+          take(vertex);
+        }
+      }
+    }
+  }
+  return items;
 }
 
 void OcctViewer::sceneChanged() {
@@ -10085,6 +10274,8 @@ void OcctViewer::paintView() {
   // A 3D mouse moves the camera by the time since its last frame
   // (mitcad#951, view/SpaceMouseView.cpp).
   stepSpaceMouse();
+  // A trackpad orbit glides to where its scroll has got to.
+  stepScrollGlide();
 
   m_view->InvalidateImmediate();
   // An exception escaping a Qt event handler terminates the application, so
@@ -10854,8 +11045,12 @@ void OcctViewer::mouseMoveEvent(QMouseEvent* event) {
   // other keys for a new gesture of the held button (Option pressed during
   // a select turning it into an orbit, released during an orbit turning it
   // into a window selection) and stop taking the press as a click.
-  if (UpdateMousePosition(toDevicePixels(orbitPosition(event)),
-                          viewButtons(event->buttons()), viewFlags(pressKeys(event->modifiers())), false)) {
+  const QPointF at = orbitPosition(event);
+  bool moved = UpdateMousePosition(toDevicePixels(at), viewButtons(event->buttons()),
+                                   viewFlags(pressKeys(event->modifiers())), false);
+  // An orbit drag turns by the pointer's fractions of a pixel too.
+  moved = refineOrbit(at * devicePixelRatioF()) || moved;
+  if (moved) {
     requestFrame();
   }
   wrapOrbitCursor(event);
@@ -10991,9 +11186,11 @@ void OcctViewer::wheelEvent(QWheelEvent* event) {
 // (Alt or Shift) it orbits, with the other key or Ctrl (Cmd on macOS) it
 // zooms. Pan and orbit are one drag of the left button (with keys no one
 // presses, kScrollPan and kScrollOrbit) that
-// lasts until the scroll pauses, momentum included: the view handles it as a
+// lasts until the scroll pauses, a pan's momentum included (an orbit has
+// none, it stops with the fingers): the view handles it as a
 // mouse drag, about the same centre and with the orbit's Z lock, and no
-// step between two frames is lost. Each event asks for a frame; it is not
+// step between two frames is lost; an orbit's drag glides after the scroll
+// over a few frames (stepScrollGlide). Each event asks for a frame; it is not
 // drawn here. A scroll's end lets the button up at once, whether or not it
 // moves too (macOS: an end without momentum keeps its delta, mitcad#1572).
 //
@@ -11005,6 +11202,7 @@ void OcctViewer::wheelEvent(QWheelEvent* event) {
 void OcctViewer::trackpadScroll(QWheelEvent* event) {
   event->accept();
   const bool ends = event->phase() == Qt::ScrollEnd;
+  m_scrollStamp = event->timestamp();
   if (event->phase() == Qt::ScrollBegin) {
     endScrollDrag(); // a new gesture: the momentum of the last one ends
     m_scrollRefused = false;
@@ -11027,6 +11225,30 @@ void OcctViewer::trackpadScroll(QWheelEvent* event) {
   if (event->phase() == Qt::ScrollMomentum && m_scrollMode != ScrollMode::None) {
     mode = m_scrollMode; // the inertia goes on as it began, whatever the keys do now
   }
+  // An orbit stops with the fingers, as a mouse orbit stops with the mouse:
+  // macOS's momentum after it is refused, whatever keys it has, until it
+  // ends or pauses (pans and zooms keep theirs). Qt may send the momentum's
+  // start as a new scroll right after the orbit's end (qnsview_mouse.mm),
+  // so a scroll that begins with a delta that soon after, with the cursor
+  // where the orbit was, is the momentum too.
+  const QPointF sinceOrbit = event->position() - m_scrollOrbitEndAt;
+  const bool orbitJustEnded = m_scrollMode == ScrollMode::None && m_scrollOrbitEnded.isValid() &&
+                              std::hypot(sinceOrbit.x(), sinceOrbit.y()) < 1.0;
+  const bool orbitMomentum =
+      (event->phase() == Qt::ScrollMomentum &&
+       (m_scrollMode == ScrollMode::Orbit ||
+        (orbitJustEnded && m_scrollOrbitEnded.elapsed() <= kScrollMomentumMilliseconds))) ||
+      (event->phase() == Qt::ScrollBegin && orbitJustEnded &&
+       event->timestamp() >= m_scrollOrbitEndStamp &&
+       event->timestamp() - m_scrollOrbitEndStamp <= kScrollMomentumBeginMilliseconds);
+  if (orbitMomentum) {
+    endScrollDrag();
+    m_scrollRefused = !ends;
+    if (m_scrollRefused) {
+      m_scrollTimer->start();
+    }
+    return;
+  }
   if ((mode == ScrollMode::Pan || mode == ScrollMode::Orbit) &&
       (m_scrollRefused || m_buttonKeys || event->buttons() != Qt::NoButton)) {
     endScrollDrag();
@@ -11047,6 +11269,7 @@ void OcctViewer::trackpadScroll(QWheelEvent* event) {
   m_scrollTimer->start();
   navigationStep();
   if (mode == ScrollMode::Zoom) {
+    m_scrollOrbitEnded.invalidate(); // a zoom's momentum is its own
     // Shift turns a vertical scroll into a horizontal one on some systems.
     const double along = std::abs(delta.y()) >= std::abs(delta.x()) ? delta.y() : delta.x();
     const double steps = (m_navigation.reverseZoom ? -along : along) * kScrollZoomPerPixel;
@@ -11064,12 +11287,30 @@ void OcctViewer::trackpadScroll(QWheelEvent* event) {
   const Aspect_VKeyFlags flags = mode == ScrollMode::Orbit ? kScrollOrbit : kScrollPan;
   const qreal ratio = devicePixelRatioF();
   if (!m_scrollDragging) {
+    // An orbit taken up where the last one ended, with the cursor where it
+    // was: macOS's momentum of a flick, which Qt may send as a scroll of its
+    // own, or the fingers put down again. It turns about the same point; a
+    // new pick would take whatever the turned model has under the cursor
+    // now, as far as the other end of a long part (the orbit then swung the
+    // model away).
+    const QPointF moved = event->position() - m_scrollOrbitEndAt;
+    m_scrollKeepsPivot = mode == ScrollMode::Orbit && m_lastOrbitPivot && m_scrollOrbitEnded.isValid() &&
+                         m_scrollOrbitEnded.elapsed() <= kScrollPivotKeepMilliseconds &&
+                         std::hypot(moved.x(), moved.y()) < 1.0;
+    m_scrollStartAt = event->position();
     m_scrollDragging = true;
     m_navigationState.setScrollDrag(true);
     m_scrollPoint = event->position() * ratio;
+    m_scrollTarget = m_scrollPoint;
+    m_scrollGlideClock.start();
+    m_scrollSteps = 0;
     m_pointerInputPending = true;
     UpdateMouseButtons(devicePixel(m_scrollPoint), Aspect_VKeyMouse_LeftButton, flags, false);
   }
+  const double step = std::hypot(delta.x(), delta.y()) / m_navigation.trackpadSpeed;
+  m_scrollStepMin = m_scrollSteps == 0 ? step : std::min(m_scrollStepMin, step);
+  m_scrollStepMax = m_scrollSteps == 0 ? step : std::max(m_scrollStepMax, step);
+  ++m_scrollSteps;
   // A modest gain for the two-finger orbit; pan and mouse drags retain
   // their one-to-one motion. Apply it to momentum through the same path.
   const qreal gain = mode == ScrollMode::Orbit ? 1.3 : 1.0;
@@ -11077,8 +11318,13 @@ void OcctViewer::trackpadScroll(QWheelEvent* event) {
   // (mitcad#1873): the scroll's own directions, momentum included.
   const QPointF motion = scrollDragDelta(
       m_navigation, mode == ScrollMode::Orbit ? NavigationAction::Orbit : NavigationAction::Pan, delta);
-  m_scrollPoint += motion * ratio * gain;
-  UpdateMousePosition(devicePixel(m_scrollPoint), Aspect_VKeyMouse_LeftButton, flags, false);
+  m_scrollTarget += motion * ratio * gain;
+  if (mode == ScrollMode::Orbit) {
+    stepScrollGlide(); // part of the step now, the rest with the next frames
+  } else {
+    m_scrollPoint = m_scrollTarget; // a pan keeps the content under the fingers
+    UpdateMousePosition(devicePixel(m_scrollPoint), Aspect_VKeyMouse_LeftButton, flags, false);
+  }
   cameraMoved();
   if (ends) {
     endScrollDrag(); // the last step is applied, the button goes up now
@@ -11093,12 +11339,74 @@ void OcctViewer::endScrollDrag() {
   if (!m_scrollDragging) {
     return;
   }
+  const Aspect_VKeyFlags flags = mode == ScrollMode::Orbit ? kScrollOrbit : kScrollPan;
+  if (m_scrollPoint != m_scrollTarget) {
+    // What the orbit's glide had left: the view ends where the scroll did.
+    m_scrollPoint = m_scrollTarget;
+    UpdateMousePosition(devicePixel(m_scrollPoint), Aspect_VKeyMouse_LeftButton, flags, false);
+    if (mode == ScrollMode::Orbit) {
+      refineOrbit(m_scrollPoint);
+    }
+  }
   m_scrollDragging = false;
+  m_scrollKeepsPivot = false;
+  if (mode == ScrollMode::Orbit) {
+    m_scrollOrbitEndAt = m_scrollStartAt;
+    m_scrollOrbitEnded.start();
+    m_scrollOrbitEndStamp = m_scrollStamp;
+  } else {
+    m_scrollOrbitEnded.invalidate(); // a pan moved the model under the cursor
+  }
   m_navigationState.setScrollDrag(false); // ends with the next frame or the quiet time
   m_pointerInputPending = true;
-  UpdateMouseButtons(devicePixel(m_scrollPoint), Aspect_VKeyMouse_NONE,
-                     mode == ScrollMode::Orbit ? kScrollOrbit : kScrollPan, false);
+  UpdateMouseButtons(devicePixel(m_scrollPoint), Aspect_VKeyMouse_NONE, flags, false);
+  if (m_scrollSteps > 0) {
+    qDebug().noquote() << QStringLiteral("Trackpad %1: %2 scroll step(s) of %3 to %4 pt")
+                              .arg(mode == ScrollMode::Orbit ? QStringLiteral("orbit") : QStringLiteral("pan"))
+                              .arg(m_scrollSteps)
+                              .arg(m_scrollStepMin, 0, 'f', 1)
+                              .arg(m_scrollStepMax, 0, 'f', 1);
+    m_scrollSteps = 0;
+  }
   requestFrame();
+}
+
+void OcctViewer::stepScrollGlide() {
+  if (!m_scrollDragging || m_scrollMode != ScrollMode::Orbit || m_scrollPoint == m_scrollTarget) {
+    m_scrollGlideClock.start(); // the next step's time starts now
+    return;
+  }
+  const double elapsed = std::clamp(static_cast<double>(m_scrollGlideClock.restart()),
+                                    kScrollGlideMinMilliseconds, kScrollGlideFrameMilliseconds);
+  const QPointF left = m_scrollTarget - m_scrollPoint;
+  const QPointF step = left * (1.0 - std::exp(-elapsed / kScrollGlideMilliseconds));
+  const QPointF rest = left - step;
+  // The rest at once below a twentieth of a pixel (refineOrbit
+  // passes fractions of a pixel on).
+  m_scrollPoint = std::hypot(rest.x(), rest.y()) < 0.05 ? m_scrollTarget : m_scrollPoint + step;
+  UpdateMousePosition(devicePixel(m_scrollPoint), Aspect_VKeyMouse_LeftButton, kScrollOrbit, false);
+  refineOrbit(m_scrollPoint);
+  cameraMoved();
+  navigationStep();
+  requestFrame(); // the next frame steps again
+}
+
+// OCCT takes a drag's position in whole device pixels, and a pixel of an
+// orbit turns a model far from the orbit's centre (a long one seen along its
+// length) by several pixels: the orbit went in visible steps however finely
+// the trackpad scrolled or the pointer moved. Its target is a point of
+// doubles, which OCCT sets from the press point, the whole pixels and the
+// orbit speed; it is set here in the same way from the exact position.
+bool OcctViewer::refineOrbit(const QPointF& device) {
+  if (myMouseActiveGesture != AIS_MouseGesture_RotateOrbit) {
+    return false;
+  }
+  auto& orbit = ChangeInputBuffer(AIS_ViewInputBufferType_UI).OrbitRotation;
+  const NCollection_Vec2<double> press(myMousePressPoint.x(), myMousePressPoint.y());
+  const NCollection_Vec2<double> at(device.x(), device.y());
+  orbit.PointTo = press + (at - press) * static_cast<double>(OrbitAcceleration());
+  orbit.ToRotate = true;
+  return true;
 }
 
 // A pinch zooms towards the fingers (about the middle where the zoom is not
@@ -11244,7 +11552,6 @@ void OcctViewer::handleViewRedraw(const occ::handle<AIS_InteractiveContext>& con
       fullFrame = true;
     }
   }
-  const gp_Dir drawnFrom = m_view->Camera()->Direction();
   AIS_ViewController::handleViewRedraw(context, view);
   // What their texture upload and draw found in this frame (GL errors,
   // times; mitcad#2406): logged, and a failure turns them into widgets over
@@ -11269,10 +11576,10 @@ void OcctViewer::handleViewRedraw(const occ::handle<AIS_InteractiveContext>& con
       break;
     }
   }
-  // A camera animation moved the camera as the frame was drawn: the cube's
-  // perspective follows in the next one.
-  if (m_cubeProjection == CubeProjection::Perspective && !m_view->Camera()->Direction().IsEqual(drawnFrom, 1e-9)) {
-    updateCubeEye();
+  // A camera animation moved the camera as the frame was drawn, or ended in
+  // another projection (Perspective with Orthographic Faces at a face): the
+  // cube's perspective follows in the next one.
+  if (updateCubeEye()) {
     requestFrame();
   }
   if (toAskNextFrame()) {

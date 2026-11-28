@@ -2701,9 +2701,11 @@ protected:
     // The typed sizes become the slot's dimensions, as the other tools'
     // typed values do (mitcad#1225), so that a slot drawn with typed values
     // keeps only its place free. The width is an end arc's diameter; the
-    // length is between the end centres: a Center Point Slot's from its
-    // centre to an end's, an Overall Slot's the overall length less the
-    // width.
+    // length a Center to Center Slot's centre line, a Center Point Slot's
+    // from its centre to an end's, and an Overall Slot's the typed overall
+    // length itself, between the far sides of its end arcs (mitcad#2622):
+    // the value shown is the one typed, and a changed width moves the end
+    // centres, not the ends.
     QStringList dimensionLog;
     const auto dimension = [&op, &dimensionLog](const QJsonObject& what, const QString& value) {
       const auto before = op.model().dimensions.size();
@@ -2717,17 +2719,23 @@ protected:
       return added.parameter;
     };
     const QStringList outline = made(result);
-    QString widthValue = QString::number(w, 'g', 12);
     if (m_c.typed(QStringLiteral("width")) && outline.size() == 4) {
-      const QString parameter =
-          dimension({{QStringLiteral("type"), QStringLiteral("diameter")}, {QStringLiteral("curve"), outline[1]}},
-                    m_c.fieldExpression(QStringLiteral("width")));
-      if (!parameter.isEmpty()) {
-        widthValue = parameter;
-      }
+      dimension({{QStringLiteral("type"), QStringLiteral("diameter")}, {QStringLiteral("curve"), outline[1]}},
+                m_c.fieldExpression(QStringLiteral("width")));
     }
     if (!m_length.isEmpty()) {
-      if (m_mode == QStringLiteral("center_point")) {
+      if (m_mode == QStringLiteral("overall")) {
+        // From the far side of the arc at the first end (the outline's
+        // fourth curve) to the far side of the arc at the second end (its
+        // second), along the slot.
+        if (outline.size() == 4) {
+          dimension({{QStringLiteral("type"), QStringLiteral("tangent_circle_distance")},
+                     {QStringLiteral("a"), outline[3]},
+                     {QStringLiteral("b"), outline[1]},
+                     {QStringLiteral("side"), QStringLiteral("far")}},
+                    m_length);
+        }
+      } else if (m_mode == QStringLiteral("center_point")) {
         const QString middle = pointNear(op.model(), result, click(0));
         const QString end = pointNear(op.model(), result, click(1));
         if (!middle.isEmpty() && !end.isEmpty() && middle != end) {
@@ -2737,10 +2745,7 @@ protected:
                     m_length);
         }
       } else if (!axis.isEmpty()) {
-        const QString between = m_mode == QStringLiteral("overall")
-                                    ? QStringLiteral("(%1) - %2").arg(m_length, widthValue)
-                                    : m_length;
-        dimension({{QStringLiteral("type"), QStringLiteral("length")}, {QStringLiteral("line"), axis}}, between);
+        dimension({{QStringLiteral("type"), QStringLiteral("length")}, {QStringLiteral("line"), axis}}, m_length);
       }
     }
     // A straight slot drawn exactly level or plumb keeps its direction

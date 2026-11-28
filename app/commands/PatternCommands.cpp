@@ -53,6 +53,17 @@ InputDef lengthInput(const QString& id, const QString& suffix) {
       });
 }
 
+// The Operation of Mirror and Circular Pattern (mitcad#539, mitcad#2617):
+// New Body or Join, shown for bodies only; the definition's `combine`
+// (setPatternOperation, patternOperationOf).
+InputDef operationInput(const QString& tooltip) {
+  return choiceInput(QStringLiteral("operation"), QObject::tr("Operation"),
+                     {{newBodyOperation(), QStringLiteral("New Body")}, {joinOperation(), QStringLiteral("Join")}},
+                     newBodyOperation())
+      .withTooltip(tooltip)
+      .withVisible(choiceIs(QStringLiteral("object_type"), QStringLiteral("bodies")));
+}
+
 // The objects of a pattern or mirror: the Pattern Type and its pick.
 QVector<InputDef> patternObjects() {
   const auto notBodies = [](const CommandState& s) {
@@ -456,6 +467,9 @@ CommandDef circularPatternCommand(const CommandContext& context) {
       checkInput(QStringLiteral("symmetric2"), QObject::tr("Symmetric 2"), false)
           .withTooltip(QObject::tr("Copies on both sides about the second axis, the angle centered on them"))
           .withVisible(second),
+      // Join (mitcad#2617): the copies of a body joined to it where they
+      // touch, as Mirror's; a sheet metal body's copies one sheet.
+      operationInput(QObject::tr("Join the copies to their original body where they touch")),
       suppressedInput(),
   };
   def.enabled = [&context] { return hasBodies(context); };
@@ -485,6 +499,8 @@ CommandDef circularPatternCommand(const CommandContext& context) {
       }
       result.def.insert(QStringLiteral("axis2"), axis2);
     }
+    setPatternOperation(result.def, state.choice(QStringLiteral("object_type")),
+                        state.choice(QStringLiteral("operation")));
     addCompute(result.def, state);
     addSuppressed(result.def, state);
     return result;
@@ -503,6 +519,7 @@ CommandDef circularPatternCommand(const CommandContext& context) {
       loadValue(state, QStringLiteral("angle2"), axis2.value(QStringLiteral("angle")), feature, context);
       state.setChecked(QStringLiteral("symmetric2"), axis2.value(QStringLiteral("symmetric")).toBool());
     }
+    state.setChoice(QStringLiteral("operation"), patternOperationOf(feature));
     loadSuppressed(feature, state);
   };
 
@@ -704,11 +721,7 @@ CommandDef mirrorCommand(const CommandContext& context) {
   def.inputs += {
       selectionInput(QStringLiteral("plane"), QObject::tr("Mirror Plane"), kPlaneKinds, 1, 1)
           .withAccepts(isPlanar),
-      choiceInput(QStringLiteral("operation"), QObject::tr("Operation"),
-                  {{QStringLiteral("new_body"), QStringLiteral("New Body")}, {QStringLiteral("join"), QStringLiteral("Join")}},
-                  QStringLiteral("new_body"))
-          .withTooltip(QObject::tr("Join a mirrored body to its original where they touch"))
-          .withVisible(choiceIs(QStringLiteral("object_type"), QStringLiteral("bodies"))),
+      operationInput(QObject::tr("Join a mirrored body to its original where they touch")),
   };
   def.enabled = [&context] { return hasBodies(context); };
 
@@ -721,10 +734,8 @@ CommandDef mirrorCommand(const CommandContext& context) {
     result.def = {{QStringLiteral("type"), QStringLiteral("mirror")},
                   {QStringLiteral("objects"), objects},
                   {QStringLiteral("plane"), state.items(QStringLiteral("plane")).first().reference()}};
-    if (state.choice(QStringLiteral("object_type")) == QStringLiteral("bodies") &&
-        state.choice(QStringLiteral("operation")) == QStringLiteral("join")) {
-      result.def.insert(QStringLiteral("combine"), true);
-    }
+    setPatternOperation(result.def, state.choice(QStringLiteral("object_type")),
+                        state.choice(QStringLiteral("operation")));
     addCompute(result.def, state);
     return result;
   };
@@ -732,9 +743,7 @@ CommandDef mirrorCommand(const CommandContext& context) {
   def.load = [](const QJsonObject& feature, CommandState& state, const CommandContext& context) {
     loadObjects(feature, state, context);
     state.setItems(QStringLiteral("plane"), {itemOf(feature.value(QStringLiteral("plane")), context)});
-    state.setChoice(QStringLiteral("operation"), feature.value(QStringLiteral("combine")).toBool()
-                                                     ? QStringLiteral("join")
-                                                     : QStringLiteral("new_body"));
+    state.setChoice(QStringLiteral("operation"), patternOperationOf(feature));
   };
 
   def.canEdit = [&context](const QJsonObject& feature) {

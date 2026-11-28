@@ -121,6 +121,7 @@ const SettingsRule kRules[] = {
     {"browser/showEyePlace", "preferences", PathKind::None},
     {"timeline/presentation", "preferences", PathKind::None}, // mitcad#2427
     {"browser/rowSpacing", "preferences", PathKind::None},    // mitcad#2513
+    {"browser/highlightActiveComponent", "preferences", PathKind::None}, // mitcad#2618
     // The View menu.
     {"view/style", "preferences", PathKind::None},
     {"view/componentColors", "preferences", PathKind::None},

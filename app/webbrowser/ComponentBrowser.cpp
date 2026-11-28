@@ -44,6 +44,7 @@
 #include <QtGlobal>
 #include <QtLogging>
 
+#include "TutorialPageRules.hpp"
 #include "cef/CefEngine.hpp"
 #include "cef/CefView.hpp"
 #include "framework/PanelTree.hpp"
@@ -178,25 +179,32 @@ ComponentBrowser::ComponentBrowser(ComponentBrowserHost* host, QWidget* parent) 
     }
     m_view->runJavaScript(QString::fromLatin1(kOnPageLoaded));
   });
-  connect(m_view, &CefView::consoleMessage, this, [this](const QString& message) {
+  connect(m_view, &CefView::consoleMessage, this, [this](const QString& message, bool fromMitCad) {
+    // Only the lines of MitCad's own scripts (mitcad#2615): a site's line in
+    // their form does nothing.
+    if (!fromMitCad) {
+      return;
+    }
     const QString url = m_view->url().toDisplayString();
+    int x = 0;
+    int y = 0;
+    QString href;
     if (message.startsWith(QStringLiteral("mitcad:links:"))) {
       // (Not of MitCad's own start page.)
       if (m_view->url().scheme() != QStringLiteral("data")) {
         qDebug().noquote() << QStringLiteral("Component browser page: %1 (%2 links)")
                                   .arg(url, message.mid(int(qstrlen("mitcad:links:"))));
       }
-    } else if (message.startsWith(QStringLiteral("mitcad:linkat:"))) {
+    } else if (tutorialrules::parseLinkAt(message, m_clickKey, &x, &y, &href)) {
       // The link's middle: clicked there as real input, which the page takes
       // as the user's gesture (a script's click is none, and a site's second
-      // download without one is blocked).
-      const QStringList parts = message.mid(int(qstrlen("mitcad:linkat:"))).split(QLatin1Char(','));
-      if (parts.size() >= 3) {
-        const QString href = parts.mid(2).join(QLatin1Char(','));
-        qDebug().noquote() << QStringLiteral("Component browser followed %1").arg(href);
-        m_view->clickAt(QPoint(parts.at(0).toInt(), parts.at(1).toInt()));
-      }
+      // download without one is blocked). Only the link clickLink found, by
+      // its one-off key (mitcad#2615).
+      m_clickKey.clear();
+      qDebug().noquote() << QStringLiteral("Component browser followed %1").arg(href);
+      m_view->clickAt(QPoint(x, y));
     } else if (message.startsWith(QStringLiteral("mitcad:nolink:"))) {
+      m_clickKey.clear();
       qDebug().noquote() << QStringLiteral("Component browser: no link with %1")
                                 .arg(message.mid(int(qstrlen("mitcad:nolink:"))));
     }
@@ -335,18 +343,15 @@ void ComponentBrowser::showHostNote(const QString& note, bool warning) {
 }
 
 void ComponentBrowser::clickLink(const QString& text) {
-  // The text as a JSON string inside an array, so that any character in
-  // it stays a string; the answer comes back through the page's log.
-  const QString quoted = QString::fromUtf8(QJsonDocument(QJsonArray{text}).toJson(QJsonDocument::Compact));
-  const QString script =
-      QStringLiteral("(function(t){var a=Array.prototype.find.call(document.links,function(l){"
-                     "return l.textContent.indexOf(t)>=0||l.href.indexOf(t)>=0;});"
-                     "if(!a){console.log('mitcad:nolink:'+t);return;}"
-                     "a.scrollIntoView({block:'center'});var r=a.getBoundingClientRect();"
-                     "console.log('mitcad:linkat:'+Math.round(r.left+r.width/2)+','+"
-                     "Math.round(r.top+r.height/2)+','+a.href);})(%1[0])")
-          .arg(quoted);
-  m_view->runJavaScript(script);
+  // Real input in a page only in a test run, and only at the link this
+  // call found (mitcad#2615): the answer comes back through the page's log
+  // with the call's one-off key.
+  if (!tutorialrules::scriptedClicksAllowed()) {
+    qWarning().noquote() << QStringLiteral("Component browser: clickLink is for test runs only");
+    return;
+  }
+  m_clickKey = tutorialrules::newClickKey();
+  m_view->runJavaScript(tutorialrules::linkAtScript(text, m_clickKey));
 }
 
 

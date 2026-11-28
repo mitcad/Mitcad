@@ -53,4 +53,20 @@ QString patternOptionsText(const QJsonObject& def);
 // is never chosen from the selection.
 void choosePreselectedPatternType(CommandState& state);
 
+// The Operation of Mirror and Circular Pattern (choice `operation`,
+// mitcad#539, mitcad#2617): New Body keeps the copies of bodies as bodies
+// of their own, Join joins each copy to its original where they touch (the
+// definition's `combine`).
+QString newBodyOperation(); // "new_body"
+QString joinOperation();    // "join"
+
+// The Operation a mirror's or circular pattern's definition holds: Join
+// when its `combine` is true, else New Body.
+QString patternOperationOf(const QJsonObject& def);
+
+// Sets `combine` in a definition for the Pattern Type and the Operation:
+// true for Join of bodies, left out otherwise (Join applies to bodies only;
+// the choice is hidden for features and faces).
+void setPatternOperation(QJsonObject& def, const QString& objectType, const QString& operation);
+
 } // namespace mitcad::cmd

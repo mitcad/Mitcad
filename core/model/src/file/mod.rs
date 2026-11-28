@@ -158,7 +158,8 @@
 //! `direction`, `occurrence`, `stripes`, `width`; `curvature` with
 //! `bodies`, `faces`, `kind`, `limit`; `isocurve` with `bodies`, `faces`,
 //! `count`, `curvature`, `limit`; `environment` with `bodies`, `faces`,
-//! `image`, mitcad#2517).
+//! `image`, mitcad#2517; `interference` with `bodies`, none for every body,
+//! always `"visible": false`, mitcad#2664).
 //!
 //! Motion studies and contact sets (mitcad#454), when there are any:
 //! `motion_studies` (`name`, `steps`, `keys`: `joint`, `motion`, `points`
@@ -433,6 +434,12 @@
 //! that this MitCad could not read the CAM, not that a newer one wrote it.
 //! A section that reads opens as before, and a file broken anywhere else
 //! is still refused.
+//!
+//! Work recovered from an autosave (mitcad#2587) is read from text that
+//! no longer has the unknown fields nor the CAM that could not be read:
+//! the application has the document keep what its file has
+//! ([`Document::keep_fields_not_read`]), so that a save over that file
+//! asks first as it does for the design read from it.
 
 mod project;
 // A project's settings, shared and of this computer (mitcad#89).
@@ -553,8 +560,8 @@ impl std::error::Error for FileError {}
 
 /// The top-level fields of a design file that this build did not read
 /// (mitcad#1132), and the file they were read from (None for text read
-/// without a path: a version's, recovered work). See the module's
-/// documentation.
+/// without a path: a version's; recovered work takes them from its file,
+/// [`Document::keep_fields_not_read`]). See the module's documentation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UnknownFields {
     pub file: Option<PathBuf>,
@@ -792,6 +799,35 @@ impl<K: Kernel> Document<K> {
         }
     }
 
+    /// Keeps with the document what the design file at `path` has that
+    /// this build does not read ([`fields_not_read`]), as if the document
+    /// had been read from that file (mitcad#2587), in place of what it
+    /// kept: work recovered from an autosave is read from text that no
+    /// longer has the fields a newer MitCad wrote nor the CAM section that
+    /// could not be read, so that a save over its file would drop them
+    /// unasked. A missing file has nothing to drop: nothing is kept. Text
+    /// at `path` that is no design file this build opens is an error, and
+    /// the document keeps what it had. Returns what it keeps now.
+    pub fn keep_fields_not_read(&self, path: &Path) -> Result<UnknownFields, DesignError> {
+        let absolute = std::path::absolute(path)
+            .map_err(|e| DesignError::Io(format!("cannot resolve {}: {e}", path.display())))?;
+        let unknown = match std::fs::read_to_string(path) {
+            Ok(json) => UnknownFields {
+                file: Some(absolute),
+                ..fields_not_read(&json)?
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => UnknownFields::default(),
+            Err(e) => {
+                return Err(DesignError::Io(format!(
+                    "cannot read {}: {e}",
+                    path.display()
+                )));
+            }
+        };
+        self.set_unknown_fields(unknown.clone());
+        Ok(unknown)
+    }
+
     /// The text [`Document::save_file`] writes to `path` in `format`, and
     /// the project the file is in when it goes there (the B-rep data not
     /// yet in the project's store is written to it).
@@ -1003,6 +1039,56 @@ struct Loaded {
     unreadable_cam: Option<String>,
 }
 
+/// Takes out of a design file's object (of `version`, its header
+/// checked, its statistics and preview taken out) what this build does not
+/// read as part of the definition: the top-level fields a newer MitCad
+/// wrote, and the CAM section, read (mitcad#1132, mitcad#2581).
+fn take_not_read(
+    value: &mut serde_json::Value,
+    version: u64,
+) -> (Vec<String>, Result<Option<crate::cam::CamState>, String>) {
+    // Top-level fields a newer MitCad wrote are ignored, with a warning
+    // (mitcad#1132). Version 1 files are older than every such field.
+    let unknown_fields = match version {
+        1 => Vec::new(),
+        _ => v2::take_unknown_fields(value),
+    };
+    // A CAM section this build cannot read (another build's value, two
+    // operations with one id) does not lock the model out (mitcad#2581):
+    // the design opens without its CAM, says why, and is kept from being
+    // saved over unasked like the unknown fields. Version 1 files have no
+    // CAM.
+    let cam = match version {
+        1 => Ok(None),
+        _ => v2::take_cam(value),
+    };
+    (unknown_fields, cam)
+}
+
+/// What the text of a design file has that this build does not read
+/// (mitcad#2587): the top-level fields a newer MitCad wrote (mitcad#1132)
+/// and what is wrong with its CAM section when it cannot be read
+/// (mitcad#2581), without a file (see [`Document::keep_fields_not_read`]).
+/// Nothing else of the design is read; text that is not a design file
+/// this build opens (invalid JSON, a newer version) is an error.
+pub fn fields_not_read(json: &str) -> Result<UnknownFields, FileError> {
+    let json = json.strip_prefix('\u{feff}').unwrap_or(json);
+    let mut value: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| FileError::Syntax(e.to_string()))?;
+    let version = check_header(&value)?;
+    // Read apart from the definition, as load_parts does: no unknown fields.
+    if let Some(top) = value.as_object_mut() {
+        top.remove("statistics");
+        top.remove(mitcad_model_base::design_preview::FIELD);
+    }
+    let (fields, cam) = take_not_read(&mut value, version);
+    Ok(UnknownFields {
+        file: None,
+        fields,
+        unreadable_cam: cam.err(),
+    })
+}
+
 /// [`load_state`] with the file's statistics.
 fn load_parts(json: &str) -> Result<Loaded, FileError> {
     // Some Windows editors start UTF-8 text with a byte order mark.
@@ -1032,21 +1118,7 @@ fn load_parts(json: &str) -> Result<Loaded, FileError> {
         .and_then(|top| top.remove(mitcad_model_base::design_preview::FIELD))
         .filter(|preview| !preview.is_null())
         .map(DesignPreview::from_value);
-    // Top-level fields a newer MitCad wrote are ignored, with a warning
-    // (mitcad#1132). Version 1 files are older than every such field.
-    let unknown_fields = match version {
-        1 => Vec::new(),
-        _ => v2::take_unknown_fields(&mut value),
-    };
-    // A CAM section this build cannot read (another build's value, two
-    // operations with one id) does not lock the model out (mitcad#2581):
-    // the design opens without its CAM, says why, and is kept from being
-    // saved over unasked like the unknown fields. Version 1 files have no
-    // CAM.
-    let cam = match version {
-        1 => Ok(None),
-        _ => v2::take_cam(&mut value),
-    };
+    let (unknown_fields, cam) = take_not_read(&mut value, version);
     let (mut state, mut warnings) = match version {
         1 => v1::load(json),
         _ => v2::load(value),

@@ -1462,7 +1462,10 @@ memory limit on its cgroup path;
 rusage. Failures are printed at once and appended to
 `<build>/testrun/status.txt`; the end report (`report.txt`: totals,
 resource use, the critical path, failures by kind, profiles that changed
-much) and `results.tsv` go to the same folder. Details, the profile
+much), `results.tsv` and `failures.tsv` (the lines of each failed test's
+log that name its failures) go to the same folder; each test's log
+(`logs/<test>.log`) holds every line the test wrote (ctest `-V`,
+mitcad#2614). Details, the profile
 file's format and what is left: [tools/testrun/README.md](../tools/testrun/README.md).
 
 ### Environment variables and options for tests
@@ -1622,6 +1625,13 @@ input for later. As on Linux, `Ui-StartApp` starts the app Docked unless
 the arguments choose a layout or `-DefaultChrome` leaves it to the
 preference and the default (Floating, mitcad#429). See
 [tools/ui-windows-lib.ps1](../tools/ui-windows-lib.ps1).
+
+The keys a test saves for the commands it needs (`Ui-Init`'s table, a
+Linux test's `[shortcuts]` lines) must not be another command's default:
+a default wins, and the saved key is disabled with a "Conflicting saved
+shortcuts" warning that fails the test. F2, F4 (held: orbit), F6 and F9
+(Send Feedback on a Region, mitcad#2616) are taken; the tests use F3,
+F5, F7, F8, F11, F12 and Shift with them.
 
 Not a test: `tools/ui-windows-window-shots.ps1 -App <mitcad.exe> -Out <dir>`
 saves screenshots of the whole main window in the Docked chrome on the light
@@ -2179,6 +2189,27 @@ in the distro only:
   message without it. The outline tests of `mitcad-model`
   (`core/model/src/cam/outline.rs`, pieces shorter than the tolerance in
   reversed and shuffled order) cover the rule without the file.
+  ctest `cli.cam_reported` (`tools/cli/cam-reported-test.py`) finds the
+  archives in `github-745/` and `github-749/` by their content ids,
+  unpacks the designs (and the second one's program of setup D) into the
+  build folder and opens them through `mitcad-cli mcp`, editing them in
+  memory only (mitcad#2592). The engraving design: a Contour on the line
+  whose outline is the sketch text itself is refused with Explode Text
+  named and adds nothing; after Explode Text a Contour on the line along
+  every curve it made with the design's engraving cutter generates, one
+  plunge per closed outline of the letters, its cut inside the box of the
+  curves' control points and reaching their ends (mitcad#2588). The bull
+  nose pocket (34 mm round, 3 mm deep): setup A (a flat end mill, the
+  default stepover) and D (a flat end mill, 5.5 mm) keep their loops, D's
+  moves line for line the reporter's program; B (a bull nose whose corner
+  radius is its radius) is refused like a ball end mill and C (a bull nose
+  with a 1 mm corner radius, 5.5 mm) for a stepover wider than the flat of
+  its end; C with 4 mm generates, and the simulated floor of A, C and D
+  stands nowhere within 15.5 mm of the middle more than 5 µm above the
+  floor (mitcad#2591). Each design is skipped with a line without its
+  archive, the test without both. The `core/cam` pocket tests and the
+  `text_outline_2588_tests` of `core/model-tests/cam` cover the rules
+  without the files.
   ctest `cli.drawing_hidden_dashes_reported`
   (`tools/cli/drawing-hidden-dashes-reported-test.cmake`) finds the
   archive in `github-695/` by its content id, unpacks it into the build
@@ -2191,6 +2222,37 @@ in the distro only:
   app.unit tests `drawingSheetViewTests` (the screen's dashes at every
   zoom) and `paperPrintTests` (a hidden edge printed) and the SVG
   writer's tests of `mitcad-model-drawing` cover it without the file.
+  ctest `cli.profile_boundary_reported`
+  (`tools/cli/profile-boundary-reported-test.py`) finds the archive in
+  `github-712/` by its content id and copies the design in it (a plate
+  with four bosses of 12 mm diameter; Sketch3 on its top face holds the
+  face's automatic outline with the bosses' circles and the outline
+  offset 2 mm inwards) into the build folder, once for each case, and
+  works on the copies through `mitcad-cli mcp`, the Extrudes previewed and
+  committed by `mitcad-cli run` (mitcad#2596): the four circles chosen with
+  `sketch.set_profile_boundary`, the inset has four holes and each circle
+  is a profile of its own (picked by a point, as a click does), and the
+  inset's Extrude leaves the four footprints clear, a hole on each boss's
+  axis; saved and opened again the choice holds, and d10 (the bosses'
+  diameter) and d9 (the right pair's place) take the holes with them; two
+  circles chosen leave two footprints clear; with the Offset's curves
+  removed the face-bounded area is one profile with the same key and area
+  before and after the choice; without a choice the inset's Extrude keeps
+  its whole area, and Extrude1's and Extrude2's profiles theirs; skipped
+  with a message without it. The model's tests
+  (`core/sketch/src/boundary_2551_tests.rs`,
+  `core/model-tests/sketch-refs/src/profile_boundary_2551_tests.rs`) cover
+  it without the file.
+  `tools/ui-wood-grain-reported-test.sh` finds the archive in
+  `github-663/` by its content id, unpacks it into its work folder and
+  opens the design in it (two Pine plates joined along their long
+  sides): each body is drawn with a grain offset of its own; seen from
+  below, the stripes' direction differs across the joint clearly more
+  than within a plate, in the shaded view, after a redraw and in the
+  rendered view; after a move of one plate, a save and a reopen each
+  body keeps its offset (mitcad#2624); skipped with a message without
+  it. `tools/ui-wood-textures-test.sh` and the grain tests of
+  `mitcad-model-base` and `app.unit` cover the offsets without the file.
 
 ### SolidCraft designs
 
@@ -2599,9 +2661,12 @@ the claim (`First claim on memory ...: core.cargo_build from 0:05, started
 the output of each test that did not pass (lines marked `| `) and its
 results in ctest's form (result lines, the summary, `The following tests
 FAILED:`), which the table's `ctest:<name>` rows, the passes kept for
-`--ctest auto` and the release scripts read as before; its own report
+`--ctest auto` and the release scripts read as before. A failing step
+prints its failed tests and, a line each, the lines of their logs that
+name their failures (`ctest <test> (Failed): <line>`, from the runner's
+`failures.tsv`, mitcad#2614). Its own report
 (`report.txt`: resource use, the critical path, failures by kind),
-`results.tsv`, `status.txt` and each test's log are in
+`results.tsv`, `failures.tsv`, `status.txt` and each test's log are in
 `build/dev/testrun/<step>/`, the machine's profiles in
 `~/.mitcad/test-profiles.json`. When the runner is not built or does not
 finish (it cannot list the tests, it stops), the step runs as
@@ -3261,3 +3326,23 @@ environment and the documented Windows and macOS builds with CTest.
 Builds, tests, formatters, package installation and runtime checks belong
 in those isolated environments, never on the host. Commit messages must
 identify any platforms whose checks were not run.
+
+## The generated API reference
+
+`tools/api-reference/build.sh` makes the API reference for users and
+integrators (mitcad#2606): static HTML and Markdown pages of every
+command, query and feature type `model_reference` lists, an overview, the
+reference's sections as topics, an index and a search, generated from
+`core/model-api/src/commands.md`, the commands' JSON Schemas and the
+names, with ticket references, history, test and file names and notes on
+the code inside left out. `core.mcp` checks it; at each release it is
+built from the release's sources and published as
+<https://mitcad.org/docs/api/>. What it reads, how it cleans and what to
+fix when its report lists a sentence:
+[tools/api-reference/README.md](../tools/api-reference/README.md).
+
+A new query that MCP permits (class `Model` in
+`core/model-api/src/classes.rs`) also gets a sentence or two on what it
+is for, appended to `core/mcp/src/query_purposes.rs` (mitcad#2636): its
+API reference page opens with it and `model_reference` answers it as
+`purpose`. The tests of `core.mcp` fail for a permitted query without one.

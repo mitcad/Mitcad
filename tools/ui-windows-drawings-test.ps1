@@ -59,7 +59,7 @@ param(
 # session 0's 1024 px window the toolbar panel folds the DRAWING tab's
 # Tables and Export groups into its overflow (Ribbon more DRAWING) and
 # Sheet to its name (mitcad#2082).
-Ui-Init $App $Out $QtBin @{ 'file.create_drawing' = 'F9'; 'drawing.export_pdf' = 'F11'; 'drawing.export_dwg' = 'F12'
+Ui-Init $App $Out $QtBin @{ 'file.create_drawing' = 'F5'; 'drawing.export_pdf' = 'F11'; 'drawing.export_dwg' = 'F12'
                             'drawing.add_revision' = 'F8'; 'drawing.parts_list' = 'F7'
                             'drawing.balloon' = 'Shift+F7'; 'view.property_sets' = 'Shift+F9' } -StepPause 0
 $cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
@@ -204,7 +204,7 @@ Ui-ExpectLog 'block.mitcad' 'the design opened'
 
 Write-Host '--- 1. Create Drawing'
 Ui-Mark
-Ui-Step 'Create Drawing (F9)'             { Ui-Key 'F9' }
+Ui-Step 'Create Drawing (F5)'             { Ui-Key 'F5' }
 Ui-ExpectNew 'Create Drawing dialog opened' 'its dialog asks for the sheet'
 Ui-Step 'OK: A3, landscape, first angle'  { Ui-FocusDialog '^Create Drawing$'; Ui-Key 'Return'; Ui-FocusMain }
 Ui-ExpectNew 'Create Drawing dialog: template iso, A3' 'the ISO template on its A3'
@@ -313,7 +313,7 @@ $before = View-Y 1
 Ui-Mark
 Ui-Step 'Close Drawing'                   { Ui-ClickLogged 'Drawing Close Drawing' }
 Ui-ExpectNew 'Drawing closed' 'the 3D view again'
-Ui-ExpectNew 'Ribbon tabs: START, SOLID, SURFACE, SHEET METAL, BUILD, MAKE_PRINT, MAKE_LASER, MAKE_CNC, MANAGE (shown SOLID)' "the model's tabs back, the one it was opened from shown"
+Ui-ExpectNew 'Ribbon tabs: START, SOLID, SURFACE, SHEET PARTS, BUILD, MAKE_PRINT, MAKE_LASER, MAKE_CNC, MANAGE (shown SOLID)' "the model's tabs back, the one it was opened from shown"
 Ui-Mark
 Ui-Step 'edit Extrude1 (double-click)'    { Ui-DoubleClickLogged 'Timeline Extrude1' }
 Ui-ExpectNew ' with Extrude' 'editing Extrude1'
@@ -340,7 +340,7 @@ Write-Host '--- 4. Saved and opened again'
 Ui-Mark
 Ui-Step 'back to the model'               { Ui-ClickLogged 'Drawing Close Drawing' }
 Ui-ExpectNew 'Drawing closed' 'closed'
-Ui-ExpectNew 'Ribbon tabs: START, SOLID, SURFACE, SHEET METAL, BUILD, MAKE_PRINT, MAKE_LASER, MAKE_CNC, MANAGE (shown BUILD)' 'back on the Build tab it was opened from'
+Ui-ExpectNew 'Ribbon tabs: START, SOLID, SURFACE, SHEET PARTS, BUILD, MAKE_PRINT, MAKE_LASER, MAKE_CNC, MANAGE (shown BUILD)' 'back on the Build tab it was opened from'
 Ui-Step 'save (Ctrl+S)'                   { Ui-Key 'ctrl+s' }
 Ui-ExpectNew 'Saved ' 'saved'
 if (-not (Select-String -Path $design -Pattern '"drawings"' -Quiet)) { Ui-Fail 'the design file has no drawings' }
@@ -408,7 +408,7 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path $assembly)) { Ui-Fail "mitcad-cli (t
 Ui-StartApp 'drawings-assembly' @('--open', $assembly)
 Ui-ExpectLog 'assembly.mitcad' 'the assembly opened'
 Ui-Mark
-Ui-Step 'Create Drawing (F9)'             { Ui-Key 'F9' }
+Ui-Step 'Create Drawing (F5)'             { Ui-Key 'F5' }
 Ui-ExpectNew 'Create Drawing dialog opened' 'its dialog'
 Ui-Step 'OK'                              { Ui-FocusDialog '^Create Drawing$'; Ui-Key 'Return'; Ui-FocusMain }
 Ui-ExpectNew 'Drawing opened: D1 Drawing1, sheet 1 of 1' 'its sheet over the view'
@@ -534,7 +534,7 @@ Settled 'Drawing Close Drawing'
 Ui-Step 'Close Drawing'                   { Ui-ClickLogged 'Drawing Close Drawing' }
 Ui-ExpectNew 'Drawing closed' 'the 3D view again'
 Ui-Mark
-Ui-Step 'Create Drawing (F9)'             { Ui-Key 'F9' }
+Ui-Step 'Create Drawing (F5)'             { Ui-Key 'F5' }
 Ui-ExpectNew 'Create Drawing dialog starts with template iso, A3, landscape, first_angle (the last choice)' 'the last drawing''s choice'
 Ui-ExpectNew 'Create Drawing dialog opened' 'its dialog'
 Ui-Step 'Template: ANSI (Alt+T, Home, Down), OK' {
@@ -556,7 +556,7 @@ Settled 'Drawing Close Drawing'
 Ui-Step 'Close Drawing'                   { Ui-ClickLogged 'Drawing Close Drawing' }
 Ui-ExpectNew 'Drawing closed' 'the 3D view again'
 Ui-Mark
-Ui-Step 'Create Drawing again (F9)'       { Ui-Key 'F9' }
+Ui-Step 'Create Drawing again (F5)'       { Ui-Key 'F5' }
 Ui-ExpectNew 'Create Drawing dialog starts with template ansi, ANSI_B, landscape, third_angle (the last choice)' 'it opens with ANSI, B, third angle'
 Ui-ExpectNew 'Create Drawing dialog opened' 'its dialog'
 Ui-Step 'Cancel (Esc)'                    { Ui-FocusDialog '^Create Drawing$'; Ui-Key 'Escape'; Ui-FocusMain }
@@ -589,7 +589,7 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path $items)) { Ui-Fail "mitcad-cli (the 
 Ui-StartApp 'drawings-items' @('--open', $items)
 Ui-ExpectLog 'items.mitcad' 'the annotated block opened'
 Ui-Mark
-Ui-Step 'Create Drawing (F9)'             { Ui-Key 'F9' }
+Ui-Step 'Create Drawing (F5)'             { Ui-Key 'F5' }
 Ui-ExpectNew 'Create Drawing dialog opened' 'its dialog'
 Ui-Step 'OK'                              { Ui-FocusDialog '^Create Drawing$'; Ui-Key 'Return'; Ui-FocusMain }
 Ui-ExpectNew 'Drawing opened: D1 Drawing1, sheet 1 of 1' 'its sheet over the view'

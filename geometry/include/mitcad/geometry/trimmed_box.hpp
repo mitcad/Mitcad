@@ -27,6 +27,15 @@ namespace mitcad::geometry {
 // has an extreme along that axis. Not enlarged by tolerances. A face
 // without a surface (a mesh face) or without boundary edges gets OCCT's
 // optimal box.
+//
+// A face whose surface OCCT cannot evaluate at some points of that
+// rectangle outside the face (mitcad#2633: OCCT's optimal box then throws)
+// is boxed the same way, from its boundary and its interior, OCCT's box
+// from the surface's own bounds standing in for the optimal one, or none:
+// then every side is searched. Where the search cannot be trusted (cut
+// short, or the surface has no value at a point inside the face) a side
+// keeps OCCT's box, which holds the face; without one, OCCT's failure is
+// thrown as before.
 Bnd_Box trimmed_face_box(const TopoDS_Face& face);
 
 // The box of the shape: its faces' trimmed boxes (on all cores), then the

@@ -330,10 +330,22 @@ fn analysis_def() -> Value {
         "required": ["type"],
         "additionalProperties": false
     });
+    // Interference checks (mitcad#2664): kept, not drawn; the pairs come
+    // from the interference query with the check's name.
+    let interference = json!({
+        "type": "object",
+        "description": "An interference check: the pairs of bodies that overlap and the volume of each overlap, run again on the same bodies whenever it is opened (the interference query with its name gives them); never shown in the view",
+        "properties": {
+            "type": {"const": "interference"},
+            "bodies": {"type": "array", "items": {"type": "string"}, "description": "The bodies checked against each other (uids, F2.b0), each once; left out or empty: every body at the timeline marker when it runs, also those added later"}
+        },
+        "required": ["type"],
+        "additionalProperties": false
+    });
     json!({
         "type": "object",
-        "description": "What the analysis is, by its type: section, print, draft, point_cloud_deviation, min_radius, minimum_distance, zebra, curvature, isocurve or environment",
-        "oneOf": [section, print, draft, deviation, min_radius, distance, zebra, curvature, isocurve, environment]
+        "description": "What the analysis is, by its type: section, print, draft, point_cloud_deviation, min_radius, minimum_distance, zebra, curvature, isocurve, environment or interference",
+        "oneOf": [section, print, draft, deviation, min_radius, distance, zebra, curvature, isocurve, environment, interference]
     })
 }
 
@@ -594,10 +606,10 @@ pub(super) fn spec(name: &str) -> Option<Value> {
             "examples": [{"cmd": "rename_group", "name": "Base", "new_name": "Housing"}]
         }),
         "add_analysis" => json!({
-            "description": "Adds a section, print, draft, point cloud deviation, minimum radius, minimum distance, zebra, curvature, isocurve or environment analysis, shown (the others hidden); no geometry changes. Result: name.",
+            "description": "Adds a section, print, draft, point cloud deviation, minimum radius, minimum distance, zebra, curvature, isocurve or environment analysis, shown (the others hidden), or an interference check, which is never shown (the others left as they are); no geometry changes. Result: name.",
             "properties": {
                 "def": analysis_def(),
-                "name": text("Its name; the next free Section<n>, Print<n>, Draft<n>, Deviation<n>, MinRadius<n>, MinDistance<n>, Zebra<n>, Curvature<n>, Isocurves<n> or Environment<n> when left out")
+                "name": text("Its name; the next free Section<n>, Print<n>, Draft<n>, Deviation<n>, MinRadius<n>, MinDistance<n>, Zebra<n>, Curvature<n>, Isocurves<n>, Environment<n> or Interference<n> when left out")
             },
             "required": ["def"],
             "examples": [
@@ -606,7 +618,8 @@ pub(super) fn spec(name: &str) -> Option<Value> {
                 {"cmd": "add_analysis", "def": {"type": "draft", "bodies": ["F2.b0"], "pull": "xy", "angle": 2}},
                 {"cmd": "add_analysis", "def": {"type": "min_radius", "bodies": ["F2.b0"], "limit": 3}},
                 {"cmd": "add_analysis", "def": {"type": "minimum_distance", "first": [{"body": "F2.b0"}], "second": [{"occurrence": "O1"}], "clearance": 2}},
-                {"cmd": "add_analysis", "def": {"type": "curvature", "bodies": ["F2.b0"], "kind": "mean"}}
+                {"cmd": "add_analysis", "def": {"type": "curvature", "bodies": ["F2.b0"], "kind": "mean"}},
+                {"cmd": "add_analysis", "def": {"type": "interference", "bodies": ["F2.b0", "F4.b0"]}}
             ]
         }),
         "edit_analysis" => json!({
@@ -614,13 +627,13 @@ pub(super) fn spec(name: &str) -> Option<Value> {
             "properties": {
                 "name": analysis(),
                 "def": analysis_def(),
-                "visible": {"type": "boolean", "description": "Shows it (hiding the others) or hides it; as it was when left out"}
+                "visible": {"type": "boolean", "description": "Shows it (hiding the others) or hides it; as it was when left out; an interference check cannot be shown"}
             },
             "required": ["name", "def"],
             "examples": [{"cmd": "edit_analysis", "name": "Section1", "def": {"type": "section", "plane": "xz", "offset": 20, "flip": true}}]
         }),
         "set_analysis_visible" => json!({
-            "description": "Shows an analysis (hiding the others) or hides it.",
+            "description": "Shows an analysis (hiding the others) or hides it; an interference check is never shown.",
             "properties": {
                 "name": analysis(),
                 "visible": {"type": "boolean", "description": "Shown or hidden"}

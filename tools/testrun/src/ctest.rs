@@ -205,7 +205,15 @@ pub fn exact_regex(name: &str) -> String {
 
 /// ctest's arguments that run one test of the build tree alone: no
 /// fixtures added (the runner orders the setup and cleanup tests itself),
-/// the output of a failure in the log.
+/// every line the test writes in the log.
+///
+/// `-V`, not `--output-on-failure` (mitcad#2614): ctest prints a failed
+/// test's output under `--output-on-failure` only after the test, from
+/// what it kept of it, and it keeps 300 KiB of a failed test's output
+/// (`CTEST_CUSTOM_MAXIMUM_FAILED_TEST_OUTPUT_SIZE`), so a long output lost
+/// lines there. Under `-V` it prints each line of stdout and stderr (one
+/// pipe, in the order the test wrote them) as it comes, `<index>: <line>`,
+/// with nothing left out, passed or failed.
 pub fn run_args(build: &str, config: Option<&str>, name: &str) -> Vec<String> {
     let mut args = vec![
         "--test-dir".to_owned(),
@@ -214,7 +222,7 @@ pub fn run_args(build: &str, config: Option<&str>, name: &str) -> Vec<String> {
         exact_regex(name),
         "-FA".to_owned(),
         ".*".to_owned(),
-        "--output-on-failure".to_owned(),
+        "-V".to_owned(),
         "--no-tests=error".to_owned(),
     ];
     if let Some(config) = config {
@@ -240,6 +248,11 @@ pub enum Status {
 pub fn parse_status(output: &str, name: &str) -> Option<Status> {
     let marker = format!(": {name} ");
     for line in output.lines() {
+        // A line of the test's own output (`-V`), which may quote another
+        // ctest's result lines.
+        if test_line(line).is_some() {
+            continue;
+        }
         if !line.contains("Test #") || !line.contains(&marker) {
             continue;
         }
@@ -270,6 +283,107 @@ pub fn says_disk_full(output: &str) -> bool {
         "ERROR_DISK_FULL",
     ];
     SIGNS.iter().any(|sign| output.contains(sign))
+}
+
+/// A line of the test's own output under `-V` (`<index>: <line>`): the
+/// line without its prefix; None for ctest's own lines.
+pub fn test_line(line: &str) -> Option<&str> {
+    let digits = line.len() - line.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+    if digits == 0 {
+        return None;
+    }
+    let rest = &line[digits..];
+    if rest == ":" {
+        return Some("");
+    }
+    rest.strip_prefix(": ")
+}
+
+/// The most failure lines `failure_lines` quotes of one test.
+pub const QUOTED_FAILURE_LINES: usize = 10;
+
+/// The longest a quoted failure line is, in characters.
+const QUOTE_CHARS: usize = 300;
+
+/// The lines of a failed test's log that name its failures, in the log's
+/// order (mitcad#2614): a check that failed (`check failed`, `FAIL`), a
+/// translation left out (`has no translation`, `untranslated`), a value
+/// that differs (`expected` with `got`), a Rust panic (`panicked at`). At
+/// most `max`, each cut to 300 characters; when there are more, a last
+/// line counts the rest. Under `-V` only the test's own lines count (not
+/// ctest's header of the command and its environment, nor its summary).
+pub fn failure_lines(output: &str, max: usize) -> Vec<String> {
+    const HEADER: [&str; 4] = [
+        "Test command:",
+        "Working Directory:",
+        "Environment variables:",
+        "Test timeout computed to be:",
+    ];
+    const CTEST: [&str; 5] = [
+        "Test #",
+        "The following tests FAILED",
+        "Errors while running CTest",
+        "tests failed out of",
+        "Start ",
+    ];
+    let verbose = output.lines().any(|line| test_line(line).is_some());
+    let mut quoted = Vec::new();
+    let mut more = 0usize;
+    let mut environment = false;
+    for line in output.lines() {
+        let text = if verbose {
+            let Some(text) = test_line(line) else {
+                continue;
+            };
+            // ctest's header before the output: the variables' lines
+            // follow "Environment variables:", each indented.
+            if HEADER.iter().any(|h| text.starts_with(h)) {
+                environment = text.starts_with("Environment variables:");
+                continue;
+            }
+            if environment && text.starts_with(' ') && text.contains('=') {
+                continue;
+            }
+            environment = false;
+            text
+        } else {
+            if CTEST.iter().any(|c| line.contains(c)) {
+                continue;
+            }
+            line
+        };
+        let text = text.trim_end_matches('\r').trim();
+        if !names_failure(text) {
+            continue;
+        }
+        if quoted.len() < max {
+            let cut: String = text.chars().take(QUOTE_CHARS).collect();
+            quoted.push(cut.replace('\t', " "));
+        } else {
+            more += 1;
+        }
+    }
+    if more > 0 {
+        let lines = if more == 1 { "line" } else { "lines" };
+        quoted.push(format!("({more} more such {lines} in the log)"));
+    }
+    quoted
+}
+
+/// A line that names a failure (`failure_lines`).
+fn names_failure(text: &str) -> bool {
+    const SIGNS: [&str; 5] = [
+        "check failed",
+        "FAIL",
+        "has no translation",
+        "untranslated",
+        "panicked at",
+    ];
+    if SIGNS.iter().any(|sign| text.contains(sign)) {
+        return true;
+    }
+    let lower = text.to_ascii_lowercase();
+    lower.contains("expected") && lower.contains("got")
 }
 
 /// A simple pattern: `*` matches any run of characters, the rest itself.
@@ -370,6 +484,10 @@ mod tests {
         let args = run_args("build/dev", None, "x.y");
         assert_eq!(args[..4], ["--test-dir", "build/dev", "-R", "^x\\.y$"]);
         assert!(args.contains(&"-FA".to_owned()));
+        // Every line of the test as it comes, never ctest's kept and cut
+        // copy of a failed test's output (mitcad#2614).
+        assert!(args.contains(&"-V".to_owned()));
+        assert!(!args.contains(&"--output-on-failure".to_owned()));
         let configured = run_args("b", Some("Debug"), "t");
         assert_eq!(configured[configured.len() - 2..], ["-C", "Debug"]);
     }
@@ -390,6 +508,94 @@ mod tests {
             assert_eq!(parse_status(line, "t"), None, "{line}");
         }
         assert_eq!(parse_status("No tests were found!!!", "t.x"), None);
+        // Under -V a line of the test's own output that quotes another
+        // ctest's result is not the result.
+        let verbose = "12: 1/1 Test #3: t.x ...   Passed  0.1 sec\n\
+                       1/1 Test #12: t.x ...***Failed  2.0 sec\n";
+        assert_eq!(parse_status(verbose, "t.x"), Some(Status::Failed));
+    }
+
+    #[test]
+    fn verbose_lines_are_told_from_ctests_own() {
+        assert_eq!(
+            test_line("444: model_messages.cpp: x"),
+            Some("model_messages.cpp: x")
+        );
+        assert_eq!(test_line("444: "), Some(""));
+        assert_eq!(test_line("444:"), Some(""));
+        assert_eq!(test_line("1/1 Test #444: app.unit ...   Passed"), None);
+        assert_eq!(test_line("    Start 444: app.unit"), None);
+        assert_eq!(test_line("Test project /b"), None);
+        assert_eq!(test_line("12x: no"), None);
+    }
+
+    #[test]
+    fn failure_lines_are_quoted_from_a_verbose_log() {
+        // A log as ctest -V writes it (mitcad#2614): its header, the test's
+        // lines (a translation left out in the middle of a long output),
+        // the result and the summary.
+        let mut log = String::from(
+            "UpdateCTestConfiguration  from :/b/DartConfiguration.tcl\n\
+             Test project /b\n\
+             test 444\n    Start 444: app.unit\n\n\
+             444: Test command: /b/app/test_app\n\
+             444: Working Directory: /b/app\n\
+             444: Environment variables: \n\
+             444:  MITCAD_FAIL_FAST=1\n\
+             444:  QT_QPA_PLATFORM=offscreen\n\
+             444: Test timeout computed to be: 1500\n",
+        );
+        for i in 0..1000 {
+            log.push_str(&format!("444: a line of output {i}\n"));
+        }
+        log.push_str(
+            "444: model_messages.cpp: mitcad_fi.qm has no translation of \"a sheet\"\n\
+             444: model_messages.cpp: mitcad_fi.qm: 1 of 15527 model message templates untranslated\n\
+             444: test_app.cpp:12: check failed: a == b\n\
+             444:   expected 3, got 4\n\
+             444: 3 check(s) failed\n\
+             1/1 Test #444: app.unit .........................***Failed   13.36 sec\n\n\
+             0% tests passed, 1 tests failed out of 1\n\n\
+             The following tests FAILED:\n\t444 - app.unit (Failed)\n\
+             Errors while running CTest\n",
+        );
+        let lines = failure_lines(&log, QUOTED_FAILURE_LINES);
+        assert_eq!(
+            lines,
+            [
+                "model_messages.cpp: mitcad_fi.qm has no translation of \"a sheet\"",
+                "model_messages.cpp: mitcad_fi.qm: 1 of 15527 model message templates untranslated",
+                "test_app.cpp:12: check failed: a == b",
+                "expected 3, got 4",
+            ]
+        );
+        // More than the most: the rest counted.
+        let many: String = (0..14).map(|i| format!("7: FAIL: case {i}\r\n")).collect();
+        let lines = failure_lines(&many, 10);
+        assert_eq!(lines.len(), 11);
+        assert_eq!(lines[9], "FAIL: case 9");
+        assert_eq!(lines[10], "(4 more such lines in the log)");
+        // A long line is cut, a tab becomes a space.
+        let long = format!("7: FAIL\t{}\n", "x".repeat(1000));
+        let lines = failure_lines(&long, 10);
+        assert_eq!(lines[0].chars().count(), 300);
+        assert!(lines[0].starts_with("FAIL x"));
+        // Nothing that names a failure: no lines.
+        assert!(failure_lines("7: all good\n1/1 Test #7: t ...***Failed\n", 10).is_empty());
+    }
+
+    #[test]
+    fn failure_lines_of_a_log_without_verbose_lines() {
+        // ctest's --output-on-failure form (an older log): the test's lines
+        // unprefixed, ctest's own left out.
+        let log = "Test project /b\n    Start 9: x.y\n\
+                   1/1 Test #9: x.y ...***Failed  1.0 sec\n\
+                   thread 'a' panicked at src/lib.rs:3:5:\n\
+                   The following tests FAILED:\n\t  9 - x.y (Failed)\n";
+        assert_eq!(
+            failure_lines(log, 10),
+            ["thread 'a' panicked at src/lib.rs:3:5:"]
+        );
     }
 
     fn def(name: &str) -> TestDef {

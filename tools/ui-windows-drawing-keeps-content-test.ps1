@@ -30,7 +30,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{ 'file.create_drawing' = 'F9' } -StepPause 0
+Ui-Init $App $Out $QtBin @{ 'file.create_drawing' = 'F12' } -StepPause 0
 $cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
   ForEach-Object { Join-Path (Split-Path $script:UiApp) $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $cli) { Ui-Fail "no mitcad-cli.exe beside $($script:UiApp)" }
@@ -172,7 +172,7 @@ Shown-Bodies 'F2.b0 in O1, F2.b0 in O2'
 
 Write-Host '--- 1. A base view of the design'
 Ui-Mark
-Ui-Step 'Create Drawing (F9)'             { Ui-Key 'F9' }
+Ui-Step 'Create Drawing (F12)'             { Ui-Key 'F12' }
 Ui-ExpectNew 'Create Drawing dialog opened' 'its dialog asks for the sheet'
 Ui-Step 'OK'                              { Ui-FocusDialog '^Create Drawing$'; Ui-Key 'Return'; Ui-FocusMain }
 Ui-ExpectNew 'Drawing opened: D1 Drawing1, sheet 1 of 1' 'its sheet over the view'

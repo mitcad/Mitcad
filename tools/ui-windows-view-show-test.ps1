@@ -17,7 +17,7 @@
 #      the Origin folder's light bulb on. View > Show > Construction off
 #      (F8 here) hides both planes, greys their rows and keeps the sketches
 #      and the origin; the design saved keeps it as display state and no
-#      feature's light bulb; on again shows both planes. Sketches (F9) and
+#      feature's light bulb; on again shows both planes. Sketches (F12) and
 #      Origins (F7) the same way, the Origin folder's light bulb staying on.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-view-show-test.ps1 [-App build\dev\mitcad.exe] [-Cli mitcad-cli.exe] [-Out dir] [-QtBin dir]
@@ -29,7 +29,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{ 'view.show_origins' = 'F7'; 'view.show_construction' = 'F8'; 'view.show_sketches' = 'F9' } `
+Ui-Init $App $Out $QtBin @{ 'view.show_origins' = 'F7'; 'view.show_construction' = 'F8'; 'view.show_sketches' = 'F12' } `
   -StepPause 0
 if (-not $Cli) {
   $Cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
@@ -204,10 +204,10 @@ Write-Host 'ok   the planes'' rows no longer greyed'
 
 Write-Host '--- Sketches and Origins'
 Ui-Mark
-Ui-Step 'View > Show > Sketches off (F9)'  { Ui-Key 'F9' }
+Ui-Step 'View > Show > Sketches off (F12)'  { Ui-Key 'F12' }
 Ui-ExpectNew 'Sketches shown: none' 'no sketch drawn'
 Ui-Mark
-Ui-Step 'View > Show > Sketches on (F9)'   { Ui-Key 'F9' }
+Ui-Step 'View > Show > Sketches on (F12)'   { Ui-Key 'F12' }
 Ui-ExpectNew 'Sketches shown: F2, F4' 'both sketches drawn again'
 Ui-Mark
 Ui-Step 'View > Show > Origins off (F7)'   { Ui-Key 'F7' }

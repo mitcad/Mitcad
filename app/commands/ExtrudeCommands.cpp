@@ -6,6 +6,7 @@
 // the extents of sketch profiles (mitcad#2033).
 #include <algorithm>
 #include <cmath>
+#include <exception>
 #include <initializer_list>
 #include <optional>
 #include <utility>
@@ -13,6 +14,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QKeySequence>
+#include <QRegularExpression>
 #include <QtLogging>
 
 #include "CommandFactories.hpp"
@@ -84,6 +86,107 @@ Choices startChoices(const CommandState& state) {
     }
   }
   return offered;
+}
+
+// Open sketch curves while Type is Extrude (mitcad#2594): a line, an arc,
+// a spline or a curve of an open chain bounds no profile, and only a thin
+// extrusion follows it. A click on one sets Type to Thin Extrude and takes
+// it (thinForCurves); before, it picked nothing and said nothing.
+
+// The region key without its face boundary pieces (`b{...}`, a sketch on
+// a body face, mitcad#1138), whose edge names hold other sketches' curve
+// ids.
+QString ownSegments(const QString& key) {
+  QString kept;
+  kept.reserve(key.size());
+  int skipping = 0; // brace depth inside a `b{...}`
+  for (qsizetype i = 0; i < key.size(); ++i) {
+    const QChar c = key.at(i);
+    if (skipping > 0) {
+      if (c == QLatin1Char('{')) {
+        ++skipping;
+      } else if (c == QLatin1Char('}')) {
+        --skipping;
+      }
+      continue;
+    }
+    if (c == QLatin1Char('b') && i + 1 < key.size() && key.at(i + 1) == QLatin1Char('{') &&
+        (i == 0 || !key.at(i - 1).isLetterOrNumber())) {
+      skipping = 1;
+      ++i;
+      continue;
+    }
+    kept.append(c);
+  }
+  return kept;
+}
+
+// Whether a sketch curve bounds none of its sketch's profiles: no region
+// key of the model's `profiles` query for the sketch names it. False when
+// the model cannot say (the click then picks nothing, as before, and the
+// refused hint says what to do).
+bool boundsNoProfile(const SelectionItem& item, const CommandContext& context) {
+  // A curve's id (c12); a text, whose glyphs bound its letters, is none.
+  static const QRegularExpression curveName(QStringLiteral("^c\\d+$"));
+  if (item.kind != SelectKind::SketchCurve || !curveName.match(item.name).hasMatch()) {
+    return false;
+  }
+  QJsonArray rows;
+  try {
+    rows = context
+               .query({{QStringLiteral("query"), QStringLiteral("profiles")},
+                       {QStringLiteral("sketch"), item.owner}})
+               .toArray();
+  } catch (const std::exception&) {
+    // A 3D sketch, which the query's `sketch` does not take: every
+    // sketch's rows, its own among them.
+    try {
+      rows = context.queryArray(QStringLiteral("profiles"));
+    } catch (const std::exception&) {
+      return false;
+    }
+  }
+  static const QRegularExpression curveId(QStringLiteral("(?<![\\w.])c\\d+"));
+  for (const QJsonValue& value : std::as_const(rows)) {
+    const QJsonObject row = value.toObject();
+    if (row.value(QStringLiteral("sketch")).toString() != item.owner) {
+      continue;
+    }
+    const QString segments = ownSegments(row.value(QStringLiteral("region")).toString());
+    QRegularExpressionMatchIterator ids = curveId.globalMatch(segments);
+    while (ids.hasNext()) {
+      if (ids.next().captured(0) == item.name) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+// Profiles that hold a sketch curve while Type is Extrude (a click on an
+// open curve, or one selected before the command): Type becomes Thin
+// Extrude, and Profiles keep the curves alone, since walls follow curves
+// or profiles, not both (an automatic profile or a face picked before is
+// left out).
+void thinForCurves(CommandState& state) {
+  if (state.choice(QStringLiteral("type")) == QStringLiteral("thin")) {
+    return;
+  }
+  Selection& profiles = state.items(QStringLiteral("profiles"));
+  const auto isCurve = [](const SelectionItem& item) { return item.kind == SelectKind::SketchCurve; };
+  if (std::none_of(profiles.begin(), profiles.end(), isCurve)) {
+    return;
+  }
+  const auto others = std::count_if(profiles.begin(), profiles.end(),
+                                    [&isCurve](const SelectionItem& item) { return !isCurve(item); });
+  profiles.erase(std::remove_if(profiles.begin(), profiles.end(),
+                                [&isCurve](const SelectionItem& item) { return !isCurve(item); }),
+                 profiles.end());
+  state.setChoice(QStringLiteral("type"), QStringLiteral("thin"));
+  const QString leftOut =
+      others > 0 ? QStringLiteral(" (%1 other picks left out)").arg(static_cast<qlonglong>(others)) : QString();
+  qDebug().noquote() << QStringLiteral("Extrude Profiles: open sketch curve taken, Type set to Thin Extrude%1")
+                            .arg(leftOut);
 }
 
 // The profiles' middle and the way they go: a face's middle and outward
@@ -317,29 +420,47 @@ CommandDef extrudeCommand(const CommandContext& context) {
       // planar face of a body instead (mitcad#535).
       // A whole sketch picked on its Browser row or timeline cell is its
       // outline set's unused regions (mitcad#2194, ProfilePicks).
+      // With Type Extrude, a click on an open sketch curve sets Thin
+      // Extrude and takes the curve (mitcad#2594, thinForCurves).
       selectionInput(QStringLiteral("profiles"), QObject::tr("Profiles"),
                      SelectKind::Profile | SelectKind::SketchCurve | SelectKind::Face | SelectKind::Sketch, 1, 0)
           .withTooltip(QObject::tr("Profiles or one planar face; for a thin extrusion, sketch curves instead"))
           .withAccepts([](const SelectionItem& item) { return item.kind != SelectKind::Face || isPlanar(item); })
           .withoutMeshes()
-          .withOnPick([](const SelectionItem&, CommandState& state,
-                         const CommandContext& model) { expandWholeSketches(state, model); },
-                      false)
+          .withOnPick(
+              [](const SelectionItem&, CommandState& state, const CommandContext& model) {
+                expandWholeSketches(state, model);
+                thinForCurves(state);
+              },
+              false)
           .withMissingText(crossingNote)
           .withPickRule(
               [thin](const CommandState& state) -> SelectFilter {
                 return thin(state) ? SelectKind::Profile | SelectKind::SketchCurve | SelectKind::Sketch
-                                   : SelectKind::Profile | SelectKind::Face | SelectKind::Sketch;
+                                   : SelectKind::Profile | SelectKind::SketchCurve | SelectKind::Face |
+                                         SelectKind::Sketch;
               },
               // A face alone, or sketch items (mitcad#868, ProfilePicks); a
-              // 3D sketch's curves in its sketch plane (mitcad#1550).
-              [&context](const SelectionItem& item, const CommandState& state) {
+              // 3D sketch's curves in its sketch plane (mitcad#1550). With
+              // Type Extrude a sketch curve only when it bounds no profile
+              // (mitcad#2594), whatever Profiles hold: its click sets Thin
+              // Extrude and leaves the profiles or the face out.
+              [&context, thin](const SelectionItem& item, const CommandState& state) {
+                if (item.kind == SelectKind::SketchCurve && !thin(state)) {
+                  return planeCurveTakes(item, context) && boundsNoProfile(item, context);
+                }
                 return profilesTake(item, state.items(QStringLiteral("profiles"))) &&
                        planeCurveTakes(item, context);
               })
-          .withRefusedHint([&context](const SelectionItem& item, const CommandState& state) {
+          .withRefusedHint([&context, thin](const SelectionItem& item, const CommandState& state) {
             if (const QString why = planeCurveRefusal(item, context); !why.isEmpty()) {
               return why;
+            }
+            // A curve that bounds a profile, with Type Extrude (mitcad#2594).
+            if (item.kind == SelectKind::SketchCurve && !thin(state)) {
+              return QObject::tr("Extrude takes the areas that closed curves bound: click inside one. Thin "
+                                 "Extrude follows the curves themselves, open ones too: set Type to Thin "
+                                 "Extrude to select them.");
             }
             return profilesRefused(item, state.items(QStringLiteral("profiles")), isPlanar(item),
                                    ProfilesCommand::Extrude, state.choice(QStringLiteral("start")));
@@ -479,6 +600,9 @@ CommandDef extrudeCommand(const CommandContext& context) {
   // separate outline (mitcad#2194); why not, when its closed curves cross.
   def.note = crossingNote;
   def.init = [](CommandState& state, const CommandContext& model) {
+    // Open sketch curves selected before the command: walls along them
+    // (mitcad#2594).
+    thinForCurves(state);
     newestOutline(state, model);
     // What the view hides now (mitcad#475): targets hidden there start
     // unchecked when the previews find them. Editing a cut keeps its stored

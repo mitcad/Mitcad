@@ -38,7 +38,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{ 'tools.libraries' = 'F8'; 'insert.library_component' = 'F9' } -StepPause 0
+Ui-Init $App $Out $QtBin @{ 'tools.libraries' = 'F8'; 'insert.library_component' = 'F12' } -StepPause 0
 
 $git = Get-Command git -ErrorAction SilentlyContinue
 if (-not $git) {
@@ -120,7 +120,7 @@ Ui-FocusMain
 
 Write-Host '--- 2. Insert from Library: empty until Update (mitcad#317)'
 Ui-Mark
-Ui-Step 'Insert from Library (F9)'       { Ui-Key 'F9' }
+Ui-Step 'Insert from Library (F12)'       { Ui-Key 'F12' }
 Ui-FocusDialog '^Browse Components$'
 Ui-ExpectNew "Library search '': 0 components, 0 libraries" 'nothing listed before a fetch'
 Ui-ExpectNew 'Library browser empty: nothing fetched yet, press Update' 'the empty list says to press Update'
@@ -142,7 +142,7 @@ Add-Source $broken
 Ui-Step 'close (Alt+C)'                  { Ui-Key 'alt+c' }
 Ui-FocusMain
 Ui-Mark
-Ui-Step 'Insert from Library (F9)'       { Ui-Key 'F9' }
+Ui-Step 'Insert from Library (F12)'       { Ui-Key 'F12' }
 Ui-FocusDialog '^Browse Components$'
 Ui-ExpectNew 'Library browser selected test-blocks/block: version ' 'the block selected'
 Ui-Mark
@@ -159,7 +159,7 @@ Ui-FocusMain
 
 Write-Host '--- 4. The part picker: a group, a search, a star, Favorites, In this design (mitcad#418)'
 Ui-Mark
-Ui-Step 'Insert from Library (F9)'       { Ui-Key 'F9' }
+Ui-Step 'Insert from Library (F12)'       { Ui-Key 'F12' }
 Ui-FocusDialog '^Browse Components$'
 Ui-ExpectNew 'Part picker opened: 1 parts for Browse Components' 'the results as the picker grid'
 Ui-ExpectNew 'Part picker in this design: 0 parts' 'no library part in the design yet'
@@ -187,7 +187,7 @@ Ui-FocusMain
 Ui-ExpectNew 'Part picker chose test-blocks/block' 'chosen in the picker'
 Ui-ExpectNew 'Inserted component Test block (linked) from test-blocks ' 'the block inserted'
 Ui-Mark
-Ui-Step 'Insert from Library (F9)'       { Ui-Key 'F9' }
+Ui-Step 'Insert from Library (F12)'       { Ui-Key 'F12' }
 Ui-FocusDialog '^Browse Components$'
 Ui-ExpectNew 'Part picker in this design: 1 parts: test-blocks/block x1' 'the block in this design'
 Ui-ExpectNew 'Part picker group All components: 1 parts, first test-blocks/block' 'All components again'
@@ -238,7 +238,7 @@ Add-Source $sheets
 Ui-Step 'close (Alt+C)'                  { Ui-Key 'alt+c' }
 Ui-FocusMain
 Ui-Mark
-Ui-Step 'Insert from Library (F9)'       { Ui-Key 'F9' }
+Ui-Step 'Insert from Library (F12)'       { Ui-Key 'F12' }
 Ui-FocusDialog '^Browse Components$'
 Ui-Mark
 Ui-Step 'Update (Alt+U)'                 { Ui-Key 'alt+u' }
@@ -286,7 +286,7 @@ Ui-ExpectNew 'Part picker group Wood folded' 'Wood folded'
 Ui-Step 'close (Escape)'                 { Ui-Key 'Escape' }
 Ui-FocusMain
 Ui-Mark
-Ui-Step 'Insert from Library (F9)'       { Ui-Key 'F9' }
+Ui-Step 'Insert from Library (F12)'       { Ui-Key 'F12' }
 Ui-FocusDialog '^Browse Components$'
 Ui-ExpectNew 'Wood (2) (folded)' 'the fold remembered'
 $groupsTree = Ui-LastMatch '^Part picker groups: (.*)$'
@@ -358,7 +358,7 @@ Add-Source $screws
 Ui-Step 'close (Alt+C)'                  { Ui-Key 'alt+c' }
 Ui-FocusMain
 Ui-Mark
-Ui-Step 'Insert from Library (F9)'       { Ui-Key 'F9' }
+Ui-Step 'Insert from Library (F12)'       { Ui-Key 'F12' }
 Ui-FocusDialog '^Browse Components$'
 Ui-Mark
 Ui-Step 'Update (Alt+U)'                 { Ui-Key 'alt+u' }

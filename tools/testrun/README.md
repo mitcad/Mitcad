@@ -69,10 +69,36 @@ tools\dev-env\msvc.cmd build\dev\mitcad-testrun.exe --build build\dev --schedule
 `--help` lists every option. The run writes into `<build>/testrun`
 (`--out`): `logs/<test>.log` (ctest's output of each test),
 `status.txt` (a line per failure as it happens: kind, test, `priority
-lane`, log, note; then `finished`), `report.txt` (the end report) and
+lane`, log, note; then `finished`), `report.txt` (the end report),
 `results.tsv` (a row per test: result, start, wall, CPU, peak, limit,
-prediction, lane). The exit status is 0 when every test passed or was
+prediction, lane) and `failures.tsv` (below). The exit status is 0 when every test passed or was
 skipped, 1 otherwise, 2 for a usage or listing error.
+
+### Each test's whole output
+
+A test's log holds every line the test wrote, passed or failed
+(mitcad#2614). The runner runs each ctest with `-V`: ctest prints each
+line of the test's stdout and stderr as it comes, `<index>: <line>`, in
+the order the test wrote them (both go into one pipe; a test that
+buffers its stdout, as C's `printf` does into a pipe, writes those lines
+when it flushes them). Before the output come ctest's lines on the test's
+command, working folder, environment and timeout; after it ctest's result
+line. Not `--output-on-failure`: ctest prints a failed test's output there
+only after the test, from the copy it kept, and it keeps at most 300 KiB
+of it (`CTEST_CUSTOM_MAXIMUM_FAILED_TEST_OUTPUT_SIZE`), so a long output
+lost its lines past that.
+
+For each test that did not pass, the runner quotes the lines of its log
+that name its failures (`check failed`, `FAIL`, `has no translation`,
+`untranslated`, `expected` with `got`, `panicked at`; at most 10, each cut
+to 300 characters, a last line counting the rest): under the test's
+failure in the progress output and in `report.txt` (`| <line>`), and in
+`failures.tsv` (a row per line: test, result, line). `tools/check-all.sh`
+prints them after its list of failed tests, a line each:
+`ctest <test> (Failed): <line>`. The ctest `tools.testrun` runs the runner
+on a build tree of its own (`tests/runs/kept_log.rs`): a test that writes
+more than 300 KiB to stdout with lines on stderr among them and fails,
+whose every line must reach its log and whose stderr lines are quoted.
 
 ## Measuring per platform
 

@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: MIT
+# An open spline clicked in Extrude without changing Type (mitcad#2594) on
+# extrude-thin-open-curve.json: Sketch1 (F1) with an open spline through
+# three points (c1) and a rectangle beside it.
+#   1. Extrude starts with Type Extrude and takes the rectangle's profile
+#      by itself.
+#   2. A click on the spline sets Type to Thin Extrude and takes the
+#      spline alone: the rectangle's profile is left out (walls follow
+#      curves or profiles, not both). Before, the click picked nothing.
+#   3. 10 mm typed (a new Extrude starts at 0 mm, mitcad#2481): the wall
+#      previews, and OK adds a thin extrusion along the spline, 1 mm thick
+#      on Side 1 (the defaults), 10 mm high: one body of about 470 mm3
+#      (the spline is about 46 mm long), its definition's wall curves the
+#      spline.
+# Run by tools/ui-extrude-thin-open-curve-test.sh (Linux),
+# tools/ui-windows-extrude-thin-open-curve-test.ps1 (Windows) and
+# tools/ui-macos-extrude-thin-open-curve-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+
+# 1. Extrude, Type Extrude, the rectangle's profile taken by itself.
+mark
+command solid.extrude
+expect-log '^Command Extrude started'
+wait-log '^Extrude Profiles: 1 profile \[profile r\{.*\} of F1\]' 30
+wait-log '^Sketch entity F1/c1 at ' 30
+wait-idle
+expect-choice-text type '^Extrude$'
+
+# 2. The open spline clicked: Thin Extrude, the spline alone.
+mark
+click-logged '^Sketch entity F1/c1 at '
+wait-log '^Extrude Profiles: open sketch curve taken, Type set to Thin Extrude \(1 other picks left out\)$' 30
+wait-log '^Extrude Profiles: 1 sketch curve \[sketch curve c1 of F1\]' 30
+wait-idle
+expect-choice-text type '^Thin Extrude$'
+expect-no-log 'Extrude Profiles: .*not taken'
+
+# 3. A distance: the wall previews and is added.
+mark
+type-in '^Panel Extrude input distance at ' '10 mm'
+wait-log '^Preview Extrude: ok' 30
+wait-idle
+expect-never 'Preview Extrude: failed'
+button '^OK$'
+expect-log '^Added thin extrude \(New Body\), distance 10' 30
+wait-idle
+capture-model-text wallCurve '{"query":"feature","uid":"F2"}' 'def.thin.curves.curves.0'
+capture-model-number wall '{"query":"properties"}' total.volume
+expect-less 420 ${wall}
+expect-less ${wall} 520
+expect-never 'The document was read while a job computes it|OCCT view event failed|Recompute failed'

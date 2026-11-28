@@ -1,0 +1,82 @@
+# SPDX-License-Identifier: MIT
+# Interference checks kept in the Analysis folder (mitcad#2664), the second
+# shared input script of tools/ui-interference-check-test.sh (Linux),
+# tools/ui-windows-interference-check-test.ps1 (Windows) and
+# tools/ui-macos-interference-check-test.sh (macOS), on the design
+# interference-check.mitcad-ui saved: Interference1 (Body1 and Body2) and
+# Interference2 (every body). ASCII only: the Windows runner copies it as
+# ASCII.
+#   1. Opened again, both checks are listed; Interference1 runs on its two
+#      bodies: 500 mm3.
+#   2. Body2 deleted: Interference1 opened again marks its gone body in the
+#      Bodies list and says so instead of checking; the list's remove
+#      button takes it out, Body3 is picked, and OK keeps the check with
+#      Body1 and Body3. Saved: the runner finds the new bodies in the file.
+expect-ever 'View area' 600
+wait-idle 600
+command view.fit
+wait-idle
+# The Browser's folders may open folded, and in a short window (the Windows
+# VM's) the checks lie below its visible rows: Collapse All, then only the
+# Analysis folder opened, brings both checks into sight on every platform.
+mark
+context-menu-logged '^Browser Root at ' 'Collapse All'
+wait-idle 60
+mark
+click-logged '^Browser arrow Root/Analysis at '
+wait-log '^Browser Root/Analysis/Interference1 at ' 20
+wait-log '^Browser Root/Analysis/Interference2 at ' 20
+wait-idle 60
+
+# --- 1. Interference1 runs on its saved bodies.
+mark
+dblclick-logged '^Browser Root/Analysis/Interference1 at '
+wait-log '^Editing analysis Interference1 with Interference' 20
+wait-log '^Inspect Interference: Body1 x Body2: 500$' 60
+wait-idle 60
+key escape
+wait-log '^Command Interference cancelled' 20
+wait-idle 60
+
+# --- 2. Body2 deleted: its gone pick is marked and said; removed, Body3
+# picked instead, and kept.
+mark
+model-command '{"cmd":"delete_feature","uid":"F4"}'
+wait-idle 60
+mark
+dblclick-logged '^Browser Root/Analysis/Interference1 at '
+wait-log '^Editing analysis Interference1 with Interference' 20
+wait-log '^Interference Bodies: 1 of 2 pick[(]s[)] gone' 20
+wait-log '^Panel Interference bodies: 2 selected, 1 missing' 30
+wait-log '^Inspect Interference: failed: A body of Bodies is gone: remove it from the list' 60
+wait-idle 60
+screenshot '${MITCAD_TEST_WORK}/interference-check-gone.png'
+mark
+button '^.$' remove_pick_bodies
+wait-log '^Interference Bodies: 1 body' 30
+wait-log '^Inspect Interference: none$' 60
+wait-idle 60
+expect-no-log '^Panel Interference bodies: [0-9]+ selected, [0-9]+ missing'
+# The Bodies folder, folded by Collapse All above, opened for Body3.
+mark
+click-logged '^Browser arrow Root/Bodies at '
+wait-log '^Browser Root/Bodies/Body3 at ' 20
+wait-idle 60
+mark
+click-logged '^Browser Root/Bodies/Body3 at '
+wait-log '^Interference Bodies: 2 bodies' 20
+wait-log '^Inspect Interference: none$' 60
+wait-idle 60
+capture-undo-depth before_ok
+mark
+button '^OK$'
+wait-log '^Edited analysis Interference1' 30
+wait-idle 60
+expect-undo-depth ${before_ok} 1
+capture-model-number scope '{"query":"interference","name":"Interference1"}' bodies
+expect-near ${scope} 2 0 1e-9
+mark
+command file.save
+wait-log 'Saved .*interference-check[.]mitcad' 30
+wait-idle
+expect-never 'Recompute failed|OCCT view event failed|TestDriver: FAIL'

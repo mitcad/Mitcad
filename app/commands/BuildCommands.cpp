@@ -78,6 +78,7 @@
 #include "../library/PartPicker.hpp"
 #include "../library/UsedParts.hpp"
 #include "BuildEndCapCommand.hpp"
+#include "CommandFactories.hpp"
 #include "CommandSupport.hpp"
 
 namespace mitcad {
@@ -8799,6 +8800,8 @@ void registerBuildCommands(CommandRegistry& registry, const CommandContext& cont
   // OUTPUT
   registry.add(listCommand(context, window, designName, true));
   registry.add(listCommand(context, window, designName, false));
+  // CONNECT: Wood Joint, a woodworking joint between two parts (mitcad#2604).
+  registry.add(cmd::woodJointCommand(context));
 }
 
 } // namespace mitcad

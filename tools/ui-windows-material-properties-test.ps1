@@ -25,7 +25,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{ 'solid.materials' = 'F9' } -StepPause 0
+Ui-Init $App $Out $QtBin @{ 'solid.materials' = 'F12' } -StepPause 0
 if (-not $Cli) {
   $Cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
     ForEach-Object { Join-Path (Split-Path $script:UiApp) $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
@@ -103,7 +103,7 @@ Ui-StartApp 'material-properties' @('--open', $design)
 
 Write-Host "--- 1. Shop steel's Young's modulus typed in psi, the inch design's unit"
 Ui-Mark
-Ui-Step 'Edit Materials (F9)'            { Ui-Key 'F9' }
+Ui-Step 'Edit Materials (F12)'            { Ui-Key 'F12' }
 Ui-ExpectNew 'Materials opened' 'the Materials manager opened'
 Ui-ExpectNew 'Materials design item Shop steel at ' 'Shop steel is listed in This design'
 Ui-FocusDialog '^Materials$'

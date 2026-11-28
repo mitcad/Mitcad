@@ -2118,3 +2118,60 @@ fn step_export_writes_the_component_tree() {
         ["Arm:1/Pin:1", "Arm:1/Pin:2"]
     );
 }
+
+/// Along the grain each placed body shows its own part of the images
+/// (mitcad#2605): one body placed twice by a component, in a wood-like
+/// look laid along the grain, gets texture coordinates that differ between
+/// its placements by exactly the difference of their grain offsets over
+/// the repeat (the same shift on every corner, so the repeat size and the
+/// grain directions stay), as the shaded and the rendered view lay them.
+#[test]
+fn export_usdz_gives_each_placement_its_own_part_of_the_grain() {
+    use mitcad_model::appearance::{grain_key, grain_offset};
+    use mitcad_usdz::sdf::Value as Usd;
+    let mut b = block();
+    b.doc.components_from_bodies(&[b.body]).unwrap();
+    let first = b.doc.assembly().occurrences[0].uid;
+    let copy = b
+        .doc
+        .copy_occurrence(first, Some(Transform::translation([100.0, 0.0, 0.0])))
+        .unwrap();
+    let png = b"\x89PNG\r\n\x1a\nboard".to_vec();
+    command(
+        &mut b.doc,
+        json!({"cmd": "create_appearance", "id": "board", "name": "Board",
+               "texture": {"path": "board.png", "size": [800, 800], "projection": "grain",
+                           "data": mitcad_model::internal::base64::encode(&png)}}),
+    )
+    .unwrap();
+    b.doc.set_body_appearance(b.body, Some("board")).unwrap();
+    let dir = mitcad_model::testing::unique_temp_dir("usdz-grain");
+    let path = dir.join("design.usdz").to_str().unwrap().to_owned();
+    command(&mut b.doc, json!({"cmd": "export", "path": path})).unwrap();
+    let package = mitcad_usdz::read_package(&std::fs::read(&path).unwrap()).unwrap();
+    let layer = &package.layer;
+    let st = |prim: &str| match usd_field(layer, &format!("{prim}.primvars:st"), "default") {
+        Usd::Vec2fArray(st) => st,
+        other => panic!("{prim}: {other:?}"),
+    };
+    let one = st("/design/Body1_1/Body1");
+    let two = st("/design/Body1_2/Body1");
+    assert_eq!(one.len(), 36);
+    assert_eq!(two.len(), one.len());
+    let body = b.body.to_string();
+    let a = grain_offset(&grain_key(&body, &first.to_string()));
+    let c = grain_offset(&grain_key(&body, &copy.to_string()));
+    let shift = [(c[0] - a[0]) / 800.0, (c[1] - a[1]) / 800.0];
+    // Parts far apart: not the same image a whole number of repeats away.
+    let apart = |d: f64| (d - d.round()).abs();
+    assert!(
+        apart(shift[0]) > 0.01 || apart(shift[1]) > 0.01,
+        "{shift:?}"
+    );
+    for (p, q) in one.iter().zip(&two) {
+        for k in 0..2 {
+            let d = f64::from(q[k]) - f64::from(p[k]);
+            assert!((d - shift[k]).abs() < 1e-4, "{p:?} {q:?} {shift:?}");
+        }
+    }
+}

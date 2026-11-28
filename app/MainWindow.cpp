@@ -1362,7 +1362,7 @@ void MainWindow::registerCommands() {
   // Bearing (mitcad#577) after Pulley.
   registerBearingCommands(*m_registry, *this);
   registerModifyCommands(*m_registry, *this);
-  // SHEET METAL (mitcad#210): its features with the main window's actions
+  // SHEET PARTS (mitcad#210, mitcad#2602): its features with the main window's actions
   // in their sections (mitcad#1778, MainWindowSheet.cpp).
   registerSheetActions();
   // SURFACE (mitcad#455).
@@ -1499,6 +1499,8 @@ void MainWindow::registerCommands() {
   registerScriptCommands();
   // View › Toolbar Panel (mitcad#2426, MainWindowToolbarPanel.cpp).
   registerToolbarPanelCommands();
+  // Edit › Invert Selection (mitcad#2647, MainWindowInvertSelection.cpp).
+  registerInvertSelection();
 
   CommandDef search = action("tools.search", tr("Command Search"), "search", CommandDef::Mode::Any,
                              [this] { openCommandSearch(); });
@@ -1641,6 +1643,26 @@ void MainWindow::registerCommands() {
   reorient.keywords = {QStringLiteral("rotate"), QStringLiteral("turn"), QStringLiteral("orientation"),
                        QStringLiteral("origin plane"), QStringLiteral("up axis"), QStringLiteral("wrong plane")};
   m_registry->add(reorient);
+  // Replace Component (mitcad#2640): the component selected (or the one a
+  // selected body is in), in the Assemble group; also in the component's
+  // context menus.
+  CommandDef replaceComponent =
+      action("assemble.replace_component", tr("Replace Component…"), "component", CommandDef::Mode::Model, [this] {
+        QString path;
+        for (const SelectionItem& item : std::as_const(m_selection)) {
+          if (!item.occurrence.isEmpty()) {
+            path = item.occurrence;
+            break;
+          }
+        }
+        m_controller->openReplaceComponent(path);
+      });
+  replaceComponent.tooltip = tr("Swaps a component for another design or component and keeps its joints");
+  replaceComponent.keywords = {QStringLiteral("replace"), QStringLiteral("swap"), QStringLiteral("substitute"),
+                               QStringLiteral("exchange"), QStringLiteral("new version"),
+                               QStringLiteral("replace part")};
+  replaceComponent.enabled = [this] { return !windowReadOnly() && !m_snapshot.occurrences.isEmpty(); };
+  m_registry->add(replaceComponent);
   // Materials (mitcad#655, print/MaterialsDialog.cpp): the Make tab's
   // Materials group (mitcad#1049, the id kept), the library window; the
   // Material tool assigns (solid.material, mitcad#1059).
@@ -3735,6 +3757,8 @@ void MainWindow::editAnalysis(const QString& name) {
                           : type == QStringLiteral("minimum_distance") ? QStringLiteral("inspect.minimum_distance")
                           // The surface quality analyses (mitcad#2517).
                           : isSurfaceAnalysis(type) ? surfaceAnalysisCommand(type)
+                          // An interference check, run again (mitcad#2664).
+                          : type == QStringLiteral("interference") ? QStringLiteral("inspect.interference")
                                                             : QString();
   const CommandDef* def = command.isEmpty() ? nullptr : m_registry->find(command);
   if (analysis.isEmpty() || def == nullptr) {
@@ -8095,6 +8119,10 @@ void MainWindow::showContextMenu(const QPoint& globalPosition, const SelectionIt
     }
     fillModelContextMenu(menu, entries, item);
   }
+  // The selection, or a command's active input, inverted (mitcad#2647).
+  if (m_mode != Mode::PickPlane) {
+    add(m_registry->action(QStringLiteral("edit.invert_selection")));
+  }
   menu.addSeparator();
   // The orbit's fixed center (mitcad#1791): at the model point under the
   // click, and cleared while one is set (also over empty space).
@@ -9570,6 +9598,8 @@ bool MainWindow::installDocument(const QString& label, const QString& path, cons
   m_measureHistory.clear(); // the old design's measurements (mitcad#648)
   m_measurementKept = false; // and a Keep of its (mitcad#649)
   m_mcpDocumentId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+  // A tutorial's pane reads only its own design (mitcad#2615).
+  tutorialDesignInstalled(path);
   m_autosave->replaced();
   m_recoveredDigest.reset();
   m_filePath = path;
@@ -9632,10 +9662,14 @@ bool MainWindow::installDocument(const QString& label, const QString& path, cons
     // A new design is empty: its first view frames the origin the same way
     // whatever the window's size and the design before (mitcad#1000),
     // from the default view whatever the view looked at before, also Top
-    // (mitcad#1809). A design read from a file keeps the view's direction.
+    // (mitcad#1809). A design read from a file opens at its home view, the
+    // camera Home takes it to (refreshScene gave the viewer the design's
+    // own, or none), instead of the first fit (mitcad#2671, GitHub
+    // mitcad/Mitcad#763); one without a home view keeps the view's
+    // direction, fitted.
     if (newDesign) {
       m_viewer->frameNewDesign(newDesignWithOrigin());
-    } else {
+    } else if (!m_viewer->openAtHome()) {
       m_viewer->fitAll();
     }
     // The orbit's fixed center was a point of the design before

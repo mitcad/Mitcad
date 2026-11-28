@@ -20,7 +20,9 @@
 //!   refused in words, or with `development: triangulated` joined by a
 //!   ruled surface laid flat approximately by triangles (mitcad#2560).
 //! - **Bends** (press brake, mitcad#2560): each fold a cylinder of the
-//!   rules' bend radius between the facets, cut back to it.
+//!   rules' bend radius between the facets, cut back to it; where folds
+//!   meet in a point of a profile, a corner relief opens about it and the
+//!   bends end on its cut (mitcad#2576, `lofted_relief.rs`).
 //! - **Seam.** A closed transition opens along a ruling, by default the
 //!   shortest, or the one through the point at the `seam` fraction of the
 //!   first profile; both profiles lose half the `gap` (default the
@@ -38,8 +40,10 @@
 //!
 //! The chart's curves are generated curves `g<1400000+>` of the feature.
 //! Holes and cuts by ordinary features are taken into the chart
-//! (`lofted_cut.rs`, mitcad#2560); other sheet metal features on the sheet
-//! are not taken yet (refused in words).
+//! (`lofted_cut.rs`, mitcad#2560), and so are notches that reach the
+//! sheet's edge and Sheet Cut (mitcad#2575). Flange and Hem go on a
+//! straight edge of a flat facet (`lofted_flange.rs`, mitcad#2575); other
+//! sheet metal features on the sheet are not taken yet (refused in words).
 
 use mitcad_vec3::{add, cross, dot, norm, scale, sub};
 
@@ -55,10 +59,23 @@ use crate::notice::NoticePlace;
 mod geometry;
 use geometry::{Chain, RegionError, Strip, Unmatched, V3};
 
-// Holes and cuts in the sheet by ordinary features (mitcad#2560).
+// Holes and cuts in the sheet by ordinary features (mitcad#2560), notches
+// and Sheet Cut (mitcad#2575).
 #[path = "lofted_cut.rs"]
 mod cut;
-pub(crate) use cut::{Refused, rederived};
+pub(crate) use cut::{Refused, rederived, refusal, sheet_cut};
+
+// Flange and Hem on a straight edge of a flat facet (mitcad#2575).
+#[path = "lofted_flange.rs"]
+mod flange;
+pub(crate) use flange::{flange_base, published_flange};
+
+/// Whether a body's sheet is a Lofted Flange's (mitcad#2575: Sheet Cut,
+/// Flange and Hem take it on their own).
+pub(crate) fn is_lofted<K: Kernel>(ctx: &mut EvalContext<'_, K>, body: BodyUid) -> bool {
+    ctx.require_sheet(body)
+        .is_ok_and(|state| lofted_panel(&state).is_some())
+}
 
 /// The chart's curves.
 const CHART_CURVES: u32 = 1_400_000;
@@ -299,12 +316,16 @@ pub(crate) fn lofted_flange<K: Kernel>(
     let mut bends = Vec::new();
     if d.bends && d.method == LoftedMethod::PressBrake && rules.bend_radius > TOLERANCE {
         let plane = |c: &geometry::Chain| (c.pieces[0].start(), c.normal);
+        // Where bends meet in a point, a corner relief of the feature's
+        // size or the rules' (mitcad#2576).
+        let relief = d.relief.unwrap_or(rules.corner_relief.width);
         let (bent, made) = geometry::bent(
             &transition,
             rules.bend_radius,
             t,
             k,
             [plane(&first.chain), plane(&second_chain)],
+            relief,
         )
         .map_err(region_refusal)?;
         transition = bent;
@@ -548,48 +569,34 @@ fn triangulated_die_formed<K: Kernel>(
             format!("the transition could not be laid flat by triangulation: {e}"),
         )
     })?;
-    // The body: the front made solid the thickness behind it.
+    // The body: the front made solid the thickness behind it, its back the
+    // bands' offsets meeting where they cross at the creases from the
+    // corners (geometry::RuledBack; the kernel's offset cannot offset faces along
+    // a crease that fades out to a smooth join, as these do where a corner
+    // of one profile faces a smooth curve of the other).
     let uid = ctx.uid;
-    let patches = geometry::ruled_patches(&bands, uid);
-    let built = |e: crate::kernel::KernelError| {
+    let patches = geometry::ruled_body(&bands, side * t, uid).map_err(|e| {
         placed_at(
             places(),
-            format!(
-                "the lofted flange's body could not be built: {}",
-                crate::notice::user_message(&e.to_string())
-            ),
+            format!("the lofted flange's body could not be built: {e}"),
         )
-    };
-    let surface = ctx
+    })?;
+    let shape = ctx
         .kernel
         .patch_body(&PatchBodySpec {
             patches: &patches,
-            closed: false,
+            closed: true,
             tolerance: SEWING,
         })
-        .map_err(built)?;
-    let probe = add(
-        mid.point(0.5, 0.5),
-        scale(normal(mid, 0.5, 0.5)?, side * t / 2.0),
-    );
-    let mut shape = None;
-    for thickness in [t, -t] {
-        let Ok(solid) = ctx.kernel.thicken(uid, &surface, thickness, false) else {
-            continue;
-        };
-        let inside = ctx.kernel.points_inside(&solid, &[probe]).map_err(built)?;
-        if inside.first() == Some(&true) {
-            shape = Some(solid);
-            break;
-        }
-    }
-    let shape = shape.ok_or_else(|| {
-        placed_at(
-            places(),
-            "the lofted flange's body could not be built: its smooth surface could not be made \
-             solid the thickness behind it",
-        )
-    })?;
+        .map_err(|e| {
+            placed_at(
+                places(),
+                format!(
+                    "the lofted flange's body could not be built: {}",
+                    crate::notice::user_message(&e.to_string())
+                ),
+            )
+        })?;
     // The pattern on the plane touching the front at the strip's first
     // point, its first line along the chart's y axis, seen from the front.
     let first_band = &bands[0];
@@ -728,26 +735,187 @@ pub(crate) fn tangent_frame(l: &LoftedEmbedding) -> Result<(SketchFrame, Materia
 }
 
 /// The developed sheet of a lofted flange, for its Flat Pattern: its chart
-/// (the development already) laid in the plane touching its first ruling.
-/// None for another sheet.
-pub(crate) fn developed(state: &SheetState, panel: PanelId) -> Option<Result<SheetState, String>> {
-    let domain = SheetDomainRef::Panel(panel);
+/// (the development already) laid in the plane touching its first ruling,
+/// and its flanges and hems (mitcad#2575) each laid flat beside the facet
+/// it stands on, as unfolding them with that facet fixed lays them. The
+/// lofted flange's chart is the fixed one. None for another sheet.
+pub(crate) fn developed(
+    state: &SheetState,
+    panel: PanelId,
+    thickness: f64,
+) -> Option<Result<SheetState, String>> {
+    let lofted = lofted_panel(state)?;
+    if lofted != panel {
+        return Some(Err(
+            "a lofted flange's Flat Pattern keeps its transition fixed: choose the lofted flange \
+             as the fixed panel"
+                .into(),
+        ));
+    }
+    let domain = SheetDomainRef::Panel(lofted);
     let patch = state.charts.iter().find(|p| p.domain == domain)?;
     let SheetEmbedding::Lofted(l) = &patch.embedding else {
         return None;
     };
-    Some(tangent_frame(l).map(|(front_frame, sign)| {
-        let mut out = state.clone();
-        out.charts = vec![SheetPatch {
-            domain,
-            regions: patch.regions.clone(),
-            embedding: SheetEmbedding::Plane {
+    Some(with_flanges(state, l, lofted, thickness))
+}
+
+/// The domains reached from `start` over the sheet's ports, not through
+/// `fixed`.
+fn reached(
+    state: &SheetState,
+    start: SheetDomainRef,
+    fixed: SheetDomainRef,
+) -> std::collections::BTreeSet<SheetDomainRef> {
+    let mut found = std::collections::BTreeSet::from([start]);
+    let mut queue = vec![start];
+    while let Some(domain) = queue.pop() {
+        for port in &state.joins {
+            let (a, b) = (port.first.boundary.domain, port.second.boundary.domain);
+            let next = if a == domain {
+                b
+            } else if b == domain {
+                a
+            } else {
+                continue;
+            };
+            if next != fixed && found.insert(next) {
+                queue.push(next);
+            }
+        }
+    }
+    found
+}
+
+/// [`developed`]'s sheet: see there.
+fn with_flanges(
+    state: &SheetState,
+    l: &LoftedEmbedding,
+    panel: PanelId,
+    thickness: f64,
+) -> Result<SheetState, String> {
+    let domain = SheetDomainRef::Panel(panel);
+    let (front_frame, sign) = tangent_frame(l)?;
+    let mut out = state.clone();
+    for p in &mut out.charts {
+        if p.domain == domain {
+            p.embedding = SheetEmbedding::Plane {
                 front_frame,
                 front_to_back_sign: sign,
+            };
+        }
+    }
+    let material = scale(front_frame.normal(), sign.sign());
+    let regions = &super::chart(state, panel)?.regions;
+    let mut laid: std::collections::BTreeMap<SheetDomainRef, SheetEmbedding> =
+        std::collections::BTreeMap::new();
+    for port in &state.joins {
+        let (edge_side, other) = if port.first.boundary.domain == domain {
+            (&port.first, &port.second)
+        } else if port.second.boundary.domain == domain {
+            (&port.second, &port.first)
+        } else {
+            continue;
+        };
+        if laid.contains_key(&other.boundary.domain) {
+            continue;
+        }
+        let group = reached(state, other.boundary.domain, domain);
+        // The facet the flange stands on, its plane fixed.
+        let edge = regions
+            .iter()
+            .flat_map(|r| &r.loops)
+            .flat_map(|l| &l.edges)
+            .find(|e| e.piece == edge_side.boundary.piece)
+            .ok_or("a flange's edge is not on the lofted flange's sheet")?;
+        let (a, b) = super::line(edge)?;
+        let (facet, facet_material, _) = flange::facet_of(l, a, b)
+            .ok_or("a flange's edge does not lie on one flat facet of the lofted flange")?;
+        let facet_plane = SheetEmbedding::Plane {
+            front_frame: facet,
+            front_to_back_sign: if dot(facet.normal(), facet_material) > 0.0 {
+                MaterialParity::Positive
+            } else {
+                MaterialParity::Negative
             },
-        }];
-        out
-    }))
+        };
+        let mut unfolded = state.clone();
+        unfolded.charts = state
+            .charts
+            .iter()
+            .filter(|p| p.domain == domain || group.contains(&p.domain))
+            .cloned()
+            .collect();
+        for p in &mut unfolded.charts {
+            if p.domain == domain {
+                p.embedding = facet_plane.clone();
+            }
+        }
+        let inside = |d: SheetDomainRef| d == domain || group.contains(&d);
+        unfolded
+            .joins
+            .retain(|j| inside(j.first.boundary.domain) && inside(j.second.boundary.domain));
+        unfolded
+            .bends
+            .retain(|b| group.contains(&SheetDomainRef::Bend(b.id)));
+        unfolded
+            .opened
+            .retain(|o| group.contains(&SheetDomainRef::Bend(o.bend)));
+        let all: std::collections::BTreeMap<BendId, bool> =
+            unfolded.bends.iter().map(|b| (b.id, true)).collect();
+        super::develop::reconfigure(&mut unfolded, thickness, panel, &all)?;
+        for p in &unfolded.charts {
+            if !group.contains(&p.domain) {
+                continue;
+            }
+            // Its chart in the lofted chart's coordinates, laid with them.
+            let map = super::develop::planar_map(&p.embedding, &facet_plane)?;
+            let point = |u: [f64; 2]| {
+                add(
+                    front_frame.origin,
+                    add(
+                        scale(front_frame.x_axis, u[0]),
+                        scale(front_frame.y_axis, u[1]),
+                    ),
+                )
+            };
+            let vector = |u: [f64; 2]| {
+                add(
+                    scale(front_frame.x_axis, u[0]),
+                    scale(front_frame.y_axis, u[1]),
+                )
+            };
+            let frame = SketchFrame {
+                origin: point(map.origin),
+                x_axis: vector(map.x_axis),
+                y_axis: vector(map.y_axis),
+            };
+            let parity = if dot(frame.normal(), material) > 0.0 {
+                MaterialParity::Positive
+            } else {
+                MaterialParity::Negative
+            };
+            laid.insert(
+                p.domain,
+                SheetEmbedding::Plane {
+                    front_frame: frame,
+                    front_to_back_sign: parity,
+                },
+            );
+        }
+    }
+    for p in &mut out.charts {
+        if p.domain == domain {
+            continue;
+        }
+        p.embedding = laid.remove(&p.domain).ok_or_else(|| {
+            format!(
+                "{} is not joined to the lofted flange's sheet",
+                super::develop::domain_label(p.domain)
+            )
+        })?;
+    }
+    Ok(out)
 }
 
 /// A chart point of a lofted flange in the body, `depth` behind the front:

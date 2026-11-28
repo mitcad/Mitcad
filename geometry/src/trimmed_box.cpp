@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstddef>
 #include <exception>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -27,6 +28,7 @@
 #include <Geom_BezierCurve.hxx>
 #include <OSD_Parallel.hxx>
 #include <Precision.hxx>
+#include <Standard_DomainError.hxx>
 #include <TopAbs_State.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopLoc_Location.hxx>
@@ -381,6 +383,11 @@ public:
   // trusted, and the sides it searched keep OCCT's box.
   bool exhausted() const { return m_exhausted; }
 
+  // Whether the surface could not be evaluated at a point inside the face
+  // (mitcad#2633): the search went on without that point, so its results
+  // are not to be trusted either, as when it was cut short.
+  bool failed() const { return m_failed; }
+
   // Strictly inside the face: a point on its boundary (within the face's
   // tolerance) is the edges' and counted with them. Decided by the
   // boundary's polygon away from it; near it, and on a face without a
@@ -413,15 +420,32 @@ public:
     return m_classify.Perform(gp_Pnt2d(u, v)) == TopAbs_IN;
   }
 
-  gp_Pnt point(double u, double v) const { return m_surface.Value(u, v); }
+  // The surface's point at (u, v); none where OCCT finds no value there
+  // (an offset surface where the surface it is offset from has no normal,
+  // mitcad#2633), which marks the search failed.
+  std::optional<gp_Pnt> point(double u, double v) const {
+    try {
+      return m_surface.Value(u, v);
+    } catch (const Standard_DomainError&) {
+      m_failed = true;
+      return std::nullopt;
+    }
+  }
 
-  Local local(double u, double v, int axis, double sign) const {
+  // The coordinate and its derivatives at (u, v); none, and the search
+  // failed, where OCCT finds no value or derivatives there (as point()).
+  std::optional<Local> local(double u, double v, int axis, double sign) const {
     gp_Pnt p;
     gp_Vec du, dv, duu, dvv, duv;
-    m_surface.D2(u, v, p, du, dv, duu, dvv, duv);
+    try {
+      m_surface.D2(u, v, p, du, dv, duu, dvv, duv);
+    } catch (const Standard_DomainError&) {
+      m_failed = true;
+      return std::nullopt;
+    }
     const int k = axis + 1;
-    return {sign * p.Coord(k),   sign * du.Coord(k),  sign * dv.Coord(k),
-            sign * duu.Coord(k), sign * duv.Coord(k), sign * dvv.Coord(k)};
+    return Local{sign * p.Coord(k),   sign * du.Coord(k),  sign * dv.Coord(k),
+                 sign * duu.Coord(k), sign * duv.Coord(k), sign * dvv.Coord(k)};
   }
 
   // The largest value of the coordinate `axis` (times `sign`) reached by
@@ -433,7 +457,11 @@ public:
   double climb(double u, double v, int axis, double sign, double cell) const {
     const double ru = width();
     const double rv = height();
-    Local at = local(u, v, axis, sign);
+    const std::optional<Local> start = local(u, v, axis, sign);
+    if (!start) {
+      return -Precision::Infinite();
+    }
+    Local at = *start;
     for (int iteration = 0; iteration < 100; ++iteration) {
       // In the rectangle's own scale (both sides 1), so that the steps of
       // a long narrow rectangle are alike in both directions.
@@ -469,11 +497,11 @@ public:
         const double un = u + sa * ru;
         const double vn = v + sb * rv;
         if (inside(un, vn)) {
-          const Local next = local(un, vn, axis, sign);
-          if (next.f >= at.f) {
+          const std::optional<Local> next = local(un, vn, axis, sign);
+          if (next && next->f >= at.f) {
             u = un;
             v = vn;
-            at = next;
+            at = *next;
             moved = true;
             break;
           }
@@ -502,6 +530,7 @@ private:
   mutable int m_calls = 0;
   mutable int m_steps = 0;
   mutable bool m_exhausted = false;
+  mutable bool m_failed = false;
 };
 
 // The face's parameter grid: each sample's point and whether it lies
@@ -528,9 +557,12 @@ Grid sample(const FaceDomain& domain, int nu, int nv) {
       const std::size_t k = static_cast<std::size_t>(i) * static_cast<std::size_t>(nv) + static_cast<std::size_t>(j);
       const double u = grid.u(domain, i);
       const double v = grid.v(domain, j);
-      grid.in[k] = domain.inside(u, v);
-      if (grid.in[k]) {
-        grid.points[k] = domain.point(u, v);
+      // A point inside the face where its surface has no value counts as
+      // outside it (the search is then marked failed).
+      const std::optional<gp_Pnt> p = domain.inside(u, v) ? domain.point(u, v) : std::nullopt;
+      grid.in[k] = p.has_value();
+      if (p) {
+        grid.points[k] = *p;
         ++grid.inside;
       }
     }
@@ -822,14 +854,48 @@ bool no_interior_extreme(const BRepAdaptor_Surface& surface, int axis) {
   }
 }
 
+// OCCT's box of the face, which holds it: its optimal box, which samples
+// the face's surface over the whole parameter rectangle its boundary spans.
+// Where OCCT cannot evaluate the surface somewhere on that rectangle
+// (mitcad#2633; an offset surface, as a shell's inner faces have, has no
+// value where the surface it is offset from has no normal), OCCT's box from
+// the surface's own bounds instead (BRepBndLib::Add without triangulations:
+// an offset surface's is the box of the poles of the surface it is offset
+// from, grown by the offset), which evaluates no point of an offset
+// surface. None when that fails too, with OCCT's failure in `failure`.
+std::optional<Bnd_Box> occt_face_box(const TopoDS_Face& face, std::exception_ptr& failure) {
+  try {
+    Bnd_Box optimal;
+    BRepBndLib::AddOptimal(face, optimal, false, false);
+    return optimal;
+  } catch (const Standard_DomainError&) {
+    failure = std::current_exception();
+  }
+  try {
+    Bnd_Box bounds;
+    BRepBndLib::Add(face, bounds, false);
+    return bounds;
+  } catch (const Standard_DomainError&) {
+    return std::nullopt;
+  }
+}
+
 } // namespace
 
 Bnd_Box trimmed_face_box(const TopoDS_Face& face) {
-  Bnd_Box occt;
-  BRepBndLib::AddOptimal(face, occt, false, false);
+  std::exception_ptr failure;
+  const std::optional<Bnd_Box> enclosing = occt_face_box(face, failure);
+  // OCCT's box where the face's own cannot be told, and OCCT's failure
+  // when it has none.
+  const auto occt = [&]() -> Bnd_Box {
+    if (!enclosing) {
+      std::rethrow_exception(failure);
+    }
+    return *enclosing;
+  };
   TopLoc_Location location;
-  if (occt.IsVoid() || BRep_Tool::Surface(face, location).IsNull()) {
-    return occt;
+  if ((enclosing && enclosing->IsVoid()) || BRep_Tool::Surface(face, location).IsNull()) {
+    return occt();
   }
   // The boundary: its edges' curves, exact.
   Bnd_Box boundary;
@@ -840,15 +906,17 @@ Bnd_Box trimmed_face_box(const TopoDS_Face& face) {
     }
     if (!BRep_Tool::IsGeometric(edge)) {
       // An edge with no curve in space: its points are not known here.
-      return occt;
+      return occt();
     }
     BRepBndLib::AddOptimal(edge, boundary, false, false);
   }
   if (boundary.IsVoid()) {
     // A closed surface without boundary (a whole sphere): its own box.
-    return occt;
+    return occt();
   }
-  const Sides outer = sides_of(occt);
+  // Without OCCT's box every side is open: the face may reach past its
+  // boundary on any of them.
+  const Sides outer = enclosing ? sides_of(*enclosing) : Sides{};
   Sides result = sides_of(boundary);
   // The sides where OCCT's box reaches past the boundary: the face reaches
   // there only through an interior point where its surface turns back
@@ -856,12 +924,12 @@ Bnd_Box trimmed_face_box(const TopoDS_Face& face) {
   std::array<bool, 6> open{};
   bool any = false;
   for (std::size_t k = 0; k < 3; ++k) {
-    open[k] = result[k] - outer[k] > kOpenSide;
-    open[k + 3] = outer[k + 3] - result[k + 3] > kOpenSide;
+    open[k] = !enclosing || result[k] - outer[k] > kOpenSide;
+    open[k + 3] = !enclosing || outer[k + 3] - result[k + 3] > kOpenSide;
     any = any || open[k] || open[k + 3];
   }
   if (!any) {
-    return occt;
+    return occt();
   }
   // The axes to search inside the face: those with an open side, unless
   // the surface is ruled or provably has no extreme along the axis inside
@@ -891,17 +959,22 @@ Bnd_Box trimmed_face_box(const TopoDS_Face& face) {
   }
   const FaceDomain domain(face);
   if (!(domain.width() > 0.0) || !(domain.height() > 0.0)) {
-    return occt;
+    return occt();
   }
   int nu = samples_for(domain.u_spans());
   int nv = samples_for(domain.v_spans());
   Grid grid = sample(domain, nu, nv);
   // A narrow face: a finer grid until enough samples fall inside it.
-  while (grid.inside < kInsideSamples && std::max(nu, nv) < kMostSamples && !domain.exhausted()) {
+  while (grid.inside < kInsideSamples && std::max(nu, nv) < kMostSamples && !domain.exhausted() &&
+         !domain.failed()) {
     nu *= 2;
     nv *= 2;
     grid = sample(domain, nu, nv);
   }
+  // A search cut short by its work bound, or one that met a point inside
+  // the face where the surface has no value, keeps OCCT's side (and fails
+  // as OCCT failed without OCCT's box).
+  const auto untrusted = [&] { return domain.exhausted() || domain.failed(); };
   for (int axis = 0; axis < 3; ++axis) {
     const auto low = static_cast<std::size_t>(axis);
     const auto high = static_cast<std::size_t>(axis + 3);
@@ -911,15 +984,14 @@ Bnd_Box trimmed_face_box(const TopoDS_Face& face) {
     if (open[low] && grid.inside > 0) {
       result[low] = std::min(result[low], -interior_top(domain, grid, axis, -1.0));
     }
-    // A search cut short by its work bound keeps OCCT's side.
-    if (open[low] && domain.exhausted()) {
-      result[low] = outer[low];
+    if (open[low] && untrusted()) {
+      result[low] = sides_of(occt())[low];
     }
     if (open[high] && grid.inside > 0) {
       result[high] = std::max(result[high], interior_top(domain, grid, axis, 1.0));
     }
-    if (open[high] && domain.exhausted()) {
-      result[high] = outer[high];
+    if (open[high] && untrusted()) {
+      result[high] = sides_of(occt())[high];
     }
   }
   Bnd_Box box;

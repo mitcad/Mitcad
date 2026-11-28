@@ -229,7 +229,10 @@ add_library(mitcad-webbrowser MODULE
   TutorialPageView.hpp
   cef/CefBridge.cpp
   cef/CefBridge.hpp
-  cef/CefBridgeConfig.hpp)
+  cef/CefBridgeConfig.hpp
+  # What a tutorial page may make MitCad do (mitcad#2615).
+  TutorialPageRules.cpp
+  TutorialPageRules.hpp)
 target_include_directories(mitcad-webbrowser PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
 # CEF's headers as the system's: MitCad's warning flags are for its own code.
 target_include_directories(mitcad-webbrowser SYSTEM PRIVATE "${CEF_INCLUDE_PATH}")

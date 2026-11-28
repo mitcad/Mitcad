@@ -27,6 +27,9 @@
 use std::f64::consts::{PI, TAU};
 
 use crate::profile::SegmentGeometry;
+
+/// Cycloidal teeth (mitcad#2607).
+pub mod cycloid;
 // Named segments and points along segments, below the model with the
 // kernel (mitcad#777).
 pub use mitcad_model_base::segments::NamedSegment;

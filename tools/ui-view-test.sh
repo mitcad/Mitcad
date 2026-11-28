@@ -9,8 +9,9 @@
 #     roll the view (P9); standard views and the camera's projection by
 #     command. The cube's projection (Preferences > Display > Orientation
 #     cube, mitcad#766, mitcad#774), each saved: following the view (the
-#     default), drawn in the perspective view's perspective, the sides
-#     towards the view's middle in sight; orthographic, its outline and the
+#     default, mitcad#2641), drawn and picked as the orthographic cube in
+#     the orthographic view and as the perspective cube in the perspective
+#     view (face on, no side in sight); orthographic, its outline and the
 #     extent of its picks the same in either view; in its own perspective,
 #     the same in either view, face on as large as the orthographic cube,
 #     from the isometric view drawn otherwise. In each, the picks inside
@@ -164,19 +165,22 @@ expect_camera "-0.577 0.577 -0.577" "the isometric view"
 
 echo "--- The orientation cube's projection (mitcad#766, mitcad#774)"
 # cube_outline: the cube's outline and the extent of its picks logged last
-# since the mark, "x0 y0 x1 y1 px0 py0 px1 py1 view cube": the view's
-# projection and the cube's.
+# since the mark, "x0 y0 x1 y1 px0 py0 px1 py1 view cube drawn": the view's
+# projection, the cube's and how the cube is drawn (orthographic or in its
+# own perspective; Follow the View as the camera's, mitcad#2641).
 cube_outline() {
   local line
-  local re='outline (-?[0-9]+),(-?[0-9]+) to (-?[0-9]+),(-?[0-9]+), picks (-?[0-9]+),(-?[0-9]+) to (-?[0-9]+),(-?[0-9]+), looking .* \(([a-z]+)\), cube ([a-z-]+)$'
+  local re='outline (-?[0-9]+),(-?[0-9]+) to (-?[0-9]+),(-?[0-9]+), picks (-?[0-9]+),(-?[0-9]+) to (-?[0-9]+),(-?[0-9]+), looking .* \(([a-z]+)\), cube ([a-z-]+) \(([a-z]+)\)$'
   line=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -o "Orientation cube outline .*" | tail -1)
   [[ $line =~ $re ]] && echo "${BASH_REMATCH[@]:1}"
   return 0
 }
-# outline_of name view cube: the outline logged last since the mark into the
-# array of that name; it must be of the view's and the cube's projection,
-# and the cube must be picked only where it is drawn (its picks inside the
-# outline, give or take how far a pick reaches beyond a part).
+# outline_of name view cube [drawn]: the outline logged last since the mark
+# into the array of that name; it must be of the view's and the cube's
+# projection, the cube drawn so (orthographic or perspective; the cube's
+# projection unless given), and the cube must be picked only where it is
+# drawn (its picks inside the outline, give or take how far a pick reaches
+# beyond a part).
 # CUBE_REACH: a pick finds a part of the cube within half its pick width,
 # AIS_ViewCube's sensitivity of the part (8 pixels for a corner, 4 for an
 # edge) plus kPickTolerance (4, app/PickContext.hpp): up to 6 pixels beyond
@@ -189,9 +193,10 @@ CUBE_REACH=8
 outline_of() {
   local -n _outline=$1
   read -r -a _outline <<< "$(cube_outline)"
-  [ "${#_outline[@]}" -eq 10 ] || ui_fail "no outline of the cube logged since the mark"
+  [ "${#_outline[@]}" -eq 11 ] || ui_fail "no outline of the cube logged since the mark"
   [ "${_outline[8]}" = "$2" ] || ui_fail "the outline is not the $2 view's: '${_outline[8]}'"
   [ "${_outline[9]}" = "$3" ] || ui_fail "the outline is not the $3 cube's: '${_outline[9]}'"
+  [ "${_outline[10]}" = "${4:-$3}" ] || ui_fail "the $3 cube in the $2 view is not drawn ${4:-$3}: '${_outline[10]}'"
   [ $((_outline[2] - _outline[0])) -gt 20 ] && [ $((_outline[3] - _outline[1])) -gt 20 ] ||
     ui_fail "the cube's outline is too small: ${_outline[*]:0:4}"
   [ "${_outline[4]}" -ge $((_outline[0] - CUBE_REACH)) ] && [ "${_outline[5]}" -ge $((_outline[1] - CUBE_REACH)) ] &&
@@ -262,12 +267,15 @@ cube_projection() {
 # The pointer away from the cube, so that no hover lights a part of it.
 xdotool mousemove $(ui_view_at 50 92)
 
-# Follow the View, the default (owner 27.10.2026): as the view projects it.
+# Follow the View, the default (owner 27.10.2026): as the camera's
+# projection, centred on the cube (mitcad#2641): orthographic with an
+# orthographic camera, in the cube's own perspective with a perspective one
+# (compared with the Orthographic and Perspective cubes below).
 ui_mark
 ui_step "front view (search)"              ui_command "Front View"
 expect_camera "0 1 0 up 0 0 1 (orthographic)" "looking at the front"
 ui_expect_new ", cube follow-view" "the cube's outline logged, following the view by default"
-outline_of FOLLOW_O orthographic follow-view
+outline_of FOLLOW_O orthographic follow-view orthographic
 near "face on, the outline is square" $((FOLLOW_O[2] - FOLLOW_O[0])) $((FOLLOW_O[3] - FOLLOW_O[1]))
 only_front "following the orthographic view"
 cube_shot cube-follow-orthographic "${FOLLOW_O[@]:0:4}"
@@ -275,17 +283,18 @@ ui_mark
 ui_step "perspective (search)"             ui_command "Perspective"
 expect_camera "0 1 0 up 0 0 1 (perspective)" "the camera is a perspective one"
 ui_expect_new ", cube follow-view" "the cube's outline logged again"
-outline_of FOLLOW_P perspective follow-view
-differs "following the perspective view, the cube is drawn in its perspective" FOLLOW_P FOLLOW_O
-# In the corner of a perspective view, the sides that face the view's
-# middle are in sight face on.
-tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qE "Orientation cube (left|bottom) at " ||
-  ui_fail "following the perspective view, no side towards the view's middle is in sight"
-echo "ok   following the perspective view, the sides towards the view's middle are in sight"
+outline_of FOLLOW_P perspective follow-view perspective
+# Seen from straight in front of its middle, not from the view's middle:
+# face on as the orthographic cube, no side of it in sight.
+same "face on, the cube following the perspective view as the one following the orthographic view" \
+  FOLLOW_O FOLLOW_P 4
+only_front "following the perspective view"
 cube_shot cube-follow-perspective "${FOLLOW_P[@]:0:4}"
 ui_mark
 ui_step "isometric view (search)"          ui_command "Isometric View"
 expect_camera "-0.577 0.577 -0.577" "the isometric view in perspective"
+ui_expect_new ", cube follow-view" "the cube's outline logged"
+outline_of FOLLOW_ISO perspective follow-view perspective
 ui_expect_new "Orientation cube top at" "the top face can be clicked"
 ui_mark
 ui_step "click the cube's top"             ui_click_logged "Orientation cube top"
@@ -341,6 +350,10 @@ expect_camera "-0.577 0.577 -0.577" "the isometric view, orthographic"
 ui_expect_new ", cube perspective" "the cube's outline logged"
 outline_of PERSP_ISO orthographic perspective
 differs "from the isometric view, the perspective cube is drawn in its perspective" PERSP_ISO ORTHO_ISO
+# Following the perspective view, the cube is this perspective cube
+# (mitcad#2641), drawn and picked the same.
+same "from the isometric view, the cube following the perspective view as the perspective cube" \
+  PERSP_ISO FOLLOW_ISO 8
 cube_shot cube-perspective-isometric "${PERSP_ISO[@]:0:4}"
 ui_expect_new "Orientation cube top at" "the top face can be clicked"
 ui_mark
@@ -377,6 +390,12 @@ cube_projection follow-view Up Up
 ui_mark
 ui_step "isometric view (search)"          ui_command "Isometric View"
 expect_camera "-0.577 0.577 -0.577" "the isometric view again"
+# Following the orthographic view, the cube is the orthographic cube
+# (mitcad#2641), drawn and picked the same.
+ui_expect_new ", cube follow-view" "the cube's outline logged"
+outline_of FOLLOW_ISO_O orthographic follow-view orthographic
+same "from the isometric view, the cube following the orthographic view as the orthographic cube" \
+  ORTHO_ISO FOLLOW_ISO_O 8
 
 echo "--- Visual styles"
 ui_step "fit (F6)"                         ui_key F6

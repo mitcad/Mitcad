@@ -1060,6 +1060,13 @@ test_step() {
         result=FAIL
         sed -n 's/^Results: /   mitcad-testrun: /p' "$out/report.txt"
         sed -n '/The following tests FAILED:/,$p' "$LOGS/$name.log"
+        # Each failed test's own lines that name its failures, from its
+        # log (the runner's failures.tsv, mitcad#2614), not only its last.
+        if [ -f "$out/failures.tsv" ]; then
+          awk -F'\t' 'NR > 1 && NF >= 3 {
+            printf "   ctest %s (%s): %s\n", $1, toupper(substr($2, 1, 1)) substr($2, 2), $3
+          }' "$out/failures.tsv"
+        fi
       fi
       # Tests to run and none ran (those a release gate skipped by their
       # fingerprints count as run).

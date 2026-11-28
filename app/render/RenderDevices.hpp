@@ -70,8 +70,10 @@ using DeviceReport = std::function<void(const DeviceInfo& device, const std::str
 // loaded, its memory runs out), a renderer on the CPU takes over with the
 // same scene, environment, view and samples, and `report` says why. A GPU
 // that fails while it also denoises on a GPU is first replaced by the same
-// GPU with CPU denoising ("Denoising on the CPU: ..."), once; only when that
-// one cannot start or fails too does the CPU take over. A `testFailure`
+// GPU with CPU denoising ("Denoising on the CPU: ..."), once, started only
+// after the failed renderer has ended (its session holds the GPU's memory
+// and CUDA context); only when that one cannot start or fails too does the
+// CPU take over, and its message gives both failures. A `testFailure`
 // (the worker's MITCAD_RENDER_TEST_DEVICE_FAILURE) makes the first renderer
 // fail with that message after its first frame, also on the CPU; it counts
 // as the path tracer's failure (straight to the CPU). Null with `error`

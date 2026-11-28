@@ -56,7 +56,7 @@ class CommandRegistry;
 // buttons (mitcad#1001, mitcad#1084; ToolbarPins: the user's preference),
 // dragged among the group's pinned buttons to reorder.
 // The tabs' menu (mitcad#1975), from a right-click on a tab or the + after
-// the last one: the model tabs with ticks (Solid, Surface, Sheet Metal,
+// the last one: the model tabs with ticks (Solid, Surface, Sheet Parts,
 // Build, Make and Manage; each shown by default, Start and the modes'
 // tabs never hidden; the user's layout layer keeps the hidden ones), then
 // Customize Toolbar… (the tab's commands, each with a check box: a button
@@ -97,7 +97,7 @@ public:
   // SHEET for a cut sheet, mitcad#853), the model's tabs hidden, so that
   // the toolbar is one row; closed, they come back with the tab the
   // drawing was opened from shown. Logs "Ribbon tabs: DRAWING (shown
-  // DRAWING)", "Ribbon tabs: START, SOLID, SURFACE, SHEET METAL, BUILD,
+  // DRAWING)", "Ribbon tabs: START, SOLID, SURFACE, SHEET PARTS, BUILD,
   // MAKE_PRINT, MAKE_LASER, MAKE_CNC, MANAGE (shown BUILD)".
   void setDrawingMode(bool open, bool cutSheet = false);
   // The Render workspace (the selector's, mitcad#1990, mitcad#2082): its RENDER tab alone
@@ -239,7 +239,7 @@ public:
   QList<QWidget*> panelRowParts() const;
 
   // The workspaces of the toolbar panel (setPanel, mitcad#1990): DESIGN
-  // (SOLID, SURFACE, SHEET METAL, BUILD and MANAGE), MAKE (MAKE_PRINT,
+  // (SOLID, SURFACE, SHEET PARTS, BUILD and MANAGE), MAKE (MAKE_PRINT,
   // MAKE_LASER and MAKE_CNC: manufacturing, the owner 18.11.2026), RENDER (its
   // RENDER tab, while the workspace is chosen: setRenderMode) and DRAWING
   // (a drawing's or a cut sheet's tab, while one is open). The tab row
@@ -287,11 +287,12 @@ public:
   // for a space not minded; empty for none.
   static QString workspaceOfName(const QString& name);
   // The tabs a step may name, by their keys ("START", "SOLID", "MAKE_PRINT",
-  // "SHEET METAL", the modes' tabs too).
+  // "SHEET PARTS", the modes' tabs too).
   static QStringList guideTabs();
   // A tab's key from its name: the key or its name as the toolbar shows it
-  // ("Sheet Metal", "3D Print", the interface language's too), case and "_"
-  // for a space not minded; empty for none.
+  // ("Sheet Parts", "3D Print", the interface language's too), case and "_"
+  // for a space not minded, and "Sheet Metal", the tab's earlier name
+  // (mitcad#2602); empty for none.
   static QString tabOfName(const QString& name);
   // The workspace selector (setPanel or setWorkspaceSelector); null without
   // one.
@@ -323,7 +324,7 @@ public:
   void setButtonLabels(bool labels);
   bool buttonLabels() const { return m_labels; }
   // The shown page's group cards in sight: their names
-  // ("ribbonGroup_SOLID/SHEET_METAL": spaces as underscores) and rectangles
+  // ("ribbonGroup_SHEET_PARTS/CREATE": spaces as underscores) and rectangles
   // in the ribbon's coordinates, left to right (clipped to the ribbon).
   std::vector<std::pair<QString, QRect>> groupCards() const;
 
@@ -769,7 +770,7 @@ private:
 // presentation shows; a tab keyed apart from its caption by its own
 // ("MAKE_PRINT" -> "3D Print"). The internal names stay in capitals.
 QString displayName(const QString& key);
-// Whether a tab's, group's or submenu's key in the layout ("SHEET METAL",
+// Whether a tab's, group's or submenu's key in the layout ("SHEET PARTS",
 // "Machine Elements") has a caption to translate (mitcad#1951: the layout
 // file holds keys only).
 bool hasRibbonCaption(const QString& key);

@@ -27,3 +27,5 @@ mod sheet_corner_flag_tests;
 // Flat Patterns nested on a cut sheet and cut with a plasma torch
 // (mitcad#2553).
 mod cut_sheet_cutting_tests;
+// Beads pressed into a sheet along sketch lines (mitcad#2645).
+mod sheet_bead_tests;

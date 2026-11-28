@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Sheet metal in the main window (mitcad#210): Edit Sheet Rules and Show
-// Flat Pattern, the actions of the SHEET METAL group besides its feature
+// Flat Pattern, the actions of the SHEET PARTS tab besides its feature
 // commands (commands/SheetCommands.cpp, which registers them in their
 // sections), Export Flat Pattern (the Make tab) and Create Drawing of Flat
 // Pattern (mitcad#2446).
@@ -115,7 +115,7 @@ void MainWindow::registerSheetActions() {
   m_registry->add(exporting);
 
   // A drawing with the sheet's Flat Pattern placed on it (mitcad#2446),
-  // beside Export Flat Pattern… on the Sheet Metal tab.
+  // beside Export Flat Pattern… on the Sheet Parts tab.
   CommandDef flatDrawing =
       action("sheet.flat_pattern_drawing", tr("Create Drawing of Flat Pattern…"), "drawing", [this] {
         QJsonObject sheet = sheetBody(true);

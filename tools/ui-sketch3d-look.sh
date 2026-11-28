@@ -229,7 +229,7 @@ ui_start_display
 # Keys of the script's own for the tools without one (S is the command
 # search) and the Home view.
 mkdir -p "$UI_CONFIG/Mitcad"
-printf '[shortcuts]\nsketch.point=F5\nsketch.arc=F8\nsketch.arc_tangent=F9\nview.home=F11\n' \
+printf '[shortcuts]\nsketch.point=F5\nsketch.arc=F8\nsketch.arc_tangent=F12\nview.home=F11\n' \
   >> "$UI_CONFIG/Mitcad/Mitcad.conf"
 
 echo "=== 1. The 3D Sketch Palette, Floating and Docked"
@@ -514,7 +514,7 @@ read -r L FROM B <<< "$(last_new 's/^3D sketch Line: made \(c[0-9]*\) from \(p[0
 [ -n "$L" ] && [ -n "$B" ] || ui_fail "the line AB's ids not logged"
 ui_expect_new "3D sketch entity F3/$B at" "B is drawn where a click picks it"
 esc_tool Line
-tool "Tangent Arc" "Tangent Arc (F9)"      ui_key F9
+tool "Tangent Arc" "Tangent Arc (F12)"      ui_key F12
 ui_expect_new "Pick vertex F2.b0/V{" "Post's vertices logged where a click meets them"
 ui_sync
 START=$(grep -n "^Pick places:" "$UI_LOG" | tail -1 | cut -d: -f1)

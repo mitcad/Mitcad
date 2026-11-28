@@ -10,7 +10,7 @@ Language ([user guide](user-guide.md#language)).
 
 - **Texts.** Every user-facing text in `app/` goes through Qt's `tr()`,
   `QCoreApplication::translate()` or `QT_TRANSLATE_NOOP()`. The ribbon's
-  tabs, groups and menu subgroups are named by ids in code ("SHEET METAL",
+  tabs, groups and menu subgroups are named by ids in code ("SHEET PARTS",
   "Machine Elements"); their shown names are the context `RibbonName`
   (`displayName` in `app/framework/Ribbon.cpp`). A command's short label
   under its button (`CommandDef::shortLabel`, Preferences › Display ›
@@ -604,3 +604,4 @@ päätä", never "napsauta keskipiste".
 | block (sketch) | lohko | block instance: lohkon ilmentymä (not esiintymä, an occurrence; not kopio, a pattern instance); base point: peruspiste; Create Block: Luo lohko; Insert Block: Lisää lohko; Explode Block: Pura lohko; Edit Block: Muokkaa lohkoa; Finish Block: Lopeta lohko; Cancel Block: Peruuta lohko; Sketch Blocks: Luonnoslohkot |
 | Break, Split at Point, Blend Curve (sketch) | Pilko, Jaa pisteessä, Liitoskäyrä | Trim stays Katkaise; break (the drawing view's) stays katkaisu |
 | Extend to Meet (sketch) | Jatka kohtaamaan | Extend stays Jatka; not Liitä, which is the body Join (mitcad#2178) |
+| Sheet Parts (the tab) | Levyosat | the tab of sheet metal, board and laser-cut sheet (mitcad#2602, the Sheet Metal tab before); sheet metal itself stays ohutlevy, Convert to Sheet Metal stays Muunna ohutlevyksi |

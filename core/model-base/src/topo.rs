@@ -297,11 +297,27 @@ impl FaceName {
             // A derived part's face is named after a face of its source,
             // in the source's own ids (mitcad#375): no features here.
             Some(RoleKey::Face(_)) if self.role == "part" => {}
+            // A face a replaced component had (mitcad#2640): named in the
+            // ids it had, which may be gone.
+            Some(RoleKey::Face(_)) if self.role == REPLACED_ROLE => {}
             Some(RoleKey::Face(face)) => face.collect_features(features),
             _ => {}
         }
     }
+
+    /// A face of `feature` standing for `old`, a face of a component that
+    /// Replace Component replaced which the replacement has no match for
+    /// (mitcad#2640): `F9:replaced(F3:import(4))`. No face carries the
+    /// name, so what refers to it stays and fails until it is given other
+    /// geometry; `old` keeps the ids it had and names no feature of the
+    /// design.
+    pub fn replaced(feature: FeatureUid, old: FaceName) -> Self {
+        Self::new(feature, REPLACED_ROLE, Some(RoleKey::Face(Box::new(old))))
+    }
 }
+
+/// The role of [`FaceName::replaced`] (mitcad#2640).
+pub const REPLACED_ROLE: &str = "replaced";
 
 /// The name of an edge: the two faces that meet there.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1109,5 +1125,21 @@ mod tests {
         ] {
             assert!(text.parse::<TopoName>().is_err(), "accepted {text:?}");
         }
+    }
+
+    /// A face a replaced component had (mitcad#2640) reads back and names
+    /// only the replacement's feature: the old ids may be gone.
+    #[test]
+    fn a_replaced_face_names_only_its_new_feature() {
+        let old: FaceName = "F3:import(4)".parse().unwrap();
+        let face = FaceName::replaced(FeatureUid(9), old);
+        assert_eq!(face.to_string(), "F9:replaced(F3:import(4))");
+        round_trip::<FaceName>("F9:replaced(F3:import(4))");
+        assert_eq!(face.features(), BTreeSet::from([FeatureUid(9)]));
+        let edge = EdgeName::new(
+            FaceName::replaced(FeatureUid(9), "F3:import(1)".parse().unwrap()),
+            FaceName::replaced(FeatureUid(9), "F3:import(2)".parse().unwrap()),
+        );
+        assert_eq!(edge.features(), BTreeSet::from([FeatureUid(9)]));
     }
 }

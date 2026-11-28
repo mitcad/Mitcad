@@ -111,4 +111,23 @@ QString defaultTutorialLanguage(const QStringList& languages, const QString& int
 // Whether `language` ("" for any) is the tutorial's language or its base.
 bool tutorialInLanguage(const QString& tutorialLanguage, const QString& language);
 
+// What a tutorial's page may do, as every page is someone else's
+// (mitcad#2615, docs/tutorials.md "What a page cannot do"):
+// Whether `relative` (open_design's path) is one of the manifest's
+// "designs" (the same path once cleaned: "./designs/a.mitcad" is
+// "designs/a.mitcad").
+bool tutorialListsDesign(const QJsonObject& manifest, const QString& relative);
+// A source's name as the tutorial pane shows it: a repository's host and
+// path ("github.com/mitcad/tutorials"), a folder's own name; empty for none.
+QString tutorialSourceName(const QString& url);
+// Whether `url` is the public repository of tutorials (kPublicTutorials),
+// in any form of its address.
+bool tutorialFromPublicSource(const QString& url);
+// Whether a guide step of a tutorial from another source may not show or
+// allow the command `id`: one that sends the design or data out of MitCad,
+// changes MitCad's settings or account, or runs code (export, publish,
+// cloud, feedback, account, settings and preferences, orders, sync and
+// remote designs, scripts and macros, quitting).
+bool guideCommandOutward(const QString& id);
+
 } // namespace mitcad

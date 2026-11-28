@@ -25,6 +25,11 @@ const QRegularExpression& itemComponent() {
   return pattern;
 }
 
+const QRegularExpression& itemDocument() {
+  static const QRegularExpression pattern(QStringLiteral(R"(^import: \[[0-9.]+\] item document: (.+)$)"));
+  return pattern;
+}
+
 const QRegularExpression& itemDone() {
   static const QRegularExpression pattern(
       QStringLiteral(R"(^import: \[[0-9.]+\] (.+): (parametric|partial|fallback|skipped) in [0-9.]+ s$)"));
@@ -35,18 +40,25 @@ const QRegularExpression& itemDone() {
 
 ImportItemProgress::Line ImportItemProgress::read(const QString& line) {
   if (line.startsWith(QStringLiteral("import-items "))) {
-    m_items = line.mid(13).toInt();
+    // A corrected count is taken where it is larger (mitcad#2635): the
+    // total never shrinks under the items already done.
+    m_items = std::max(m_items, line.mid(13).toInt());
     return Line::Items;
   }
   if (const QRegularExpressionMatch match = itemComponent().match(line); match.hasMatch()) {
     m_component = match.captured(1);
     return Line::Component;
   }
+  if (const QRegularExpressionMatch match = itemDocument().match(line); match.hasMatch()) {
+    m_design = match.captured(1);
+    return Line::Document;
+  }
   if (const QRegularExpressionMatch match = itemStart().match(line); match.hasMatch()) {
     m_position = match.captured(1).toInt();
     m_current = match.captured(2);
-    // (Its component's line follows, when it has one.)
+    // (Its document's and its component's lines follow, when it has them.)
     m_component.clear();
+    m_design.clear();
     return Line::Start;
   }
   if (const QRegularExpressionMatch match = itemDone().match(line); match.hasMatch()) {
@@ -61,6 +73,7 @@ void ImportItemProgress::startPart() {
   m_position = 0;
   m_current.clear();
   m_component.clear();
+  m_design.clear();
 }
 
 int ImportItemProgress::shown() const { return std::clamp(m_done + 1, 1, std::max(m_items, 1)); }
@@ -71,6 +84,18 @@ QString ImportItemProgress::text() const {
   }
   if (m_current.isEmpty()) {
     return Text::tr("Timeline item %1 of %2").arg(shown()).arg(m_items);
+  }
+  // An item of a document the design refers to names that design
+  // (mitcad#2635), so the count going on past the design's own items is
+  // clear.
+  if (!m_design.isEmpty()) {
+    if (m_component.isEmpty()) {
+      return Text::tr("Timeline item %1 of %2: %3, design %4").arg(shown()).arg(m_items).arg(m_current, m_design);
+    }
+    return Text::tr("Timeline item %1 of %2: %3, component %4, design %5")
+        .arg(shown())
+        .arg(m_items)
+        .arg(m_current, m_component, m_design);
   }
   if (m_component.isEmpty()) {
     return Text::tr("Timeline item %1 of %2: %3").arg(shown()).arg(m_items).arg(m_current);

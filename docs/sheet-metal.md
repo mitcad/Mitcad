@@ -51,7 +51,9 @@ initial surface family is planar panels and constant-radius cylindrical bends.
 Since mitcad#2435 a cylindrical or conical face converts into a curved panel
 of its own ([notes](#implementation-notes-mitcad2435)). Doubly curved,
 variable-thickness and stretched material, embossing and
-arbitrary B-rep-to-sheet recognition are outside this contract. Unsupported
+arbitrary B-rep-to-sheet recognition are outside this contract; beads
+(mitcad#2645) are kept as forms on a flat blank, not developed
+([notes](#bead-mitcad2645)). Unsupported
 surfaces must produce a specific error, never an approximate flat pattern
 reported as exact. Since mitcad#2442 the user may ask for an approximate
 development by triangulation of faces that do not lie flat exactly (duct
@@ -764,7 +766,7 @@ Decisions made while implementing the production Cut and the reliefs:
 
 Decisions made while implementing the command UI and the DXF export:
 
-- **Commands on the model API.** The Sheet Metal tab (a group of the Solid tab
+- **Commands on the model API.** The Sheet Parts tab (Sheet Metal until mitcad#2602; a group of the Solid tab
   until mitcad#1975)
   (`app/commands/SheetCommands.cpp`, [app/COMMANDS.md](../app/COMMANDS.md#sheet-metal))
   has Sheet Rules, Edit Sheet Rules, Face, Flange, Bend, Fold, Corner Relief,
@@ -1291,7 +1293,7 @@ sheets unfold, refold and have a Flat Pattern:
   sqrt 2 + 1.8 pi (160 - 8 sqrt 2)`), picked rips, the rip refusals, and
   an inclined tray (the base rising 6 over 60, vertical walls, a level
   rim) with its flat pattern. The panel is Convert to Sheet Metal in the
-  SHEET METAL group (`app/COMMANDS.md`); UI test
+  Sheet Parts tab (`app/COMMANDS.md`); UI test
   `tools/ui-sheet-convert-test.sh`.
 - **Perforate** (`sheet/folded/perforate.rs`). The holes are real: cut
   through the material as a developed cut with every bend open, so the
@@ -2409,9 +2411,10 @@ ducts, hoods and hoppers (`sheet_lofted_flange`,
   ones are `facet_lines`; the DXF has them on `BEND_UP`/`BEND_DOWN` and
   `FACET_LINE`, a drawing's flat view draws them as bend lines and thin
   lines.
-- **Not yet** (follow-ups): Sheet Cut and the other sheet features on its
-  sheet (refused in words), cuts that reach the sheet's edge, bends where
-  folds meet in a point, import from other files.
+- **Not yet** (follow-ups): sheet features other than Sheet Cut, Flange
+  and Hem on its sheet (refused in words; those three and notches:
+  mitcad#2575 below), import from other files. (Bends where folds meet in
+  a point open a corner relief, mitcad#2576, below.)
 - **Tests.** `lofted_tests.rs` (chains; a rectangle to an offset rectangle
   as four exact trapezoids; concentric circles laid flat into an annular
   sector, every station on its circles about the apex; eccentric circles'
@@ -2434,12 +2437,15 @@ ducts, hoods and hoppers (`sheet_lofted_flange`,
   circle stays a circle), elsewhere as a spline through 65 laid points with
   their tangents. Every front edge moved the thickness along the material
   direction must lie on a back edge of the walls (0.01 mm, the imports'
-  tolerance): the walls run through the sheet at right angles to it. The
+  tolerance; a back edge's ends taken on twice the thickness along it,
+  since the transition's walls along the profiles are set off at the back
+  by the folds' mitres, mitcad#2575): the walls run through the sheet at
+  right angles to it. The
   front edges join into closed loops, each taken out of the chart by a
   sheet trim (the chart's curves keep their identities); the body stays
   the feature's result. Refused in words, the body then without its sheet
-  meaning: material added, slanted walls or a pocket, a cut reaching the
-  sheet's edge (not yet). The inverse of the chart's map
+  meaning: material added, slanted walls or a pocket (a cut reaching the
+  sheet's edge is a notch, mitcad#2575 below). The inverse of the chart's map
   (`lofted::located`, `chart_coordinates`) also serves `flat_point` on the
   lofted body.
 - **Bends** (`bends`, press brake). At each fold between facets a cylinder
@@ -2458,10 +2464,9 @@ ducts, hoods and hoppers (`sheet_lofted_flange`,
   tangent lines. Where two folds meet in a point of a profile (a sharp
   corner's fan, the tip of a triangle against an arc, the press brake's
   triangulated transitions) bends of one radius would run into each other:
-  no cylinder pair closes there without stretching or a relief, so it is
-  refused in words (fold sharp, or join profiles whose facets all have four
-  sides: two rectangles, two circles, two rounded rectangles). A facet too
-  narrow for its two setbacks is refused too. Beside the seam two arcs'
+  no cylinder pair closes there without stretching, so a corner relief
+  opens there (mitcad#2576, below). A facet too narrow for its two
+  setbacks is refused in words. Beside the seam two arcs'
   region is cut at one angle on both arcs, so no cone's fan of facets meets
   in the seam's cut point.
 - **Approximate development** (`development: triangulated`, die formed).
@@ -2471,9 +2476,19 @@ ducts, hoods and hoppers (`sheet_lofted_flange`,
   between every two places where either profile has a corner or another
   curve begins, so each band is smooth (a crease along the line from a
   corner). The front's bands are B-spline patches (exact lines across,
-  cubic through 129 exact stations along), sewn and made solid the
-  thickness behind them (`Kernel::thicken`, the side found by a point
-  inside). The bands are the faces of mitcad#2442's strip: their grids (the
+  cubic through 129 exact stations along, the inner knots twice so they
+  are smooth by their knots too). The body is made by the transition
+  itself (`ruled_body`), not by the kernel's offset, which cannot offset
+  faces along a crease that fades out to a smooth join, as each crease
+  from a corner of one profile to a smooth curve of the other does: each
+  band's back is its front moved the thickness along its normals; at a
+  crease both backs are stretched (where they part) or cut back (where
+  they cross) to the line where they meet, found in the plane square to
+  the crease at each place along it, so the corners are sharp on the
+  back as an offset with sharp joins makes them; the walls run from the
+  front's sides to the back's; the backs are bicubic patches through
+  129 by 17 stations with their derivatives. The faces are sewn into one
+  solid. The bands are the faces of mitcad#2442's strip: their grids (the
   triangles shared by their lengths, 16 steps across) are laid flat at K t
   behind the front, and the feature says how far the pattern's lengths
   along the edges and across differ from the surface's. The sheet is the
@@ -2483,17 +2498,234 @@ ducts, hoods and hoppers (`sheet_lofted_flange`,
   made exactly, with a remark.
 - **Tests.** `lofted_tests.rs` (an L's bend: the facets less their
   setbacks and the arc at the middle; a rectangle's corner bends, their
-  depth with the material inwards; folds meeting in a point refused; two
+  depth with the material inwards; two
   arcs cut at one angle at the seam; a point of the body located in the
   chart and back, a circle staying a circle; the ruled transition between
   a square and a circle on angled planes, its bands joined and on the
-  profiles, laid flat with the stated difference measured) and
+  profiles, laid flat with the stated difference measured, its patches
+  smooth by their knots, and made solid both ways: every face's edge an
+  edge of another, the backs the bands' offsets, two backs meeting at each
+  crease) and
   `cli.sheet_lofted_flange_cuts_bends` (a hole of diameter 10 through a
   rectangle-to-circle's facet: the blank exactly its area less; the L and
   the rectangles with bends of radius 2 against the facets less their
   setbacks and the bends' arcs, volumes t times the blank at K 0.5; the
-  rectangle to the circle with bends refused; a square to a circle on
-  angled planes die formed refused, then laid flat approximately).
+  rectangle to the circle with bends and corner reliefs, below; a square
+  to a circle on angled planes die formed refused, then laid flat
+  approximately).
+
+#### Corner reliefs where bends meet in a point (mitcad#2576)
+
+The owner's choice for press brake bends whose folds meet in a point of a
+profile: the bends stop short of the point and a relief cut opens there,
+in the flat and in 3D (`sheet/folded/lofted_relief.rs`, called by
+`lofted_geometry::bent`). A stretched blend at the point (a non-developable
+patch laid flat by triangulation) is not built; it may come later as a
+second choice.
+
+- **Tips.** With `bends`, every point of a profile that is a whole side of
+  a facet with a bend beside it: a rectangle's corner whose facets fan to
+  an arc, a side's triangle whose tip lies on a circle, the triangles of a
+  triangulated transition, the triangles that fill a seam's gap where they
+  meet a circle.
+- **The cut.** Every facet meeting a tip is cut straight across between
+  the points the relief's size from the tip along its two edges there:
+  laid flat, the relief's edge is a polygon inscribed in the circle of that
+  radius about the tip, the bends' ends between its sides. Every bend
+  through the tip ends on the plane through the points where the cuts of
+  the facets beside it meet its two tangent lines, the plane as square to
+  the bend's axis as a plane through both points can be (its section of
+  the cylinder is a `Section` like the profiles' ends). The walls of the
+  cut are square to the sheet (the front's edge moved along the normals),
+  as the profiles' walls are, so the blank's cut folds into the body's.
+- **How.** Each facet beside a bend or a tip is cut as a convex polygon
+  (`Outline`, its edges marked as the first profile's side, the last
+  ruling, the second profile's side or the first ruling): by the planes of
+  the bends' setbacks (the tangent lines), then by the reliefs' cuts (on
+  the side of the profile the tip lies on). Its corners along both sides,
+  from the first ruling to the last, are made strips again: one strip of
+  two points or segments, or triangles across the shorter diagonals (all
+  in the facet's plane, so they meet flat). Each bend's ends are checked to
+  be the corners where the facets beside it end (and set to them exactly).
+- **Size.** The feature's `relief`, or the rules' `corner_relief.width`.
+  Every bend through a tip must reach the cut on both facets beside it: the
+  end of each tangent line towards the tip (where it meets the other
+  tangent line or the profile's side) must be cut away, so the least size
+  is the size whose cut passes through the farthest such end; a smaller
+  relief is refused in words with that size plus 0.01 mm, rounded up to
+  0.1 mm. A size not shorter than a facet's edge at the tip, or a cut that
+  reaches past a bend or the facet's other side, is refused as too large.
+- **Blank and body.** Facets lie flat exactly, each moved whole to the
+  neutral surface (the joins beside bends are tangent); a bend lies flat
+  at `r + K t` between its ends. The volume is still the thickness times
+  the middle surface's area.
+- **Tests.** `lofted_tests.rs`
+  (`bends_meeting_in_a_point_open_a_corner_relief`: a rectangle 120 x 80
+  to a circle of radius 30 70 up, 4 facets a corner, opened at its
+  shortest line with a gap of 2, bends of radius 2 at t 2 and K 0.5: the
+  rules' 2 mm refused with "at least 6.4 mm", 30 mm refused as too large;
+  8 mm: 20 bends, no material within half the relief of the rectangle's
+  corners and the circle's points, the blank against the facets' areas
+  and the bends' lines integrated over their angles, and against 21616.688
+  worked out apart from the model) and `cli.sheet_lofted_flange_cuts_bends`
+  (the same transition as a feature: the rules' relief refused, then with
+  `relief: 8` one valid sheet, its blank 21616.688 and its volume t times
+  it, one outline loop, 20 bends of radius 2, its DXF).
+
+#### Sheet Cut, notches, Flange and Hem (mitcad#2575)
+
+- **Notches** (`lofted_cut.rs`). The walls' front edges laid into the chart
+  are joined end to end. Edges whose points all lie on the chart's boundary
+  (within 0.1 µm) are earlier cuts' walls and are left out; faces of the
+  sheet's own domains (the lofted flange, its flanges and hems) are not
+  walls. Closed loops are holes and cut-outs as before. An open chain must
+  end on the boundary at both ends (a region's loop, found by the nearest
+  point of its edges): a point a hundredth of a millimetre beside the
+  chain's middle on each side, half the thickness deep, is classified in
+  the result, and the chain is turned so the side without material is on
+  its left. Since the chart's loops keep their material on the left too,
+  the material taken away is the chain, then the loop on from its end to
+  the next chain's start ahead on that loop (no other chain's end before
+  it), and so on until the first chain closes the round; the loop's
+  pieces are cut out of its edges at the places' parameters. All tools are
+  taken out in one sheet trim (the outline keeps its curves' identities
+  where they stay). A side that cannot be told, chains that cross, a chain
+  whose end lies off the boundary, and a result of more regions than before
+  (the sheet parted) are refused in words.
+- **Sheet Cut** (`lofted_cut::sheet_cut`, the straight cut in
+  `cut::straight_cut_on`). Developed: each sketch's plane must be the
+  front or the back plane of a facet (the rulings' triangles at the front,
+  within 1 µm and parallel to 1e-9); its profiles are extruded at right
+  angles to the facet from a little before the surface to a little past
+  the other one and cut from the body one sketch after another; straight:
+  the overlay's tool. The sheet is then [`rederived`] as for an ordinary
+  feature, with no overlay fallback: what it does not take is refused.
+- **Flange and Hem** (`lofted_flange.rs`, called by `bends::flange`). The
+  edge (a straight boundary piece of the lofted chart) must lie in the
+  chart outline of one pair of rulings that is flat: its four corners at
+  the front on the plane of one of its triangles and mapped by that
+  triangle's frame onto their chart points (0.1 µm). The sheet is copied
+  with the lofted chart's embedding replaced by that frame as a plane
+  (front, material side), and the ordinary flange runs on the copy: port
+  frame, setback trim, reliefs, bends, walls, hem steps. Then:
+  - the chart before and after the flange's trims: the material it lost
+    (a sheet trim's difference) must lie in the facet's outline (else
+    refused: a setback that reaches past the folds, typical for a
+    triangle's base with the default bend-line position); it is extruded
+    at right angles to the facet and cut from the body;
+  - the new domains and their ports, joined to the lofted chart at one
+    edge piece: the sheet construction builds them on a strip of the facet
+    along that edge (the band the thickness wide clipped to the facet's
+    outline, the edge keeping its piece so the port's span holds); what
+    the body does not hold of them (a boolean cut by the body: the bends
+    and walls, and the wedge between the bend's start and the transition's
+    wall along the profile, which the mitres at the folds set off at the
+    back so it is not square to the facet) is one solid, overlapping the
+    body by no more than the strip's slab (else they run into the
+    transition: refused), and is joined to the body, which must gain
+    exactly its volume;
+  - the sheet keeps the trimmed chart with its lofted embedding again,
+    plus the new bend and wall charts and ports.
+  The Flat Pattern (`lofted::developed`, the lofted flange's panel the
+  fixed one) lays the lofted chart in the tangent frame as before and, for
+  each port on the lofted chart, the domains reached from it: a copy of
+  the sheet with only them and the lofted chart (in the plane of the
+  edge's facet) is unfolded with every bend open (`reconfigure`), and each
+  developed chart is carried into the tangent frame by its map into the
+  lofted chart's coordinates.
+- **Tests.** `lofted_cut_tests.rs` (a notch's chain from edge to edge, a
+  hole's closing; places on a square's boundary and the boundary between
+  them both ways; an earlier cut on the boundary), `lofted_flange_tests.rs`
+  (the strip clipped to a triangle facet, keeping its edge) and
+  `cli.sheet_lofted_flange_sheet_features` (the rectangle to the circle:
+  a developed Sheet Cut on the short side's facet, a notch at the long
+  side's edge and a straight Sheet Cut, the blank exactly the facets less
+  them; a Flange at a short side's edge, the blank plus its wall and its
+  bend's arc at K 0; an open Hem at the other; a developed cut on no facet
+  refused).
+
+### Bead (mitcad#2645)
+
+A bead is a stiffening rib pressed into one flat panel along a centre line
+of sketch lines and arcs (`sheet_bead`, commands.md "Bead"). It is a form,
+not a development: the blank stays flat and the Flat Pattern draws the
+bead on it, while the folded body has the bead pressed in with the sheet's
+thickness kept.
+
+- **What the sheet keeps.** The sketch lies on the panel's front or back
+  surface (the bead's face, `side`); its lines and arcs are mapped into the
+  panel's chart and joined end to end into chains (several chains are
+  several beads of one feature). The state keeps the bead as an overlay of
+  its own kind, `SheetOverlayKind::Bead` (`sheet/bead.rs`: the panel, the
+  face, the chains, the resolved section), which, unlike the straight cut
+  and change overlays, keeps the developed form: Unfold, Refold, Fold,
+  Bend, Perforate and the Flat Pattern do not refuse it. Every rebuild
+  (`folded/cut.rs` `with_overlays`) presses it again where the panel lies
+  then (`folded/bead.rs` `remade`), so it moves with Unfold and Refold and
+  follows a flange elsewhere on the sheet. Mirrors and patterns of the body
+  carry it in the chart; a joined copy renames its panel with the others.
+- **The section** (`sheet/bead.rs` `BeadSection::section`). Across, in
+  the plane of `s` (across) and `z` (the press direction from the face),
+  the face's curve is the profile's polyline (round: one arc through the
+  lips and the depth) with every corner rounded so that the bend's inside
+  radius is `radius` (default the rules' bend radius): a corner whose
+  inside is on the face has `radius` on it, one whose outside is on the
+  face `radius + thickness`; a U's bottom is a half circle of the width on
+  the face. The other surface is that curve offset by the thickness
+  towards the material, piece by piece (lines parallel, arcs concentric),
+  so the two are a thickness apart everywhere and leave their planes at
+  the same half width. A run-out's ramp along the centre line is built the
+  same way from the polyline face, end, crown.
+- **The solid** (`folded/bead.rs` `tools`). Two tools: the region between
+  the face's plane and the face's curve, and the region between the other
+  plane and the other curve, each reaching half a thickness past its plane
+  away from the press direction. They are swept along each line (a prism)
+  and turned about each arc's centre; at a corner between two lines the
+  half section turns about the corner on its outer side by the angle the
+  centre line turns (the region where the corner itself is nearest), and
+  at a round end it turns half a turn; a run-out's prism is intersected
+  with the region under its ramp swept across. The pieces of each tool are
+  united. Standing out, the face's tool is joined and the other's cut;
+  pressed in, the other's is joined and the face's cut: in both, the
+  material left between the two curves is the band of constant thickness,
+  and where two legs overlap (the inner side of a corner) the deeper of
+  their surfaces wins on both sides. Only existing extrusions,
+  revolutions and booleans are used; the input shapes are not modified.
+- **Checks** before any geometry, in words: the sketch on a flat face, the
+  chains (no branch, corners only between lines, no doubling back), arcs
+  wider than half the bead, run-outs held by the lines at the ends, the
+  outline closing at every corner, and the bead clear of the panel's
+  boundary (its outline, holes and the bends' ports) and of the panel's
+  other beads by its half width (at a run-out end by the ramp's foot).
+  The volume a bead adds less what it removes is kept; a rebuild that
+  leaves the bead no longer clear inside its face, or changes another
+  volume, is refused by the feature that rebuilds ("a later change
+  reaches a bead of the sheet").
+- **The Flat Pattern** (`flat.rs` `FlatBead`, `flat_dxf.rs` `BEAD`): per
+  bead its outline on the face (the offsets of the centre lines by the
+  half width, the inner sides cut back at corners, arcs about the outer
+  sides of corners and the round ends, a line across at a run-out's foot)
+  and its centre lines, in flat coordinates; `up` when it stands out of
+  the viewed side. They are drawn on the DXF layer `BEAD`, not cut.
+- **Not supported yet:** a bead across a bend or off a flat panel (a
+  curved or lofted panel), a bead running out over the panel's edge, a
+  corner between an arc and another piece (join it tangent), and a later
+  cut or hole through a bead (refused, not cut through the form). A Fold
+  whose line crosses a bead's panel so that the bead lands on the moving
+  side is refused at the rebuild, as the bead is no longer inside its
+  panel.
+- **Tests.** `core.model` `sheet/bead_tests.rs` (every profile both ways:
+  the surfaces a thickness apart within 1e-9 mm, smooth, the band's area
+  the face's length times the thickness; refusals; chains; the outline),
+  `core.model.sheet` `sheet_bead_tests.rs` (mock kernel: the state, save
+  and reopen, edit, Undo, the Flat Pattern's beads and the DXF layer
+  `BEAD`, refusals in words), `cli.sheet_bead` (OCCT: a straight round
+  bead standing out, a quarter-arc trapezoid bead pressed in, an L-shaped
+  U bead on a plate; their volumes, the crown and the surface under it
+  measured a thickness apart, a thickness edit, the Flat Pattern's beads,
+  a flange that rebuilds the sheet, a sheet cut into a bead refused) and
+  the UI test `tools/ui-scripts/sheet-bead.mitcad-ui` (Linux, Windows,
+  macOS).
 
 ## Kernel seam
 

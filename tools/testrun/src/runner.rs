@@ -1470,6 +1470,11 @@ impl<'o> Runner<'o> {
         if let Some(others) = t.again {
             note = format!("rerun alone after failing beside {others} other UI entries");
         }
+        let quotes = if kind.ok() {
+            Vec::new()
+        } else {
+            ctest::failure_lines(&output, ctest::QUOTED_FAILURE_LINES)
+        };
         t.outcome = Some(Outcome {
             start: active.started_at,
             end,
@@ -1479,6 +1484,7 @@ impl<'o> Runner<'o> {
             limit: active.limit,
             log: Some(active.log.clone()),
             note,
+            quotes,
             ..t.base_outcome(kind, end)
         });
         self.finished += 1;
@@ -1542,6 +1548,9 @@ impl<'o> Runner<'o> {
         }
         if !log.is_empty() {
             println!("       log: {log}");
+        }
+        for quote in &o.quotes {
+            println!("       | {quote}");
         }
         let kind = o.kind.label();
         let line = format!("{kind}\t{}\t{lane}\t{log}\t{}", o.name, o.note);
@@ -1629,6 +1638,8 @@ impl<'o> Runner<'o> {
         let _ = fs::write(self.out.join("report.txt"), &text);
         let table = report::results_tsv(&outcomes);
         let _ = fs::write(self.out.join("results.tsv"), table);
+        let failures = report::failures_tsv(&outcomes);
+        let _ = fs::write(self.out.join("failures.tsv"), failures);
         let ok = outcomes.iter().all(|o| o.kind.ok());
         self.append_status(&format!("finished\t{}", report::counts(&outcomes)));
         if ok { 0 } else { 1 }

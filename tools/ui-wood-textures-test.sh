@@ -9,7 +9,8 @@
 # colour, no texture), made by mitcad-cli:
 #   - In the light and the dark color scheme the shaded view draws each
 #     cabinet body with its texture (the view logs "View textured body
-#     <uid>: 1 textured looks"), not the reference panel; where the view
+#     <uid>: 1 textured looks, grain offset <u> <v>"), each body with its
+#     own grain offset (mitcad#2605), not the reference panel; where the view
 #     shows the cabinet its neighbouring pixels differ by the grain clearly
 #     more than on the plain panel of the same colour.
 #   - The rendered view sends the bodies as Plywood - Birch with its images
@@ -176,13 +177,20 @@ expect_done() {
 
 export QT_QPA_PLATFORMTHEME=gtk3
 unset GTK_THEME
+# Each cabinet body's own part of the plywood's images (mitcad#2605): the
+# model's grain_offset of its uid (core/model-base/src/appearance/grain.rs),
+# mm along and across the grain; neighbouring panels lie hundreds of mm
+# apart within the 1000 mm repeat, so they do not read as one board.
+grain_offsets=([1]="2697.2 3432.1" [2]="9396.5 5476.1" [3]="8159.9 5121.6" [4]="1406.8 9617.5"
+  [5]="708.1 716.3" [6]="9830.5 897.5")
 ui_start_display
 for scheme in light dark; do
   echo "--- The shaded view, $scheme"
   MITCAD_TEST_COLOR_SCHEME=$scheme ui_start_app --open "$FILE" --no-native-dialogs
   ui_expect_log "Opened $FILE" "$scheme: the cabinet opened"
   for body in 1 2 3 4 5 6; do
-    ui_expect_log "View textured body F$body.b0: 1 textured looks" "$scheme: F$body.b0 is drawn with its texture"
+    ui_expect_log "View textured body F$body.b0: 1 textured looks, grain offset ${grain_offsets[$body]}" \
+      "$scheme: F$body.b0 is drawn with its texture, its own part of the grain"
   done
   grep -q "View textured body F7.b0" "$UI_LOG" && ui_fail "$scheme: the plain panel is drawn with a texture"
   echo "ok   $scheme: the plain panel is drawn in its colour"

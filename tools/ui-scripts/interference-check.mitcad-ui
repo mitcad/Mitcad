@@ -1,0 +1,130 @@
+# SPDX-License-Identifier: MIT
+# Interference checks kept in the Analysis folder (mitcad#2664), the first
+# shared input script of tools/ui-interference-check-test.sh (Linux),
+# tools/ui-windows-interference-check-test.ps1 (Windows) and
+# tools/ui-macos-interference-check-test.sh (macOS), on
+# interference-check.json saved as interference-check.mitcad in the work
+# folder: Body1 and Body2 share 500 mm3 while the parameter lift is 0,
+# Body3 is apart, and Body4 (sharing 500 mm3 with Body3) is suppressed.
+# interference-check-reopen.mitcad-ui goes on with the saved design. ASCII
+# only: the Windows runner copies it as ASCII.
+#   1. Inspect > Interference of Body1 and Body2, picked in the browser:
+#      500 mm3; OK keeps it as Interference1 under Analysis, one undo step,
+#      with no light bulb.
+#   2. Interference of every body (nothing picked): OK keeps Interference2.
+#   3. Body2 raised clear (lift 15): Interference1 opened again from the
+#      browser says there is none; closing it changes nothing.
+#   4. Body2 down again and Body4 brought in: Interference2 opened again
+#      checks Body4 too, Interference1 only its two bodies; its context
+#      menu runs it (no Show or Hide). The bodies' volumes stay as they
+#      were.
+#   5. Saved: the runner finds both checks in the file.
+expect-ever 'View area' 600
+wait-idle 600
+command view.fit
+wait-idle
+expect-model-bodies 3 3000
+
+# --- 1. Body1 and Body2, kept as Interference1.
+mark
+command inspect.interference
+wait-log '^Command Interference started' 20
+wait-log '^Inspect Interference: Body1 x Body2: 500$' 60
+wait-idle 60
+expect-ever '^Browser Root/Bodies/Body1 at ' 30
+mark
+click-logged '^Browser Root/Bodies/Body1 at '
+wait-log '^Interference Bodies: 1 body' 20
+wait-log '^Inspect Interference: none$' 60
+wait-idle 60
+mark
+click-logged '^Browser Root/Bodies/Body2 at '
+wait-log '^Interference Bodies: 2 bodies' 20
+wait-log '^Inspect Interference: Body1 x Body2: 500$' 60
+wait-idle 60
+screenshot '${MITCAD_TEST_WORK}/interference-check.png'
+capture-undo-depth before_ok
+mark
+button '^OK$'
+wait-log '^Kept Interference as Interference1' 30
+wait-log '^Browser Root/Analysis/Interference1 at ' 30
+wait-idle 60
+expect-undo-depth ${before_ok} 1
+expect-no-log '^Browser eye Root/Analysis/Interference1 '
+capture-model-number kept '{"query":"interference","name":"Interference1"}' pairs.0.volume
+expect-near ${kept} 500 1e-6 1e-6
+capture-model-number scope '{"query":"interference","name":"Interference1"}' bodies
+expect-near ${scope} 2 0 1e-9
+
+# --- 2. Every body, kept as Interference2.
+mark
+command inspect.interference
+wait-log '^Command Interference started' 20
+wait-log '^Inspect Interference: Body1 x Body2: 500$' 60
+wait-idle 60
+mark
+button '^OK$'
+wait-log '^Kept Interference as Interference2' 30
+wait-log '^Browser Root/Analysis/Interference2 at ' 30
+wait-idle 60
+capture-model-number all '{"query":"interference","name":"Interference2"}' bodies
+expect-near ${all} 3 0 1e-9
+
+# --- 3. Body2 raised clear: Interference1 opened again finds none.
+mark
+model-command '{"cmd":"set_parameter","name":"lift","value":15}'
+wait-idle 60
+capture-undo-depth before_run
+mark
+dblclick-logged '^Browser Root/Analysis/Interference1 at '
+wait-log '^Editing analysis Interference1 with Interference' 20
+wait-log '^Inspect Interference: none$' 60
+wait-idle 60
+screenshot '${MITCAD_TEST_WORK}/interference-check-clear.png'
+key escape
+wait-log '^Command Interference cancelled' 20
+wait-idle 60
+expect-undo-depth ${before_run} 0
+
+# --- 4. Body2 down again, Body4 brought in: the check of every body takes
+# it in, the check of two bodies does not.
+mark
+model-command '{"cmd":"set_parameter","name":"lift","value":0}'
+wait-idle 60
+mark
+model-command '{"cmd":"suppress_feature","uid":"F8","suppressed":false}'
+wait-idle 60
+expect-model-bodies 4 4000
+capture-undo-depth before_runs
+# In a short window (the Windows VM's) Interference2 lies below the
+# Browser's visible rows: the Browser scrolled down brings it into sight
+# (no mark: where it was in sight already, its place since Body4 came back).
+wheel-logged '^Browser Root/Origin at ' -10
+wait-log '^Browser Root/Analysis/Interference2 at ' 20
+wait-idle 60
+mark
+dblclick-logged '^Browser Root/Analysis/Interference2 at '
+wait-log '^Editing analysis Interference2 with Interference' 20
+wait-log '^Inspect Interference: Body1 x Body2: 500; Body3 x Body[0-9]+: 500$' 60
+wait-idle 60
+key escape
+wait-log '^Command Interference cancelled' 20
+wait-idle 60
+mark
+context-menu-logged '^Browser Root/Analysis/Interference1 at ' 'Run Interference'
+wait-log '^Context menu: Run Interference [|] Rename [|] Delete' 20
+wait-log '^Editing analysis Interference1 with Interference' 20
+wait-log '^Inspect Interference: Body1 x Body2: 500$' 60
+wait-idle 60
+key escape
+wait-log '^Command Interference cancelled' 20
+wait-idle 60
+expect-undo-depth ${before_runs} 0
+expect-model-bodies 4 4000
+
+# --- 5. Saved: the runner finds both checks in the file.
+mark
+command file.save
+wait-log 'Saved .*interference-check[.]mitcad' 30
+wait-idle
+expect-never 'Recompute failed|OCCT view event failed|TestDriver: FAIL'

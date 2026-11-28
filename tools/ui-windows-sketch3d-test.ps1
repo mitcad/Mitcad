@@ -51,7 +51,7 @@
 #      before the pipes run round them: a click on the spline that leaves
 #      the face is refused, saying it does not lie in the sketch plane; a
 #      click on the line AB in the plane is taken; Esc.
-#   9. Pipe along 3D sketches (mitcad#1527, F9 the test's key): one pick of
+#   9. Pipe along 3D sketches (mitcad#1527, F12 the test's key): one pick of
 #      the route's arc takes the whole route with Chain Selection (not the
 #      triangle, a closed chain of its own), listed from A, Reverse
 #      offered, OK; Pipe1 edited shows its route as picked; Esc.
@@ -83,7 +83,7 @@ param(
 
 # Keys of the test's own for the tools without one (Pipe, Rib, Helix: the
 # command search's popup closes at once in session 0).
-Ui-Init $App $Out $QtBin @{ 'sketch.arc_center' = 'F8'; 'sketch.fillet' = 'F7'; 'solid.pipe' = 'F9';
+Ui-Init $App $Out $QtBin @{ 'sketch.arc_center' = 'F8'; 'sketch.fillet' = 'F7'; 'solid.pipe' = 'F12';
                             'sketch.ellipse' = 'F3'; 'sketch.polygon' = 'F5'; 'sketch.text' = 'F11';
                             'solid.rib' = 'Shift+F8'; 'solid.helix' = 'Shift+F7' } -StepPause 0
 if (-not $Cli) {
@@ -492,7 +492,7 @@ Ui-ExpectNew 'Command Rib cancelled' 'nothing added'
 
 Write-Host '--- A Pipe along 3DSketch1''s route by one pick (mitcad#1527)'
 Ui-Mark
-Ui-Step 'Pipe (F9)'                      { Ui-Key 'F9' }
+Ui-Step 'Pipe (F12)'                      { Ui-Key 'F12' }
 Ui-ExpectNew 'Panel Pipe input path at' 'the Pipe panel'
 Ui-ExpectNew 'Sketch entity F2/c6 at' 'the route''s curves are where a click picks them'
 Ui-SyncOr 500
@@ -517,7 +517,7 @@ Ui-ExpectNew 'Command Pipe cancelled' 'nothing changed'
 
 Write-Host '--- A Pipe round the closed triangle by one pick (mitcad#1550)'
 Ui-Mark
-Ui-Step 'Pipe (F9)'                      { Ui-Key 'F9' }
+Ui-Step 'Pipe (F12)'                      { Ui-Key 'F12' }
 Ui-ExpectNew 'Panel Pipe input path at' 'the Pipe panel'
 Ui-ExpectNew 'Sketch entity F2/c13 at' 'the triangle''s lines are where a click picks them'
 Ui-SyncOr 500

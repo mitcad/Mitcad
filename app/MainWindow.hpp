@@ -69,6 +69,7 @@ class QResizeEvent;
 class QStackedWidget;
 class QTimer;
 class QToolButton;
+class QUrl;
 
 namespace mitcad {
 class CommandRegistry;
@@ -571,7 +572,7 @@ public:
   // it at once (a cut sheet: of that body).
   void createDrawingOf(const QString& component, bool fromSelection, const QString& flatBody = QString());
   // Create Drawing of Flat Pattern (mitcad#2446; the Flat Pattern row's
-  // menu, the Sheet Metal tab): a new drawing of the root, asked for as
+  // menu, the Sheet Parts tab): a new drawing of the root, asked for as
   // Create Drawing asks, with `body`'s Flat Pattern placed at Fit the Sheet.
   void createFlatPatternDrawing(const QString& body) override;
   // The Flat Patterns the open drawing's Flat Pattern View can show
@@ -1996,7 +1997,7 @@ private:
   // is missing), docked at the left in both chrome styles; `folder` is the
   // package's, whose pages alone get the bridge window.mitcad, `page` the
   // one shown first.
-  void openTutorialPane(const QString& folder, const QString& page, const QString& title);
+  //
   // Help › Tutorials… (mitcad#2346): the Start page's tutorials
   // (tutorials/TutorialChoice.hpp), shown in its centre, the page shown;
   // the one started there (openListedTutorial) installed (or updated) into
@@ -2004,14 +2005,14 @@ private:
   // in the pane.
   void showTutorials();
   void openListedTutorial(const QString& url, const QJsonObject& tutorial);
-  // The pane opened in the window of the design the tutorial is worked in
-  // (mitcad#2168): this one; over the Start page the empty untitled design
-  // under it (the page left), or else a new design (New Design: a new
-  // window, or this one after its unsaved-changes question; cancelled, no
-  // tutorial).
+  // The pane opened in a design of the tutorial's own (mitcad#2168,
+  // mitcad#2615), never over the user's design: the empty untitled design of
+  // this window (the Start page's, which is left for it), or else a new
+  // design (New Design: a new window, or this one after its unsaved-changes
+  // question; cancelled, no tutorial).
   void openTutorialInDesign(const QString& folder, const QString& page, const QString& title);
-  // Over the Start page the component is had first (mitcad#2311: a declined
-  // download opens no new design), then the design chosen as above.
+  // The component is had first (mitcad#2311: a declined download opens no
+  // new design), then the design chosen as above.
   bool showTutorialInDesign(const BrowserComponentInfo& component, const QString& folder, const QString& page,
                             const QString& title);
   // withBrowserComponent with the tutorials' title and download question.
@@ -2030,6 +2031,26 @@ private:
   QPointer<QWidget> m_tutorialPageWidget; // the page shown, null when none
   TutorialPage* m_tutorialPage = nullptr; // the same object, while it lives
   QString m_tutorialFolder;
+  // The tutorial's own design (mitcad#2615): the document the pane was
+  // opened over or a starting design opened into (its m_mcpDocumentId). The
+  // bridge reads no other design: another design opened in this window
+  // closes the pane (tutorialDesignInstalled, from installDocument).
+  QString m_tutorialDocumentId;
+  QString m_tutorialOpening;       // the copy of a starting design being opened
+  int m_tutorialDesignsOpened = 0; // open_design calls of this pane
+  QLabel* m_tutorialSource = nullptr; // where the tutorial comes from, under its title
+  // Whether it comes from MitCad's public repository of tutorials: another
+  // source's steps show no outward command (guideCommandOutward).
+  bool m_tutorialTrusted = false;
+  void tutorialDesignInstalled(const QString& path);
+  // open_design's copy opened in this window, replacing the tutorial's
+  // design after the unsaved-changes question (never in a new window).
+  void openTutorialDesign(const QString& target);
+  // A link to the web the user clicked in a tutorial's page (mitcad#2615):
+  // opened in the system's browser after the user's yes, which names the
+  // site.
+  void openTutorialWebLink(const QUrl& url);
+  bool m_tutorialLinkAsked = false; // a question about a link is shown
   // Where the pane is (mitcad#2367, window.mitcad.place): the left column
   // as a tutorial opens, the right column, or centred over the view (the
   // view's picks held meanwhile). Floating: the card's anchor; Docked: the
@@ -2046,6 +2067,16 @@ private:
   TutorialPlace m_tutorialPlace = TutorialPlace::Left;
   int m_tutorialMoves = 0; // the moves asked for; a finished one older than the last is not logged
   QPointer<QObject> m_tutorialDockMove; // Docked: the floating dock's move, while it runs
+  // Continue of a tutorial in progress (mitcad#2610): the window whose
+  // design the tutorial `id` is open in, or was left in while the window
+  // still shows that design (closeTutorialPane notes the tutorial and
+  // m_mcpDocumentId); null when none. continueTutorial goes on there: the
+  // window brought forward, its Start page left, the pane opened again
+  // unless it is open still.
+  MainWindow* tutorialDesignWindow(const QString& id);
+  void continueTutorial(const QString& folder, const QString& page, const QString& title);
+  QString m_tutorialLeftId;
+  QString m_tutorialLeftDesign;
   // `rerun`: the options of an .f3d import run again with the items whose
   // deviating results the user keeps (mitcad#379); empty for a new import.
   // `ask`: the import asks its choices (File > Open and Import: an .iam
@@ -2886,7 +2917,7 @@ private:
   // "Body2 (Pin:1) and Body3 (Wall:1) in Contact1".
   static QString contactText(const QJsonObject& contact);
 
-  // Sheet metal (mitcad#210, MainWindowSheet.cpp): the SHEET METAL group
+  // Sheet metal (mitcad#210, MainWindowSheet.cpp): the SHEET PARTS tab
   // with Edit Sheet Rules and Show Flat Pattern in its sections
   // (mitcad#1778), and Export Flat Pattern; the sheet-metal body the
   // selection stands for (else the only one, or the first with a Flat
@@ -3309,6 +3340,19 @@ private:
   // design on or off (the model's set_view_show, display state, in every
   // mode as the light bulbs); their check marks follow the snapshot.
   void registerViewShowCommands();
+  // Invert Selection (mitcad#2647; MainWindowInvertSelection.cpp):
+  // edit.invert_selection in the Edit menu, the view's context menu and
+  // Keyboard Shortcuts; everything shown of the selection's kinds that is
+  // not selected, in a command's active input what it takes.
+  void registerInvertSelection();
+  void invertSelection();
+  // The components the view shows a body of (their occurrences and the
+  // ones above them), the root left out.
+  Selection shownComponents() const;
+  // What the view shows of `kinds`, picked as `asPicked` says
+  // (OcctViewer::shownItems), with the shown components when `kinds` has
+  // them.
+  Selection shownForInversion(SelectFilter kinds, bool asPicked) const;
   void toggleViewShow(const QString& kind);
   void syncViewShowChecks();
   // Whether the design's origin is drawn outside Create Sketch's plane

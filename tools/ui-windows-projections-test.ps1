@@ -20,7 +20,7 @@
 #      whose preview projects the face again; Esc leaves the sketch as it was.
 #      Clean Up Stale Projections started from there, the preview
 #      highlights the curve it removes and the lines it trims, Esc takes the
-#      highlights away; again (F9) and OK keeps it, the highlights gone.
+#      highlights away; again (F12) and OK keeps it, the highlights gone.
 #   6. A design (mitcad-cli, mitcad#287): a rectangle standing on a projected
 #      line, its bottom Horizontal and its left corner on the line's left
 #      end. Coincident (a shortcut of the test's) on its right corner and
@@ -56,7 +56,7 @@ param(
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
 Ui-Init $App $Out $QtBin @{ 'sketch.create' = 'F7'; 'sketch.clean_up_projections' = 'F8'
-  'sketch.clean_up_stale_projections' = 'F9'; 'sketch.constraint.coincident' = 'Shift+F5'; 'sketch.point' = 'Shift+F6'
+  'sketch.clean_up_stale_projections' = 'F12'; 'sketch.constraint.coincident' = 'Shift+F5'; 'sketch.point' = 'Shift+F6'
   'sketch.intersect' = 'Shift+F7' } -StepPause 0
 
 Write-Host '--- A block and a sketch on its front face'
@@ -111,7 +111,7 @@ Ui-Step 'cancel (Esc)'                   { Ui-Key 'Escape' }
 
 Write-Host '--- Clean Up Stale Projections'
 Ui-Mark
-Ui-Step 'clean up stale projections (F9)' { Ui-Key 'F9' }
+Ui-Step 'clean up stale projections (F12)' { Ui-Key 'F12' }
 Ui-ExpectNew 'nothing to clean up: every linked projection matches its source' 'nothing stale'
 Ui-Step 'cancel (Esc)'                   { Ui-Key 'Escape' }
 
@@ -212,7 +212,7 @@ Ui-ExpectNew 'Preview highlights: none' 'cancel takes the highlights away'
 
 Write-Host '--- Clean Up Stale Projections kept'
 Ui-Mark
-Ui-Step 'clean up stale projections (F9)' { Ui-Key 'F9' }
+Ui-Step 'clean up stale projections (F12)' { Ui-Key 'F12' }
 Ui-ExpectNew 'Preview highlights: removed c8; trimmed c3, c7' 'the preview highlights them again'
 Ui-Step 'OK (Enter)'                     { Ui-Key 'Return' }
 Ui-ExpectNew 'Cleaned up stale projections' 'kept'

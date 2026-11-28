@@ -45,7 +45,7 @@ EOF
 
 # Keyboard Shortcuts by a key of our own, as that window saves it.
 mkdir -p "$XDG_CONFIG_HOME/Mitcad"
-printf '[shortcuts]\ntools.shortcuts=F9\n' > "$XDG_CONFIG_HOME/Mitcad/Mitcad.conf"
+printf '[shortcuts]\ntools.shortcuts=F12\n' > "$XDG_CONFIG_HOME/Mitcad/Mitcad.conf"
 
 SHOWN="Bodies shown: F2.b0, F3.b0 in O1"
 
@@ -121,7 +121,7 @@ ui_expect_new "$SHOWN" "both shown"
 
 echo "--- Hide/Show rebound to F8 in Keyboard Shortcuts"
 ui_mark
-ui_step "Keyboard Shortcuts (F9)"          ui_key F9
+ui_step "Keyboard Shortcuts (F12)"          ui_key F12
 ui_expect_new "Keyboard Shortcuts opened" "the window opened"
 ui_focus_dialog '^Keyboard Shortcuts$'
 ui_step "find Hide/Show"                   xdotool type --delay 40 "Hide/Show"

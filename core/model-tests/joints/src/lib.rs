@@ -32,3 +32,6 @@ mod explode_tests;
 mod explode_follow_2328_tests;
 // Explode views follow bodies moved into an existing component (mitcad#2572).
 mod explode_destination_2572_tests;
+// Gear Drive: planetary sets, trains, racks and bevel pairs with their
+// joints and motion links (mitcad#2608).
+mod gear_drive_tests;

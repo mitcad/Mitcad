@@ -43,6 +43,9 @@ mark
 dblclick-logged '^Timeline Sketch2 at '
 wait-log '^Editing sketch F3 \(Sketch2\)' 30
 wait-idle
+# Fit the sketch before dragging its rightmost endpoint beside the panels.
+command view.fit
+wait-idle
 mark
 button '^Curvature comb$' paletteCurvatureComb
 wait-log '^Curvature comb on' 20

@@ -75,7 +75,7 @@ param(
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
 Ui-Init $App $Out $QtBin @{ 'build.profile' = 'F3'; 'build.panel' = 'F5'; 'build.linear' = 'F7';
-                            'build.connector' = 'F8'; 'build.cut_list' = 'F9'; 'build.ends' = 'F11' } -StepPause 0
+                            'build.connector' = 'F8'; 'build.cut_list' = 'Shift+F12'; 'build.ends' = 'F11' } -StepPause 0
 
 $git = Get-Command git -ErrorAction SilentlyContinue
 if (-not $git) {
@@ -936,7 +936,7 @@ Ui-Step 'Profile (F3)'                   { Ui-Key 'F3' }
 Ui-ExpectNew 'BUILD parts profile: 1 (1 in the design)' "the profile's source is in the design"
 Ui-Step 'Close (Escape)'                 { Ui-Key 'Escape' }
 Ui-Mark
-Ui-Step 'Cut List (F9)'                  { Ui-Key 'F9' }
+Ui-Step 'Cut List (Shift+F12)'                  { Ui-Key 'Shift+F12' }
 Ui-FocusDialog '^Cut List$'
 Ui-ExpectNew 'Cut list row: ' "the cut list's rows"
 Ui-ExpectNew 'x Profile 20 test' 'the profiles in it'

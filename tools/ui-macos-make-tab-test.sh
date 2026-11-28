@@ -83,7 +83,7 @@ for frontend in $frontends; do
     else
       echo 'window-resize 1280 820'
     fi
-    echo "expect-ribbon-labels Start Solid Surface 'Sheet Metal' Build '3D Print' Laser CNC Manage"
+    echo "expect-ribbon-labels Start Solid Surface 'Sheet Parts' Build '3D Print' Laser CNC Manage"
     if [ "$frontend" = qt ]; then
       echo 'mark'
       # Make's workspace first where the toolbar panel has the selector

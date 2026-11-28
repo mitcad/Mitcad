@@ -168,18 +168,20 @@ fn texture_image(
 /// (x, z) where it faces Y, (x, y) where it faces Z; turned back by the
 /// rotation and divided by the size of one repeat. Along the grain
 /// (mitcad#2186) by the directions of the point's face (`grain`,
-/// `appearance::grain_axes`; box where none are given).
+/// `appearance::grain_axes`; box where none are given), shifted by the
+/// placed body's `grain_offset` (mm, mitcad#2605).
 fn project(
     texture: &Texture,
     p: [f64; 3],
     normal: [f64; 3],
     grain: Option<&([f64; 3], [f64; 3])>,
+    grain_offset: [f64; 2],
 ) -> [f32; 2] {
     let [x, y, z] = normal.map(f64::abs);
     let (a, b) = match (texture.projection, grain) {
         (Projection::Grain, Some(axes)) => {
             let [a, b] = crate::appearance::grain_point(axes, p);
-            (a, b)
+            (a + grain_offset[0], b + grain_offset[1])
         }
         (Projection::Planar, _) => (p[0], p[1]),
         // A body without texture coordinates of its own (mitcad#1862;
@@ -393,33 +395,40 @@ impl<K: Kernel> Document<K> {
             // its facet's normal; by the mesh's own coordinates where the
             // projection is `uv` and the mesh has them (mitcad#1874).
             let own = faces.uvs.len() == faces.vertices.len();
-            let tex_coords = triangle_material
+            let textured = triangle_material
                 .iter()
-                .any(|m| materials.textures.contains_key(m))
-                .then(|| {
-                    // The grain's directions of each face (mitcad#2186),
-                    // when a material lays its images along the grain.
-                    let grain: Vec<([f64; 3], [f64; 3])> = if materials
-                        .textures
-                        .values()
-                        .any(|t| t.projection == Projection::Grain)
-                    {
-                        starts
-                            .windows(2)
-                            .map(|range| {
-                                crate::appearance::grain_axes(
-                                    faces
-                                        .triangles
-                                        .get(range[0] as usize..range[1] as usize)
-                                        .unwrap_or_default()
-                                        .iter()
-                                        .map(|t| t.map(|i| faces.vertices[i as usize])),
-                                )
-                            })
-                            .collect()
-                    } else {
-                        Vec::new()
-                    };
+                .any(|m| materials.textures.contains_key(m));
+            // Whether a material of the mesh lays its images along the
+            // grain: each placement then takes the body's grain offset
+            // there (mitcad#2605), its own texture coordinates.
+            let along_grain = triangle_material.iter().any(|m| {
+                materials
+                    .textures
+                    .get(m)
+                    .is_some_and(|t| t.projection == Projection::Grain)
+            });
+            // The grain's directions of each face (mitcad#2186), when a
+            // material lays its images along the grain.
+            let grain: Vec<([f64; 3], [f64; 3])> = if along_grain {
+                starts
+                    .windows(2)
+                    .map(|range| {
+                        crate::appearance::grain_axes(
+                            faces
+                                .triangles
+                                .get(range[0] as usize..range[1] as usize)
+                                .unwrap_or_default()
+                                .iter()
+                                .map(|t| t.map(|i| faces.vertices[i as usize])),
+                        )
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            // The texture coordinates with a placement's grain offset (mm).
+            let tex_coords_at = |offset: [f64; 2]| {
+                textured.then(|| {
                     let mut face = 0;
                     let mut st = Vec::with_capacity(faces.triangles.len() * 3);
                     for (index, (t, m)) in
@@ -435,26 +444,50 @@ impl<K: Kernel> Document<K> {
                                 Some(texture) if own && texture.projection == Projection::Uv => {
                                     faces.uvs[t[k] as usize].map(|v| v as f32)
                                 }
-                                Some(texture) => project(texture, p, normal, grain.get(face)),
+                                Some(texture) => {
+                                    project(texture, p, normal, grain.get(face), offset)
+                                }
                                 None => [0.0, 0.0],
                             });
                         }
                     }
                     TexCoords::FaceVarying(st)
-                });
+                })
+            };
+            // Along the grain each placement shows its own part of the
+            // images (mitcad#2605), named as the shaded and the rendered
+            // view name it (`grain_key`); otherwise all placements share
+            // one set of coordinates.
+            let placed_tex_coords: Vec<Option<TexCoords>> = if along_grain {
+                paths
+                    .iter()
+                    .map(|occurrences| {
+                        let path = occurrences
+                            .iter()
+                            .map(|o| o.to_string())
+                            .collect::<Vec<_>>()
+                            .join("/");
+                        tex_coords_at(crate::appearance::grain_offset(
+                            &crate::appearance::grain_key(&body.uid.to_string(), &path),
+                        ))
+                    })
+                    .collect()
+            } else {
+                vec![tex_coords_at([0.0, 0.0])]
+            };
             let mesh = Mesh {
                 name: body.name.clone(),
                 points: faces.vertices,
                 normals: faces.normals,
                 triangles: faces.triangles,
-                tex_coords,
+                tex_coords: None,
                 double_sided: kind == BodyKind::Sheet,
                 material,
                 subsets,
                 samples: Vec::new(),
             };
             let places = mesh_places.entry(body.uid).or_default();
-            for occurrences in paths {
+            for (index, occurrences) in paths.into_iter().enumerate() {
                 let node = if occurrences.is_empty() {
                     &mut root
                 } else {
@@ -463,7 +496,13 @@ impl<K: Kernel> Document<K> {
                         .or_insert_with(|| Node::new(""))
                 };
                 places.push((occurrences, node.meshes.len()));
-                node.meshes.push(mesh.clone());
+                let mut placed = mesh.clone();
+                placed.tex_coords = placed_tex_coords
+                    .get(index)
+                    .or(placed_tex_coords.last())
+                    .cloned()
+                    .flatten();
+                node.meshes.push(placed);
             }
             exported.bodies.push(body.uid);
         }

@@ -648,6 +648,8 @@ fn rewrite_references(
             // Bodies and faces by uid and name (mitcad#2517): no
             // occurrence path.
             AnalysisDef::Curvature(_) | AnalysisDef::Isocurve(_) | AnalysisDef::Environment(_) => {}
+            // Bodies by uid (mitcad#2664): no occurrence path.
+            AnalysisDef::Interference(_) => {}
         }
     }
     for (i, item) in state.display.isolated.iter().enumerate() {
@@ -1429,6 +1431,7 @@ fn take_changes(state: &mut DocState, changes: &Rewritten) {
             AnalysisDef::MinimumDistance(_) => {}
             AnalysisDef::Zebra(zebra) => zebra.occurrence = Some(path.clone()),
             AnalysisDef::Curvature(_) | AnalysisDef::Isocurve(_) | AnalysisDef::Environment(_) => {}
+            AnalysisDef::Interference(_) => {} // mitcad#2664
         }
     }
     for (i, moved) in &changes.minimum_distances {

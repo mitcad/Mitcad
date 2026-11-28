@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <optional>
+#include <vector>
 
 #include "mitcad/analysis/common.hpp"
 
@@ -64,6 +65,15 @@ struct Comparison {
 
 Comparison compare(const TopoDS_Shape& a, const TopoDS_Shape& b,
                    const CompareOptions& options = {});
+
+// The distance of each point from the surface of `shape` (its faces,
+// their edges and vertices), exact as BRepExtrema_DistShapeShape measures
+// it from a vertex; empty for a point no face, edge or vertex gave a
+// distance for. Each face's and edge's projection is set up once for all
+// the points (compare's sampling, mitcad#2595: a B-spline face of many
+// spans set up for every point took minutes for a few hundred points).
+std::vector<std::optional<double>> surface_distances(const std::vector<gp_Pnt>& points,
+                                                     const TopoDS_Shape& shape);
 
 // Whether boolean differences of `differences` mm^3 in all (A - B and
 // B - A) can be right when every sample of both shapes lies within

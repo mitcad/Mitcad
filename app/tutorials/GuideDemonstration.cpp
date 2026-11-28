@@ -280,6 +280,10 @@ QPointF GuideDemonstration::framePoint(int index, const QRectF& target) const {
   return target.topLeft() + QPointF(frame.at.x() * target.width(), frame.at.y() * target.height()) + frame.offset;
 }
 
+QRectF GuideDemonstration::allowedArea(const QRectF& target) {
+  return target.adjusted(-kMargin, -kMargin, kMargin, kMargin);
+}
+
 QRectF GuideDemonstration::frameRect(int index, const QPointF& point) const {
   const GuideDemonstrationFrame& frame = frames.at(index);
   return QRectF(point - QPointF(frame.anchor.x() * frame.size.width(), frame.anchor.y() * frame.size.height()),

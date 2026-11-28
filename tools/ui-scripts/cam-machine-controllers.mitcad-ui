@@ -29,7 +29,7 @@ wait-log '^CAM machine shown: router: no tools$'
 mark
 button '.*' camEditMachine
 focus-dialog '^Edit Machine$'
-wait-log '^CAM machine controllers: router: grbl, grblhal, reprapfirmware, millenniumos, mach3, mach4, linuxcnc, carvera, carvera_air$'
+wait-log '^CAM machine controllers: router: grbl, grblhal, reprapfirmware, millenniumos, mach3, mach4, linuxcnc, carvera, carvera_air, estlcam$'
 key Escape
 focus-dialog '^Machines and Tools$'
 

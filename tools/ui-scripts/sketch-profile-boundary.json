@@ -1,0 +1,22 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A design for tools/ui-scripts/sketch-profile-boundary.mitcad-ui (mitcad#2596, after mitcad#2551 and GitHub mitcad/Mitcad#712): Sketch1 (F1) a 60 x 40 rectangle at the origin, Extrude1 (F2) 20 up: Body1 (F2.b0), a block; on its top face Sketch2 (F3, x and y the design's) four circles of diameter 8 about (15, 10), (45, 10), (15, 30) and (45, 30) (c1, c3, c5, c7), joined 5 up by Extrude2 (F4): four bosses standing on the face, whose footprints are holes of the face. Body1: 48000 + 4 x 16 pi x 5 = 49005.31 mm3."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 60, "height": 40},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+  {"expect": {"feature": "F2", "status": "ok"}},
+  {"cmd": "sketch.create", "plane": {"face": "F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})", "body": "F2.b0"}},
+  {"cmd": "sketch.add_circle", "sketch": "F3", "center": [15, 10], "diameter": 8},
+  {"cmd": "sketch.add_circle", "sketch": "F3", "center": [45, 10], "diameter": 8},
+  {"cmd": "sketch.add_circle", "sketch": "F3", "center": [15, 30], "diameter": 8},
+  {"cmd": "sketch.add_circle", "sketch": "F3", "center": [45, 30], "diameter": 8},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F3", "region": "r{c1}"}, {"sketch": "F3", "region": "r{c3}"},
+                 {"sketch": "F3", "region": "r{c5}"}, {"sketch": "F3", "region": "r{c7}"}],
+    "extent": {"type": "distance", "distance": 5}, "operation": "join", "participants": ["F2.b0"]}},
+  {"expect": {"feature": "F4", "status": "ok"}},
+  {"expect": {"bodies": 1}},
+  {"expect": {"body": "F2.b0", "volume": 49005.30964914873}}
+]

@@ -219,6 +219,12 @@ fn a_query_or_a_command_by_its_reference_row() {
     // Only the rows of that query.
     assert!(!text(&answer).contains("| `edges` |"));
     assert_eq!(answer["permitted"], true);
+    // What the query is for, from the query catalog (mitcad#2636).
+    assert_eq!(
+        answer["purpose"].as_str(),
+        crate::query_purposes::query_purpose("faces")
+    );
+    assert!(answer["purpose"].as_str().is_some());
     let (answer, _) = lookup(&mut session, json!({"command": "sketch.add_line"}));
     assert!(text(&answer).contains("| Command | Fields | Notes |"));
     assert!(text(&answer).contains("| `sketch.add_line` | `start`, `end`"));

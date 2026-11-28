@@ -46,8 +46,9 @@ void setViewCubeBackdrop(AIS_ViewCube& cube, bool dark);
 // large as the orthographic cube where its front face is. Its faces, edges,
 // corners, axes, hover and picking are made so on its geometry, for the
 // direction setViewCubeEye gives; the caller draws it with an orthographic
-// transform persistence and redisplays it.
-void setViewCubePerspective(AIS_ViewCube& cube, bool perspective);
+// transform persistence and redisplays it. True when it changed: the caller
+// then redisplays the cube and computes its picking again.
+bool setViewCubePerspective(AIS_ViewCube& cube, bool perspective);
 // The direction from the cube towards the eye (the camera's direction
 // reversed). True when the cube's own perspective changed with it: the
 // caller then redisplays the cube and computes its picking again.

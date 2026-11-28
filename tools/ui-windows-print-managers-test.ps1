@@ -30,7 +30,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{ 'make.printers' = 'F8'; 'make.processes' = 'F7'; 'solid.materials' = 'F9' } -StepPause 0
+Ui-Init $App $Out $QtBin @{ 'make.printers' = 'F8'; 'make.processes' = 'F7'; 'solid.materials' = 'F12' } -StepPause 0
 if (-not $Cli) {
   $Cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
     ForEach-Object { Join-Path (Split-Path $script:UiApp) $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
@@ -191,7 +191,7 @@ Ui-Activate
 
 Write-Host '--- 3. Materials: a built-in one is read only, its Duplicate asks where'
 Ui-Mark
-Ui-Step 'Edit Materials (F9)'            { Ui-Key 'F9' }
+Ui-Step 'Edit Materials (F12)'            { Ui-Key 'F12' }
 Ui-ExpectNew 'Materials opened' 'the Materials manager opened'
 Ui-ExpectNew 'Materials groups: This design 0 | This project 0 | My library 0 | Built-in ' 'the four groups'
 Ui-ExpectNew 'Materials search at ' 'the search above the list'

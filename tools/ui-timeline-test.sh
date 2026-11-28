@@ -15,9 +15,9 @@
 #   - A warning (P9): a plane at 90 radians is yellow, its level the same
 #     on every surface (mitcad#1040: the Browser row, the status line, the
 #     selection card, the panel's warning box), and its tooltip and its
-#     panel's preview say why; a boss's top edge rounded with the boss's
-#     own radius, built 0.1 % smaller with a sliver of its top left, is a
-#     warning that says so (mitcad#1783); a half boss's arc edge bevelled
+#     panel's preview say why; a boss's rim under a spherical cap rounded
+#     to the cap's pole, built 0.1 % smaller with a sliver of the cap left,
+#     is a warning that says so (mitcad#1783); a half boss's arc edge bevelled
 #     by its radius, built 0.1 % smaller with the sliver taken away, is
 #     information, not yellow (mitcad#1106); a rib's full round, built at
 #     its size, has no status.
@@ -286,10 +286,13 @@ echo "--- A warning (P9)"
 # surface (mitcad#1040). The rib turned by 90 radians (Turned) warns too,
 # so that the Warnings badge has a menu of two. A rib 2 mm wide with a full
 # round on all four top edges builds at its size (the OCCT port's patch
-# 1655): no status. A boss 10 across with its top edge rounded by 5 (Dome):
-# OCCT cannot close the top face to a point, so the fillet is built 0.1 %
+# 1655): no status. A boss 10 across under a spherical cap of radius 10
+# about its foot's centre (a cylinder 12 high intersected with the ball),
+# its rim at z = sqrt 75 rounded by 5 (Dome): the ball touches the cap at
+# its pole only, which OCCT cannot build (a flat top rounded so is built at
+# its size since port patch 2582, mitcad#2582), so the fillet is built 0.1 %
 # smaller (tools/cli/tests/p9_warnings.json), which leaves a disc 10 um
-# across on top that cannot be taken away: a warning that says so
+# across on the cap that cannot be taken away: a warning that says so
 # (mitcad#1783). A boss 10 across cut in half, its arc edge bevelled by 5
 # (Cone): built 0.1 % smaller too, its sliver along the flat side taken
 # away, which is information, not a warning (mitcad#1106). 60 planes after
@@ -311,12 +314,12 @@ echo "--- A warning (P9)"
     "definition": {"type": "angle", "line": "z", "angle": 90, "plane": "xz"}}},
   {"cmd": "add_feature", "name": "Turned", "def": {"type": "move", "bodies": ["F2.b0"],
     "transform": {"type": "rotate", "axis": "z", "angle": 90}}},
-  {"cmd": "sketch.create"},
-  {"cmd": "sketch.add_circle", "sketch": "F6", "center": [20, 0], "diameter": 10},
-  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F6", "region": "r{c1}"}],
-    "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
-  {"cmd": "add_feature", "name": "Dome", "def": {"type": "fillet", "body": "F7.b0",
-    "edges": ["E{F7:end(r{c1})|F7:side(c1)}"], "radius": 5}},
+  {"cmd": "add_feature", "def": {"type": "cylinder", "plane": {"type": "origin", "plane": "xy"},
+    "center": [20, 0], "diameter": 10, "height": 12, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "sphere", "plane": {"type": "origin", "plane": "xy"},
+    "center": [20, 0], "diameter": 20, "operation": "intersect", "participants": ["F6.b0"]}},
+  {"cmd": "add_feature", "name": "Dome", "def": {"type": "fillet", "body": "F6.b0",
+    "edges": ["E{F6:side0|F7:side0}"], "radius": 5}},
   {"cmd": "sketch.create"},
   {"cmd": "sketch.add_circle", "sketch": "F9", "center": [40, 0], "diameter": 10},
   {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F9", "region": "r{c1}"}],

@@ -376,6 +376,13 @@ pub use mesh_shape_tools::{
     MeshAlignDef, MeshCombineDef, MeshCombineOp, MeshCutKeep, MeshOffsetDef, MeshOffsetMode,
     MeshOffsetSide, MeshPlaneCutDef, MeshPointPair, MeshRegion, MeshSmoothDef,
 };
+// Wood Joint: woodworking joints between two parts, on Mortise and
+// Tenon's model (mitcad#2604).
+pub mod wood_joint;
+pub use wood_joint::{WoodJointDef, WoodJointKind};
+// Bead: ribs pressed into a sheet along sketch lines (mitcad#2645).
+pub mod sheet_bead;
+pub use sheet_bead::SheetBeadDef;
 
 use crate::assembly::Assembly;
 use crate::datum::Datum;
@@ -586,6 +593,10 @@ feature_types! {
     // Mesh Smooth, Combine, Offset and Shell, Align, Plane Cut (mitcad#2515).
     MeshSmooth(MeshSmoothDef), MeshCombine(MeshCombineDef), MeshOffset(MeshOffsetDef),
     MeshAlign(MeshAlignDef), MeshPlaneCut(MeshPlaneCutDef),
+    // Wood Joint (mitcad#2604).
+    WoodJoint(WoodJointDef),
+    // Bead (mitcad#2645).
+    SheetBead(SheetBeadDef),
 }
 
 /// Brings a feature definition in an earlier form up to date before it is

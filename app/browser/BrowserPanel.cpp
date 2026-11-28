@@ -403,6 +403,21 @@ void paintOwnerMark(QPainter* painter, const QRectF& band, qreal radius, const Q
   painter->drawRoundedRect(band.adjusted(width / 2, width / 2, -width / 2, -width / 2), radius, radius);
   painter->restore();
 }
+
+// The active component's header tint (mitcad#2618) behind a row, where the
+// selection's band would be: a fill of `tint` (BrowserDelegate::activeTintOf),
+// nothing for an invalid one.
+void paintActiveTint(QPainter* painter, const QRectF& band, qreal radius, const QColor& tint) {
+  if (!tint.isValid() || band.isEmpty()) {
+    return;
+  }
+  painter->save();
+  painter->setRenderHint(QPainter::Antialiasing);
+  painter->setPen(Qt::NoPen);
+  painter->setBrush(tint);
+  painter->drawRoundedRect(band, radius, radius);
+  painter->restore();
+}
 // The icon of a sketch row under a feature's row whose sketch several
 // features use (mitcad#1699): the sketch's icon with the shared mark in its
 // lower right corner, a small round badge on the rows' base colour with two
@@ -480,6 +495,23 @@ public:
   // PanelDelegate give a row; Standard, the default, as it always was.
   void setSpacing(BrowserRowSpacing spacing) { m_spacing = spacing; }
   BrowserRowSpacing spacing() const { return m_spacing; }
+
+  // The active component's header tinted (mitcad#2618): on while
+  // Preferences > Display has it; off, the default, the rows as before.
+  void setActiveTint(bool on) { m_activeTint = on; }
+  bool activeTint() const { return m_activeTint; }
+  // The tint behind a row now (browserRows::activeComponentTint): its
+  // component's colour while the highlight is on, the row is a header of the
+  // active component (its radio button on: the root's, or every occurrence
+  // of the active component, as their radio buttons) and it is not selected
+  // (the selection's band shows instead, and the tint again once the
+  // selection moves on); invalid otherwise.
+  QColor activeTintOf(const QModelIndex& index, bool selected) const {
+    if (!m_activeTint || selected || index.column() != kName || !index.data(kRadioRole).toBool()) {
+      return QColor();
+    }
+    return browserRows::activeComponentTint(index.data(kComponentColorRole).value<QColor>());
+  }
 
   // A row's tooltip while its name is cut short (mitcad#1932): the name in
   // full, then the row's own tooltip, if any.
@@ -776,6 +808,7 @@ private:
   bool m_activateRight = false;
   bool m_eyeRight = false;
   BrowserRowSpacing m_spacing = BrowserRowSpacing::Standard; // mitcad#2513
+  bool m_activeTint = false;                                 // mitcad#2618
 };
 
 // The rows of the tree in a floating card: like a macOS sidebar, a selected
@@ -803,12 +836,16 @@ public:
       painter->setBrush(fill);
       painter->drawRoundedRect(band, 7, 7);
       painter->restore();
-    } else if (!m_rows && ownerMarked(option, index)) {
-      // The owner's mark (mitcad#1704) where the band would be.
+    } else if (!m_rows) {
       const QRect cell = option.rect;
       const QRectF band(cell.left() + 2, cell.top() + 1, option.widget->width() - cell.left() - 4 - 2,
                         cell.height() - 2);
-      paintOwnerMark(painter, band, 7, accentColor(option.palette));
+      // The active component's tint (mitcad#2618) where the band would be.
+      paintActiveTint(painter, band, 7, activeTintOf(index, false));
+      if (ownerMarked(option, index)) {
+        // The owner's mark (mitcad#1704) where the band would be.
+        paintOwnerMark(painter, band, 7, accentColor(option.palette));
+      }
     }
     BrowserDelegate::paint(painter, option, index);
   }
@@ -848,16 +885,22 @@ public:
 
   void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override {
     paintPanelRowBand(painter, option, index);
-    if (ownerMarked(option, index)) {
-      // The owner's mark (mitcad#1704) where the selection's band would be,
-      // in the same action blue.
+    const QColor tint = activeTintOf(index, option.state.testFlag(QStyle::State_Selected));
+    const bool owner = ownerMarked(option, index);
+    if (tint.isValid() || owner) {
       int width = option.rect.right() + 1;
       if (const auto* view = qobject_cast<const QAbstractItemView*>(option.widget)) {
         width = view->viewport()->width();
       }
       const QRectF band(panel::kRowInset, option.rect.top() + 1, std::max(0, width - 2 * panel::kRowInset),
                         option.rect.height() - 2);
-      paintOwnerMark(painter, band, panel::kRowRadius, actionColor());
+      // The active component's tint (mitcad#2618) where the selection's
+      // band would be.
+      paintActiveTint(painter, band, panel::kRowRadius, tint);
+      if (owner) {
+        // The owner's mark (mitcad#1704) there too, in the same action blue.
+        paintOwnerMark(painter, band, panel::kRowRadius, actionColor());
+      }
     }
     BrowserDelegate::paint(painter, panelRowOption(option), index);
   }
@@ -1031,8 +1074,14 @@ QString analysisIcon(const QString& type) {
          : type == QStringLiteral("min_radius") ? QStringLiteral("min-radius")
          // Minimum Distance (mitcad#2519).
          : type == QStringLiteral("minimum_distance") ? QStringLiteral("minimum-distance")
-                                                      : QStringLiteral("section-analysis");
+         // An interference check (mitcad#2664).
+         : type == QStringLiteral("interference") ? QStringLiteral("interference")
+                                                  : QStringLiteral("section-analysis");
 }
+
+// An analysis that is not drawn in the view (an interference check,
+// mitcad#2664): no light bulb, never dimmed as hidden.
+bool analysisDrawn(const QString& type) { return type != QStringLiteral("interference"); }
 
 } // namespace
 
@@ -1156,6 +1205,23 @@ public:
       scrollTo(top, QAbstractItemView::PositionAtTop);
     }
     viewport()->update();
+  }
+
+  // The active component's header tint (mitcad#2618): the rows painted
+  // again.
+  void setActiveTint(bool on) {
+    if (on == m_delegate->activeTint()) {
+      return;
+    }
+    m_delegate->setActiveTint(on);
+    viewport()->update();
+  }
+  // The tint behind a row now (BrowserDelegate::activeTintOf), for the panel's
+  // log and tests.
+  QColor activeTintOf(QTreeWidgetItem* item) const {
+    const QModelIndex index = indexFromItem(item, kName);
+    const bool selected = selectionModel() != nullptr && selectionModel()->isSelected(index);
+    return m_delegate->activeTintOf(index, selected);
   }
 
   // The Rows background (mitcad#419): each row on a box of its own.
@@ -1513,6 +1579,10 @@ private:
     painter->drawRoundedRect(outline, radius, radius);
     QColor tint;
     const bool selected = selectionModel() != nullptr && selectionModel()->isSelected(index);
+    // The active component's tint (mitcad#2618) on its box, under the
+    // owner's mark and the pointer's tint; a selected row's box shows the
+    // selection instead.
+    paintActiveTint(painter, outline, radius, m_delegate->activeTintOf(index, selected));
     if (selected) {
       tint = accentColor(colors);
       tint.setAlphaF(option.state.testFlag(QStyle::State_Active) ? 0.30f : 0.16f);
@@ -1842,6 +1912,25 @@ void BrowserPanel::setRowSpacing(BrowserRowSpacing spacing) {
   emit contentHeightChanged();
   queueRowsRegion();
   TestSync::singleShot(0, this, [this] { logLayout(); });
+}
+
+void BrowserPanel::setHighlightActive(bool on) {
+  if (on == m_highlightActive) {
+    return;
+  }
+  m_highlightActive = on;
+  m_tree->setActiveTint(on);
+  qDebug().noquote() << QStringLiteral("Browser active highlight %1")
+                            .arg(on ? QStringLiteral("on") : QStringLiteral("off"));
+}
+
+QColor BrowserPanel::activeTint(const QString& path) const {
+  for (QTreeWidgetItemIterator it(m_tree); *it != nullptr; ++it) {
+    if (nodeOf(*it).path == path) {
+      return m_tree->activeTintOf(*it);
+    }
+  }
+  return QColor();
 }
 
 BrowserPanel::RowPlaces BrowserPanel::rowPlaces(const QString& path) const {
@@ -3788,10 +3877,11 @@ void BrowserPanel::rebuild(const DocumentSnapshot& snapshot, bool originShown) {
       row.uid = analysis.value(QStringLiteral("name")).toString();
       row.name = row.uid;
       row.visible = analysis.value(QStringLiteral("visible")).toBool();
-      row.hasEye = true;
       // Section, Print (mitcad#620) and Draft Analysis (mitcad#2166), each
       // with its icon.
       row.featureType = analysis.value(QStringLiteral("type")).toString();
+      // An interference check is run, never shown (mitcad#2664).
+      row.hasEye = analysisDrawn(row.featureType);
       m_analysisRows.insert(row.name, analysis);
       styleAnalysisRow(addRow(analyses, row, analysisIcon(row.featureType)), analysis);
     }
@@ -4207,6 +4297,7 @@ void BrowserPanel::styleAnalysisRow(QTreeWidgetItem* item, const QJsonObject& an
                        : type == QStringLiteral("point_cloud_deviation") ? tr("Point Cloud Deviation") // mitcad#2240
                        : type == QStringLiteral("min_radius")            ? tr("Minimum Radius")        // mitcad#2518
                        : type == QStringLiteral("minimum_distance")      ? tr("Minimum Distance")      // mitcad#2519
+                       : type == QStringLiteral("interference")          ? tr("Interference")          // mitcad#2664
                                                                          : tr("Section Analysis");
   const QIcon icon = themeIcon(analysisIcon(type));
   // A plane that cannot be found stays the error it is (mitcad#1230).
@@ -4225,7 +4316,8 @@ void BrowserPanel::styleAnalysisRow(QTreeWidgetItem* item, const QJsonObject& an
     setNameRole(item, noticeTextRole(NoticeLevel::Warning));
   } else {
     item->setIcon(kName, icon);
-    if (!analysis.value(QStringLiteral("visible")).toBool()) {
+    // An interference check is never shown, and not dimmed (mitcad#2664).
+    if (!analysis.value(QStringLiteral("visible")).toBool() && analysisDrawn(type)) {
       setNameRole(item, ColorRole::TextHidden);
     } else {
       clearNameRole(item);

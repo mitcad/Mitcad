@@ -3,7 +3,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <exception>
 #include <limits>
+#include <new>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -146,6 +148,25 @@ std::optional<gp_Pnt> meet(const occ::handle<Geom_Curve>& curve, const occ::hand
     }
   }
   return best;
+}
+
+// The point where `curve` meets `surface` nearest either of `first` and
+// `second`: the one nearest `first` where it is as near (within kNear) as
+// the one nearest `second`. With the point that reaches nearer, the
+// distance to it.
+std::optional<std::pair<gp_Pnt, double>> meet_nearer(const occ::handle<Geom_Curve>& curve,
+                                                     const occ::handle<Geom_Surface>& surface,
+                                                     const gp_Pnt& first, const gp_Pnt& second) {
+  const std::optional<gp_Pnt> a = meet(curve, surface, first);
+  const std::optional<gp_Pnt> b = meet(curve, surface, second);
+  if (!a) {
+    return std::nullopt;
+  }
+  const double da = a->Distance(first);
+  if (b && b->Distance(second) < da - kNear) {
+    return std::make_pair(*b, b->Distance(second));
+  }
+  return std::make_pair(*a, da);
 }
 
 class MovedFaces : public BRepTools_Modification {
@@ -521,6 +542,7 @@ private:
       return old.Transformed(m_motion);
     }
     const double reach = 1.0e3;
+    const gp_Pnt carried = old.Transformed(m_motion);
     for (const Kind wanted : {Kind::Kept, Kind::Moved}) {
       for (const TopoDS_Shape& e : edges) {
         const TopoDS_Edge edge = TopoDS::Edge(e);
@@ -529,15 +551,29 @@ private:
         }
         double first = 0.0, last = 0.0;
         occ::handle<Geom_Curve> curve = global_curve(edge, first, last);
-        gp_Pnt near = old;
-        occ::handle<Geom_Surface> other = surface(*aMoved);
         if (wanted == Kind::Moved) {
           curve = occ::down_cast<Geom_Curve>(curve->Transformed(m_motion));
-          near = old.Transformed(m_motion);
-          other = surface(*aKept);
+          if (const std::optional<gp_Pnt> p = meet(curve, surface(*aKept), carried);
+              p && p->Distance(carried) < reach) {
+            return p;
+          }
+          continue;
         }
-        if (const std::optional<gp_Pnt> p = meet(curve, other, near); p && p->Distance(near) < reach) {
-          return p;
+        // An edge that stays meets the moved surface where the vertex
+        // carried with its moved face lies, or where the vertex was where
+        // that is nearer (the moved one where both are as near), as the
+        // edges between find their lines. A curved face meets the edge's
+        // line twice: the vertex where it was lies nearer the moved
+        // surface's other crossing once the face has moved along the line
+        // further than the surface's axis lies behind the vertex (half the
+        // way between the crossings). The vertex then went there, its edges
+        // between could not reach it, and a face that meets its
+        // neighbours at an angle (an arc ending a block, not tangent to its
+        // sides) could not be moved out further than that (mitcad#2632,
+        // GitHub mitcad/Mitcad#769: "an edge of a moved face does not
+        // reach its vertices"; a tangent arc's line touches it once).
+        if (const auto p = meet_nearer(curve, surface(*aMoved), carried, old); p && p->second < reach) {
+          return p->first;
         }
       }
     }
@@ -719,7 +755,28 @@ ShapePtr move_faces_rigidly(const std::string& feature, const Shape& body,
     }
     const auto own = [&] { return rebuilt(body, chosen, exact); };
     if (!plane) {
-      return own();
+      // The faces' rebuild keeps the body's topology. Where it cannot and
+      // the faces bound a feature (a boss, a pocket), the feature moves
+      // whole and the faces around are trimmed where they meet it
+      // (mitcad#2632, GitHub mitcad/Mitcad#769: a boss slid partly over
+      // the edge of its plate). Where they bound none, the rebuild's
+      // reason, which says what the faces around cannot do; where they do,
+      // the feature's (one that would no longer meet the body says so).
+      std::exception_ptr failure;
+      try {
+        return own();
+      } catch (const Cancelled&) {
+        throw;
+      } catch (const std::bad_alloc&) {
+        throw;
+      } catch (const std::exception&) {
+        failure = std::current_exception();
+      }
+      try {
+        return detail::move_feature_faces(body, chosen, exact, feature);
+      } catch (const detail::NotAFeature&) {
+        std::rethrow_exception(failure);
+      }
     }
     // The faces' rebuild keeps the body's topology; where the moved faces'
     // boundaries meet or cross other faces (a raised block's end moved

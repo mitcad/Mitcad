@@ -608,6 +608,16 @@ const COMMANDS: &[(&str, ApiClass)] = &[
     // Profile Boundary: curves of a sketch's automatic face outline that
     // bound profiles (mitcad#2551).
     ("sketch.set_profile_boundary", Model),
+    // What recovered work's file has that this build does not read, kept
+    // with the document (mitcad#2587): it reads that file.
+    ("keep_fields_not_read", FileIo),
+    // Gear Drive: placed drives of gears (mitcad#2608).
+    ("add_gear_drive", Model),
+    ("edit_gear_drive", Model),
+    // Replace Component (mitcad#2640): reads the design file or library
+    // part that replaces; another component of the design reads nothing
+    // (`command_class_with`).
+    ("replace_component", FileIo),
 ];
 
 /// Every query (its `query`) with its class. A `cache` query with `disk`
@@ -945,6 +955,9 @@ const QUERIES: &[(&str, ApiClass)] = &[
     ("curvature_comb", Model),
     // A cut sheet's cutting paths (mitcad#2553).
     ("cut_sheet_cutting", Model),
+    // Gear Drive's values and the drive a component is (mitcad#2608).
+    ("gear_drive_values", Model),
+    ("gear_drive", Model),
 ];
 
 fn class_in(table: &[(&str, ApiClass)], name: &str) -> Option<ApiClass> {
@@ -1125,6 +1138,14 @@ pub fn command_class_with(request: &serde_json::Value) -> Option<ApiClass> {
             .is_some_and(serde_json::Value::is_string)
     {
         return Some(FileIo);
+    }
+    // Replace Component with another component of the design reads no
+    // file (mitcad#2640).
+    if name == "replace_component"
+        && request.get("path").is_none()
+        && request.get("library").is_none()
+    {
+        return Some(Model);
     }
     command_class(name)
 }

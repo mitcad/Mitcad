@@ -290,16 +290,18 @@ fn placing_and_dragging_keep_an_asme_value_horizontal() {
 
 #[test]
 fn an_asme_value_that_does_not_fit_goes_beyond_the_line_horizontal() {
+    // A horizontal line too short for its value between its feet: beyond
+    // its end, along it (an upright one takes an elbow, mitcad#2621).
     let map = map();
     let mut d = ViewAnnotation::new(1, AnnotationType::Linear, Vec::new());
-    d.along = Some(Along::Vertical);
-    d.line_offset = Some(15.0);
-    let seen = [Seen::Point([0.0, 0.0]), Seen::Point([0.0, 6.0])];
+    d.along = Some(Along::Horizontal);
+    d.line_offset = Some(-15.0);
+    let seen = [Seen::Point([0.0, 0.0]), Seen::Point([6.0, 0.0])];
     let laid = lay_out(
         &d,
         &seen,
         &frame(&map, Standard::Asme),
-        Some(&words("6")),
+        Some(&words("6.25")),
         &[],
     )
     .unwrap();
@@ -307,7 +309,7 @@ fn an_asme_value_that_does_not_fit_goes_beyond_the_line_horizontal() {
         panic!("{:?}", laid.group.items)
     };
     assert_eq!(angle, 0.0);
-    assert!(middle_of(at, "6")[1] > 106.0 + ARROW_LENGTH);
+    assert!(middle_of(at, "6.25")[0] > 106.0 + ARROW_LENGTH);
 }
 
 #[test]

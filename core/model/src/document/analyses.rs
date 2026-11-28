@@ -2,9 +2,10 @@
 //! Analyses kept in the document (mitcad#41): section analyses, print
 //! analyses (mitcad#620), draft analyses (mitcad#2166), point cloud
 //! deviations (mitcad#2240), minimum radius analyses (mitcad#2518),
-//! minimum distances (mitcad#2519) and the
+//! minimum distances (mitcad#2519), the
 //! surface quality analyses Zebra, Curvature Map, Isocurve Analysis and
-//! Environment Map (mitcad#2517, `surface_analyses.rs`), listed in the
+//! Environment Map (mitcad#2517, `surface_analyses.rs`) and interference
+//! checks (mitcad#2664), listed in the
 //! browser's Analysis folder and saved in the design file. They change no
 //! geometry: adding, editing, renaming, showing, hiding and deleting one is
 //! an undo step that recomputes nothing.
@@ -16,7 +17,9 @@
 //! reference is gone says why instead.
 //!
 //! At most one analysis is shown: showing one (adding it, or editing it
-//! shown) hides the others, so the bodies are cut by one plane.
+//! shown) hides the others, so the bodies are cut by one plane. An
+//! interference check is not drawn in the view ([`AnalysisDef::is_drawn`]):
+//! it is never shown, and adding or editing it leaves the shown one shown.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -77,9 +80,19 @@ pub enum AnalysisDef {
     Curvature(super::CurvatureAnalysis),
     Isocurve(super::IsocurveAnalysis),
     Environment(super::EnvironmentAnalysis),
+    /// The pairs of bodies that overlap, and by how much, run again on its
+    /// bodies whenever it is opened (mitcad#2664).
+    Interference(InterferenceAnalysis),
 }
 
 impl AnalysisDef {
+    /// Whether the analysis is drawn in the view while it is shown: every
+    /// kind but an interference check (mitcad#2664), which is run when it
+    /// is opened and is never shown.
+    pub fn is_drawn(&self) -> bool {
+        !matches!(self, Self::Interference(_))
+    }
+
     /// The first part of default names (`Section1`, `Print1`, `Draft1`).
     fn name_stem(&self) -> &'static str {
         match self {
@@ -93,9 +106,45 @@ impl AnalysisDef {
             Self::Curvature(_) => "Curvature",
             Self::Isocurve(_) => "Isocurves",
             Self::Environment(_) => "Environment",
+            Self::Interference(_) => "Interference",
         }
     }
 }
+
+/// An Interference check (mitcad#2664): the pairs of `bodies` that overlap
+/// and the volume of each overlap, as the `interference` query finds them,
+/// kept so that the same check runs again whenever it is opened. Without
+/// bodies it checks every body at the timeline marker when it runs, so the
+/// bodies added since it was kept are checked too. A body that is gone is
+/// said in words ([`Document::interference_check`]) until the check is
+/// edited or an undo brings the body back.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InterferenceAnalysis {
+    /// The bodies checked against each other; none: every body.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bodies: Vec<BodyUid>,
+}
+
+impl InterferenceAnalysis {
+    /// Why the settings cannot be kept, if they cannot (not the geometry):
+    /// a body listed twice, which would overlap itself.
+    fn check(&self) -> Result<(), String> {
+        let twice = self
+            .bodies
+            .iter()
+            .enumerate()
+            .any(|(i, body)| self.bodies[..i].contains(body));
+        if twice {
+            return Err("the interference check lists a body more than once".to_owned());
+        }
+        Ok(())
+    }
+}
+
+/// What an interference check that is not drawn says when it is asked to
+/// be shown (mitcad#2664).
+const NOT_DRAWN: &str = "an interference check is not shown in the view: open it to run it";
 
 /// A Minimum Distance analysis (mitcad#2519): the smallest distance between
 /// two selections, each one or more picks of bodies, faces, edges,
@@ -685,6 +734,12 @@ impl Analysis {
                     .check()
                     .map_err(|e| format!("{}: {e}", self.name))?;
             }
+            // mitcad#2664
+            AnalysisDef::Interference(interference) => {
+                interference
+                    .check()
+                    .map_err(|e| format!("{}: {e}", self.name))?;
+            }
         }
         Ok(())
     }
@@ -973,6 +1028,13 @@ impl<K: Kernel> Document<K> {
                                 value["error"] = json!(error);
                             }
                         }
+                        // Why a body it checks is not there (mitcad#2664);
+                        // its pairs are the `interference` query's.
+                        AnalysisDef::Interference(interference) => {
+                            if let Err(error) = self.interference_check(interference) {
+                                value["error"] = json!(error);
+                            }
+                        }
                     }
                     value
                 })
@@ -1019,8 +1081,36 @@ impl<K: Kernel> Document<K> {
                         .map_err(|e| invalid(format!("the surface analysis: {e}")))?;
                 }
             }
+            // mitcad#2664
+            AnalysisDef::Interference(interference) => {
+                self.interference_check(interference)
+                    .map_err(|e| invalid(format!("the interference check: {e}")))?;
+            }
         }
         Ok(())
+    }
+
+    /// Why an interference check's bodies are not there at the marker, if
+    /// they are not (mitcad#2664): in words, how many of them are gone,
+    /// with what to do; an empty list (every body) always is.
+    pub fn interference_check(&self, def: &InterferenceAnalysis) -> Result<(), String> {
+        let gone = def
+            .bodies
+            .iter()
+            .filter(|body| self.body_shape(**body).is_none())
+            .count();
+        match gone {
+            0 => Ok(()),
+            1 => Err(
+                "one of its bodies is not in the design at the timeline marker: \
+                 edit the check to choose its bodies again"
+                    .to_owned(),
+            ),
+            n => Err(format!(
+                "{n} of its bodies are not in the design at the timeline marker: \
+                 edit the check to choose its bodies again"
+            )),
+        }
     }
 
     /// Why a minimum radius analysis' bodies or faces are not there at the
@@ -1228,8 +1318,10 @@ impl<K: Kernel> Document<K> {
         }
     }
 
-    /// Adds an analysis, shown, and hides the others. Without a name it is
-    /// `Section1`, `Section2`, ... (the next free number). Returns the name.
+    /// Adds an analysis, shown, and hides the others; an interference check
+    /// (mitcad#2664), which is not drawn, is added not shown and leaves the
+    /// others as they are. Without a name it is `Section1`, `Section2`, ...
+    /// (the next free number). Returns the name.
     pub fn add_analysis(
         &mut self,
         def: AnalysisDef,
@@ -1248,17 +1340,20 @@ impl<K: Kernel> Document<K> {
         if self.analysis_index(&name).is_ok() {
             return Err(invalid(format!("an analysis {name} exists")));
         }
+        let drawn = def.is_drawn();
         let analysis = Analysis {
             name: name.clone(),
-            visible: true,
+            visible: drawn,
             def,
         };
         analysis.check().map_err(invalid)?;
         self.check_analysis_def(&analysis.def)?;
         let label = format!("Add {name}");
         self.apply_with(|state| {
-            for other in &mut state.analyses {
-                other.visible = false;
+            if drawn {
+                for other in &mut state.analyses {
+                    other.visible = false;
+                }
             }
             state.analyses.push(analysis);
             Ok((label, (), false))
@@ -1267,7 +1362,9 @@ impl<K: Kernel> Document<K> {
     }
 
     /// Changes an analysis' definition; `visible` shows (hiding the others)
-    /// or hides it too. A change that changes nothing is no undo step.
+    /// or hides it too. An interference check (mitcad#2664) stays not
+    /// shown: showing it is refused in words. A change that changes nothing
+    /// is no undo step.
     pub fn edit_analysis(
         &mut self,
         name: &str,
@@ -1276,7 +1373,13 @@ impl<K: Kernel> Document<K> {
     ) -> Result<(), ModelError> {
         let i = self.analysis_index(name)?;
         let old = &self.state.analyses[i];
-        let visible = visible.unwrap_or(old.visible);
+        let visible = if def.is_drawn() {
+            visible.unwrap_or(old.visible)
+        } else if visible == Some(true) {
+            return Err(invalid(NOT_DRAWN));
+        } else {
+            false
+        };
         let unchanged = old.def == def
             && old.visible == visible
             && (!visible || self.state.analyses.iter().filter(|a| a.visible).count() <= 1);
@@ -1299,9 +1402,14 @@ impl<K: Kernel> Document<K> {
     }
 
     /// Shows (hiding the others) or hides an analysis; an undo step
-    /// `Show Section1` / `Hide Section1` unless nothing changes.
+    /// `Show Section1` / `Hide Section1` unless nothing changes. An
+    /// interference check (mitcad#2664) is never shown: showing it is
+    /// refused in words, hiding it changes nothing.
     pub fn set_analysis_visible(&mut self, name: &str, visible: bool) -> Result<(), ModelError> {
         let i = self.analysis_index(name)?;
+        if visible && !self.state.analyses[i].def.is_drawn() {
+            return Err(invalid(NOT_DRAWN));
+        }
         let others_shown = self
             .state
             .analyses

@@ -70,6 +70,9 @@ if(BUILD_TESTING)
                                                    --open "${scripts}/thread_old_piece_names.mitcad")
   # Thin walls along open chains and closed loops of sketch curves (mitcad#463).
   add_test(NAME cli.f1_thin_curves COMMAND mitcad-cli run "${scripts}/f1_thin_curves.json")
+  # Thin walls along open and closed splines and chains with splines on
+  # each side (mitcad#2594).
+  add_test(NAME cli.f1_thin_splines COMMAND mitcad-cli run "${scripts}/f1_thin_splines.json")
   # A taper that closes the profile partway names the walls that meet (mitcad#1186).
   add_test(NAME cli.f1_taper_closes COMMAND mitcad-cli run "${scripts}/f1_taper_closes.json")
   # Press-fit holes for printed parts: hex, square and crush ribs (mitcad#1517).
@@ -566,6 +569,32 @@ if(BUILD_TESTING)
     "documents referred to: 2 linked from their files, 0 not.*occurrences: 1, from [^\n]*Package-plain\\.f3z \\(package\\).*Placed bodies: 3"
     FAIL_REGULAR_EXPRESSION
     "from [^\n]*!0a5e3b10\\);vf\\.part\\?version=2 from.*vf\\.part\\?version=2 from;refers back")
+  # The items the import replays, counted for the progress dialog's total
+  # (mitcad#2635, --count-items): the design's and those of each document
+  # it imports, once each, the design first and the documents depth first
+  # in the design's order. The assembly: itself, the part, the holder (whose
+  # part is the one counted already); the package likewise by its designs
+  # (the root never again); the deviation design with its dump: the dump's
+  # three items.
+  add_test(NAME cli.import_f3d_count_items_references
+    COMMAND mitcad-cli import-f3d "${exchange}/references/Assembly v1.f3d" --count-items)
+  set_tests_properties(cli.import_f3d_count_items_references PROPERTIES FIXTURES_REQUIRED cli_f3d_references
+    PASS_REGULAR_EXPRESSION "Assembly v1\\.f3d.*Part v2\\.f3d.*Holder v1\\.f3d"
+    # (Each entry names its file twice, as its design's label and in its
+    # path: a document counted twice has two such labels.)
+    FAIL_REGULAR_EXPRESSION
+    "\"design\": \"Part v2\\.f3d\".*\"design\": \"Part v2\\.f3d\";\"design\": \"Holder v1\\.f3d\".*\"design\": \"Holder v1\\.f3d\"")
+  add_test(NAME cli.import_f3d_count_items_package
+    COMMAND mitcad-cli import-f3d "${exchange}/package/Package.f3z" --count-items)
+  set_tests_properties(cli.import_f3d_count_items_package PROPERTIES FIXTURES_REQUIRED cli_f3d_package
+    PASS_REGULAR_EXPRESSION "!0a5e3b10.*!9c8d7e30.*!5b6c7d20"
+    FAIL_REGULAR_EXPRESSION "!0a5e3b10.*!0a5e3b10;!9c8d7e30.*!9c8d7e30;!5b6c7d20.*!5b6c7d20")
+  add_test(NAME cli.import_f3d_count_items_dump
+    COMMAND mitcad-cli import-f3d "${exchange}/deviation/Rounding.f3d" --dump "${exchange}/deviation/Rounding.dump.json"
+            --count-items)
+  set_tests_properties(cli.import_f3d_count_items_dump PROPERTIES FIXTURES_REQUIRED cli_f3d_deviation
+    PASS_REGULAR_EXPRESSION "\"items\": 3[^0-9]"
+    FAIL_REGULAR_EXPRESSION "\"items\": [0-24-9]")
 
   # The .ipt import (mitcad#60): Mitcad's own test part (a cube and a
   # cylinder, inches, aluminium), saved and opened, and compared with a
@@ -3690,8 +3719,11 @@ endif()
 # Lofted Flange follow-ups (mitcad#2560): a hole cut through a press brake
 # rectangle-to-circle kept in its Flat Pattern, press brake folds as bends
 # of the rules' radius (blanks against the facets less their setbacks and
-# the bends' arcs, volumes t times the middle surface), bends refused where
-# folds meet in a point, a die formed transition on angled planes laid flat
+# the bends' arcs, volumes t times the middle surface), corner reliefs where
+# folds meet in a point (mitcad#2576: the rules' relief too small, refused
+# with the least size; 8 mm: the blank against the facets' and bends'
+# exact areas less the reliefs, worked out apart from the model), a die
+# formed transition on angled planes laid flat
 # by triangulation and refused without it.
 if(BUILD_TESTING)
   add_test(NAME cli.sheet_lofted_flange_cuts_bends COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/sheet_lofted_flange_cuts_bends.json")
@@ -3702,7 +3734,7 @@ endif()
 # opened in a copy: rib ends replaced by the rounding they stick out of merge
 # with it; To Next, up to the body and To Adjacent Faces name the part of
 # the profile without an end in words; the reporter's Join up to the body
-# builds (skipped without the design).
+# builds with its faces merged (mitcad#2623; skipped without the design).
 if(BUILD_TESTING)
   add_test(NAME cli.extrude_replace_reported
     COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
@@ -3716,7 +3748,9 @@ endif()
 # Move Face sliding a joined, tapered and chamfered round boss along its
 # plate (GitHub mitcad/Mitcad#714, mitcad#2543), farther than it is wide,
 # both ways along x: one body of the same volume, its faces by their
-# names; over the plate's edge it is refused with the reason in words.
+# names; partly over the plate's edge it overhangs it (mitcad#2632:
+# previewed, committed, recomputed), wholly past it it is refused with the
+# reason in words.
 if(BUILD_TESTING)
   add_test(NAME cli.move_face_boss_slides COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/move_face_boss_slides.json")
 endif()
@@ -3752,6 +3786,139 @@ if(BUILD_TESTING)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/move-face-reported-test.cmake")
   set_tests_properties(cli.move_face_reported PROPERTIES
     SKIP_REGULAR_EXPRESSION "move face reported: skipped" TIMEOUT 900)
+endif()
+
+# The CAM fixes of mitcad#2588 and mitcad#2591 on the reported designs of
+# GitHub mitcad/Mitcad#745 and #749 (mitcad#2592), found by their content ids
+# under MITCAD_MITCAD_REPORTED and opened through mitcad-cli mcp: a sketch
+# text refused as a Contour outline with Explode Text named, the exploded
+# letters engraved; the bull nose pocket's setups A to D (B and C's 5.5 mm
+# refused, C with 4 mm and a flat floor, A and D unchanged, D's moves the
+# reporter's program's) (skipped without the designs).
+if(BUILD_TESTING)
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME cli.cam_reported
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/cam-reported-test.py"
+              --cli "$<TARGET_FILE:mitcad-cli>"
+              --work "${CMAKE_CURRENT_BINARY_DIR}/cam-reported")
+    set_tests_properties(cli.cam_reported PROPERTIES TIMEOUT 900
+      ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
+      SKIP_REGULAR_EXPRESSION "cam reported: skipped")
+  endif()
+endif()
+
+# Gear Drive (mitcad#2608): a planetary set with its contact set made in one
+# step and driven by its carrier without contact, the sun and the planets
+# at the ratios its teeth give.
+if(BUILD_TESTING)
+  add_test(NAME cli.gear_drive
+    COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/gear_drive.json")
+  set_tests_properties(cli.gear_drive PROPERTIES TIMEOUT 600)
+endif()
+
+# Wood Joint (mitcad#2604): a dado (edited deeper), a tongue and groove, a
+# bridle, a box joint, a loose tenon and dowels on pairs of boards, the
+# holes the pieces grown by the clearance; refusals in words.
+if(BUILD_TESTING)
+  add_test(NAME cli.wood_joint COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/wood_joint.json")
+endif()
+
+# Offset Face on the outer wall of a hollow loft from a slot to a circle
+# (GitHub mitcad/Mitcad#723, mitcad#2546): the reported design rebuilt from
+# its features (a slot to a circle lofted with square ends and merged
+# tangent edges, shelled 2 mm with both ends removed), the outer wall moved
+# 2 mm out with Tangent Chain, previewed and committed.
+if(BUILD_TESTING)
+  add_test(NAME cli.offset_face_loft_slot_circle COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/offset_face_loft_slot_circle.json")
+endif()
+
+# Profile Boundary on the reported design of GitHub mitcad/Mitcad#712
+# (mitcad#2596, after mitcad#2551), found by its content id under
+# MITCAD_MITCAD_REPORTED and opened in copies through mitcad-cli mcp: the
+# four bosses' circles of Sketch3's automatic outline chosen, the 2 mm inset
+# has four holes and its Extrude, previewed and committed by mitcad-cli run,
+# leaves the footprints clear; saved and opened again the choice holds and
+# the holes follow a boss's diameter and place; two circles leave two
+# footprints clear; without the Offset the face-bounded area stays one
+# profile; without a choice saved Extrude profiles keep their areas
+# (skipped without the design).
+if(BUILD_TESTING)
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME cli.profile_boundary_reported
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/profile-boundary-reported-test.py"
+              --cli "$<TARGET_FILE:mitcad-cli>"
+              --work "${CMAKE_CURRENT_BINARY_DIR}/profile-boundary-reported")
+    set_tests_properties(cli.profile_boundary_reported PROPERTIES TIMEOUT 900
+      ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
+      SKIP_REGULAR_EXPRESSION "profile boundary reported: skipped")
+  endif()
+endif()
+
+# Sheet features on a Lofted Flange's sheet (mitcad#2575): on a press brake
+# rectangle-to-circle, a developed Sheet Cut through a facet, a notch at the
+# rectangle's edge and a straight Sheet Cut shown in its Flat Pattern (the
+# blank the facets less the cut-outs), a Flange and a Hem on straight edges
+# of flat facets (the blank plus the wall and the bend's arc), a cut on no
+# facet refused in words.
+if(BUILD_TESTING)
+  add_test(NAME cli.sheet_lofted_flange_sheet_features COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/sheet_lofted_flange_sheet_features.json")
+endif()
+
+# Whole circular rims rounded with a radius that closes a cap to a pole or
+# takes every face away (mitcad#2582, GitHub mitcad/Mitcad#741, port patch
+# 2582), GitHub #741's three designs made from commands: a cylinder's rim
+# rounded into a hemisphere, its other end's face into a ball, an annulus's
+# four rims into a torus; each at its size, without a note.
+if(BUILD_TESTING)
+  add_test(NAME cli.fillet_whole_rims COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/fillet_whole_rims.json")
+  # The same on the reporter's three designs, found by their content ids
+  # under MITCAD_MITCAD_REPORTED (skipped without them).
+  add_test(NAME cli.fillet_whole_rims_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fillet-whole-rims-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/fillet-whole-rims-reported-test.cmake")
+  set_tests_properties(cli.fillet_whole_rims_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "fillet whole rims reported: skipped" TIMEOUT 600)
+endif()
+
+# Circular Pattern of bodies with Join (mitcad#2617): four quarter blocks
+# about Z one body, previewed and committed, New Body four bodies again,
+# copies that do not touch kept; a flat sheet sector one sheet with its
+# Flat Pattern; sheets whose copies do not touch or overlap refused.
+if(BUILD_TESTING)
+  add_test(NAME cli.circular_pattern_join
+    COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/circular_pattern_join.json")
+  set_tests_properties(cli.circular_pattern_join PROPERTIES TIMEOUT 300)
+endif()
+
+# GitHub mitcad/Mitcad#765's subassembly drawing (mitcad#2539, also #729)
+# under MITCAD_MITCAD_REPORTED: its front view at 1:1, 1:2, 1:5 and 1:10, as
+# set and with hidden edges, written with the drawing's stroke trace; the
+# shafts' outline lines left of the left upright are drawn seen without a
+# gap (they lost one or both at 1:2 and 1:5), hidden and tangent edges as the
+# view sets them (skipped without the design).
+if(BUILD_TESTING)
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME cli.drawing_shaft_outlines_reported
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/drawing-shaft-outlines-reported-test.py"
+              --cli "$<TARGET_FILE:mitcad-cli>"
+              --work "${CMAKE_CURRENT_BINARY_DIR}/drawing-shaft-outlines-reported")
+    set_tests_properties(cli.drawing_shaft_outlines_reported PROPERTIES TIMEOUT 900
+      ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
+      SKIP_REGULAR_EXPRESSION "drawing shaft outlines reported: skipped")
+  endif()
+endif()
+
+# Bead (mitcad#2645): a straight round bead, an arc trapezoid bead and an
+# L-shaped U bead on a plate, each a thickness thick across (its crown and
+# the surface under it measured), their volumes, a thickness edit, the Flat
+# Pattern's beads, a flange that rebuilds the sheet and a cut refused.
+if(BUILD_TESTING)
+  add_test(NAME cli.sheet_bead COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/sheet_bead.json")
 endif()
 
 # Every mitcad-cli test (mitcad-cli loads Qt's DLLs, mitcad-cli render): on

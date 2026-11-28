@@ -14,7 +14,7 @@ use super::prelude::*;
 use mitcad_model::Document;
 use mitcad_model::expr::Expr;
 use mitcad_model::features::drives::{self, BeltDriveOptions, Catalogue, Fit, GearPairOptions};
-use mitcad_model::features::gear::{GearDef, GearKind, MeshWith};
+use mitcad_model::features::gear::{GearDef, GearKind, MeshWith, ToothForm};
 use mitcad_model::features::pulley::{self, PulleyDef};
 use mitcad_model::features::pulley_profile::BeltProfile;
 use mitcad_model::features::{FeatureDef, PlaceAt, Placed, Seat, ValueInput};
@@ -92,6 +92,9 @@ pub(super) struct GearPairQuery {
     max_helix_angle: Option<f64>,
     #[serde(default)]
     limit: Option<usize>,
+    /// Cycloidal teeth (mitcad#2607); involute without it.
+    #[serde(default)]
+    tooth_form: ToothForm,
 }
 
 #[derive(Debug, Deserialize)]
@@ -209,6 +212,19 @@ impl<K: Kernel> DrivesOps<K> for Document<K> {
                 )));
             }
         };
+        // Cycloidal pairs (mitcad#2607): their rolling circles shape the
+        // teeth, not a pressure angle.
+        let cycloid = query.tooth_form == ToothForm::Cycloid;
+        if cycloid && query.pressure_angle.is_some() {
+            return Err(ApiError(
+                "a pair with cycloidal teeth has no pressure angle".to_owned(),
+            ));
+        }
+        if cycloid && query.max_profile_shift.is_some() {
+            return Err(ApiError(
+                "a pair with cycloidal teeth has no profile shift".to_owned(),
+            ));
+        }
         let options = GearPairOptions {
             ratio: query.ratio,
             spur,
@@ -224,6 +240,7 @@ impl<K: Kernel> DrivesOps<K> for Document<K> {
             max_profile_shift: or(query.max_profile_shift, defaults.max_profile_shift),
             max_helix_angle: or(query.max_helix_angle, defaults.max_helix_angle),
             limit: query.limit.unwrap_or(defaults.limit),
+            cycloid,
         };
         let pairs = drives::gear_pairs(distance, &options).map_err(ApiError)?;
         let candidates: Vec<Value> = pairs
@@ -239,8 +256,12 @@ impl<K: Kernel> DrivesOps<K> for Document<K> {
                         "kind": kind,
                         "module": pair.module,
                         "teeth": pair.teeth[i],
-                        "pressure_angle": options.pressure_angle,
                     });
+                    if cycloid {
+                        gear["tooth_form"] = json!(ToothForm::Cycloid);
+                    } else {
+                        gear["pressure_angle"] = json!(options.pressure_angle);
+                    }
                     // A shift of a fit's own or one that frees an undercut.
                     if pair.profile_shift[i] != 0.0 {
                         gear["profile_shift"] = json!(pair.profile_shift[i]);
@@ -694,6 +715,41 @@ mod tests {
 
     fn command(doc: &mut Document<MockKernel>, value: Value) -> Value {
         serde_json::from_str(&doc.command(&value.to_string()).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn cycloid_gear_pairs_fit_exactly_or_by_a_helix() {
+        let doc = Document::new(MockKernel::default());
+        let result = query(
+            &doc,
+            json!({"query": "gear_pair", "ratio": 3, "tooth_form": "cycloid",
+                   "first": {"face": "xy", "offset1": 0, "offset2": 0},
+                   "second": {"face": "xy", "offset1": 40, "offset2": 0}}),
+        )
+        .unwrap();
+        let candidates = result["candidates"].as_array().unwrap();
+        assert!(!candidates.is_empty(), "{result}");
+        // No profile shifts: the exact pairs, the fewest teeth first (16
+        // and 48 of 1.25 mm), then helix fits.
+        for c in candidates {
+            assert_ne!(c["fit"], json!("profile_shift"), "{c}");
+            assert!(c.get("profile_shift").is_none(), "{c}");
+            assert_eq!(c["first"]["tooth_form"], json!("cycloid"), "{c}");
+            assert!(c["first"].get("pressure_angle").is_none(), "{c}");
+        }
+        let first = &candidates[0];
+        assert_eq!(first["fit"], json!("exact"), "{result}");
+        assert_eq!(first["teeth"], json!([16.0, 48.0]), "{result}");
+        assert_eq!(first["module"], json!(1.25), "{result}");
+        // A pressure angle means nothing to them.
+        let error = query(
+            &doc,
+            json!({"query": "gear_pair", "ratio": 3, "tooth_form": "cycloid", "pressure_angle": 0.3,
+                   "first": {"axis": "z"},
+                   "second": {"face": "xy", "offset1": 40, "offset2": 0}}),
+        )
+        .unwrap_err();
+        assert!(error.contains("no pressure angle"), "{error}");
     }
 
     #[test]

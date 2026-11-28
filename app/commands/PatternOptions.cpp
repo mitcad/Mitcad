@@ -96,4 +96,20 @@ void choosePreselectedPatternType(CommandState& state) {
   }
 }
 
+QString newBodyOperation() { return QStringLiteral("new_body"); }
+
+QString joinOperation() { return QStringLiteral("join"); }
+
+QString patternOperationOf(const QJsonObject& def) {
+  return def.value(QStringLiteral("combine")).toBool() ? joinOperation() : newBodyOperation();
+}
+
+void setPatternOperation(QJsonObject& def, const QString& objectType, const QString& operation) {
+  if (objectType == QStringLiteral("bodies") && operation == joinOperation()) {
+    def.insert(QStringLiteral("combine"), true);
+  } else {
+    def.remove(QStringLiteral("combine"));
+  }
+}
+
 } // namespace mitcad::cmd

@@ -81,7 +81,7 @@ param(
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
 Ui-Init $App $Out $QtBin @{
-  'sketch.create' = 'F7'; 'inspect.properties' = 'F8'; 'file.export' = 'F9'; 'file.import' = 'F11'
+  'sketch.create' = 'F7'; 'inspect.properties' = 'F8'; 'file.export' = 'Shift+F12'; 'file.import' = 'F11'
   'file.save_to_project' = 'F12'; 'make.print3d' = 'Shift+F9'; 'file.project_settings' = 'Shift+F11'
   'solid.helix' = 'Shift+F7' } -StepPause 0
 # Parts built over the origin, beside which an origin plane or axis is
@@ -268,14 +268,14 @@ Ui-Step 'close the dialog (Esc)'         { Ui-FocusDialog '^Properties$'; Ui-Key
 Write-Host '--- Export and import STEP'
 $step = Join-Path $work 'block.step'
 Ui-Mark
-Ui-Step 'export (F9)'                    { Ui-Key 'F9' }
+Ui-Step 'export (Shift+F12)'                    { Ui-Key 'Shift+F12' }
 Ui-Step 'type the path'                  { Type-Into-Dialog '^Export$' $step }
 Ui-ExpectNew "Exported ${step}: step, 1 body" 'the body written as STEP'
 if (-not (Test-Path $step)) { Ui-Fail 'no STEP file' }
 Write-Host '--- Export a web page (mitcad#423)'
 $html = Join-Path $work 'block.html'
 Ui-Mark
-Ui-Step 'export (F9)'                    { Ui-Key 'F9' }
+Ui-Step 'export (Shift+F12)'                    { Ui-Key 'Shift+F12' }
 Ui-Step 'type the path'                  { Type-Into-Dialog '^Export$' $html }
 Ui-ExpectNew "Exported ${html}: html, 1 body(ies), " 'the body written as a web page'
 if (-not (Test-Path $html)) { Ui-Fail 'no web page' }

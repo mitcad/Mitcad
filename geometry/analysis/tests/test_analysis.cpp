@@ -8,8 +8,10 @@
 #include "mitcad/analysis/properties.hpp"
 #include "mitcad/analysis/section.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -1355,6 +1357,97 @@ void test_compare() {
   CHECK(!plausible_differences(12000.0, 1e-5, area, 1e-4));
 }
 
+// compare's distances from points to a surface, each face's and edge's
+// projection set up once for all the points (mitcad#2595), against
+// BRepExtrema_DistShapeShape from each point on its own: B-spline faces (a
+// box with a rounded edge, converted to B-splines), faces whose surfaces
+// run on past them (a cylinder cut at a slant, converted too) and a plate
+// with a hole bounded by a cubic of 40 spans, from points around, inside
+// and on them.
+void test_surface_distances() {
+  std::vector<TopoDS_Shape> shapes;
+  const TopoDS_Shape block = box(0, 0, 0, 10, 20, 30);
+  BRepFilletAPI_MakeFillet fillet(block);
+  fillet.Add(2.0, TopoDS::Edge(TopExp_Explorer(block, TopAbs_EDGE).Current()));
+  shapes.push_back(BRepBuilderAPI_NurbsConvert(fillet.Shape()).Shape());
+
+  gp_Trsf tilt;
+  tilt.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 1, 0)), -std::atan(0.5));
+  gp_Trsf lift;
+  lift.SetTranslation(gp_Vec(0, 0, 2));
+  const TopoDS_Shape above = moved(box(-10, -10, 0, 20, 20, 10), lift * tilt);
+  shapes.push_back(
+      BRepBuilderAPI_NurbsConvert(BRepAlgoAPI_Cut(BRepPrimAPI_MakeCylinder(2.0, 6.0).Shape(), above).Shape())
+          .Shape());
+
+  const int count = 40;
+  occ::handle<NCollection_HArray1<gp_Pnt>> around = new NCollection_HArray1<gp_Pnt>(1, count);
+  for (int i = 0; i < count; ++i) {
+    const double angle = 2.0 * kPi * i / count;
+    const double r = 3.0 + (i % 2 == 0 ? 0.1 : -0.1);
+    around->SetValue(i + 1, gp_Pnt(5.0 + r * std::cos(angle), 5.0 + r * std::sin(angle), 0.0));
+  }
+  GeomAPI_Interpolate interpolate(around, true, 1e-9);
+  interpolate.Perform();
+  CHECK(interpolate.IsDone());
+  BRepBuilderAPI_MakeFace plate(gp_Pln(gp::XOY()),
+                                BRepBuilderAPI_MakePolygon(gp_Pnt(0, 0, 0), gp_Pnt(10, 0, 0),
+                                                           gp_Pnt(10, 10, 0), gp_Pnt(0, 10, 0), true)
+                                    .Wire());
+  plate.Add(TopoDS::Wire(
+      BRepBuilderAPI_MakeWire(BRepBuilderAPI_MakeEdge(interpolate.Curve()).Edge()).Wire().Reversed()));
+  CHECK(plate.IsDone());
+  shapes.push_back(plate.Face());
+
+  int compared = 0;
+  for (const TopoDS_Shape& shape : shapes) {
+    // Points on a grid round the shape (inside a solid too: a sample of
+    // one body lies inside the other where it bulges less) and on it.
+    std::vector<gp_Pnt> points;
+    const mitcad::analysis::Bounds b = mitcad::analysis::bounds(shape);
+    CHECK(!b.empty);
+    const int steps = 6;
+    const auto at = [&](double lo, double hi, int n) {
+      return lo - 2.0 + (hi - lo + 4.0) * n / (steps - 1);
+    };
+    for (int i = 0; i < steps; ++i) {
+      for (int j = 0; j < steps; ++j) {
+        for (int k = 0; k < steps; ++k) {
+          points.emplace_back(at(b.min.x, b.max.x, i), at(b.min.y, b.max.y, j), at(b.min.z, b.max.z, k));
+        }
+      }
+    }
+    for (TopExp_Explorer it(shape, TopAbs_EDGE); it.More(); it.Next()) {
+      const BRepAdaptor_Curve curve(TopoDS::Edge(it.Current()));
+      points.push_back(curve.Value(0.3 * curve.FirstParameter() + 0.7 * curve.LastParameter()));
+    }
+    BRep_Builder builder;
+    TopoDS_Compound faces;
+    builder.MakeCompound(faces);
+    for (TopExp_Explorer it(shape, TopAbs_FACE); it.More(); it.Next()) {
+      builder.Add(faces, it.Current());
+    }
+    const std::vector<std::optional<double>> found = mitcad::analysis::surface_distances(points, shape);
+    CHECK(found.size() == points.size());
+    BRepExtrema_DistShapeShape reference;
+    reference.LoadS2(faces);
+    for (std::size_t n = 0; n < points.size() && n < found.size(); ++n) {
+      reference.LoadS1(BRepBuilderAPI_MakeVertex(points[n]).Vertex());
+      CHECK(reference.Perform() && reference.IsDone());
+      CHECK(found[n].has_value() && near(*found[n], reference.Value(), 1e-6));
+      ++compared;
+    }
+  }
+  CHECK(compared > 3 * 216);
+
+  // A body against itself with its faces as B-splines: the same surface.
+  mitcad::analysis::CompareOptions close;
+  close.booleans_above = 1e-3;
+  const auto converted =
+      mitcad::analysis::compare(shapes[0], BRepBuilderAPI_NurbsConvert(fillet.Shape()).Shape(), close);
+  CHECK(converted.max_deviation < 1e-7 && converted.a_to_b.samples > 1000 && converted.b_to_a.samples > 1000);
+}
+
 } // namespace
 
 MITCAD_BUNDLED_TEST(geometry_analysis) {
@@ -1378,6 +1471,7 @@ MITCAD_BUNDLED_TEST(geometry_analysis) {
     test_clip_attempts();
     test_mesh_sections();
     test_compare();
+    test_surface_distances();
   } catch (const std::exception& error) {
     std::fprintf(stderr, "unexpected exception: %s\n", error.what());
     return 1;

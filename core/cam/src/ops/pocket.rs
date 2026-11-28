@@ -5,13 +5,17 @@
 //! at most the stepover. The last loop is the wall's (the tool radius
 //! plus the stock to leave from it).
 //!
-//! Coverage: two loops `stepover` apart leave nothing between them while
-//! `stepover` is at most the tool's diameter; at a corner of angle `a`
-//! the loops are `stepover / sin(a / 2)` apart along its bisector, so the
-//! default stepover (40 % of the diameter) clears corners down to about
-//! 47 degrees. When the next loop at a full stepover vanishes, loops at
-//! half the radius follow until nothing is left farther than that from
-//! the last one: the middle is cleared too.
+//! Coverage: two loops `stepover` apart leave a flat floor between them
+//! while `stepover` is at most the width the tool's end cuts flat (its
+//! diameter for a flat end mill, the diameter less twice the corner
+//! radius for a bull nose: wider loops leave ridges up to the corner
+//! radius high, mitcad#2591); at a corner of angle `a` the loops are
+//! `stepover / sin(a / 2)` apart along its bisector, so the default
+//! stepover (40 % of that width) clears corners down to about 47 degrees.
+//! When the next loop at a full stepover vanishes, loops at a quarter of
+//! that width follow until nothing is left farther than that from the
+//! last one: the middle is cleared too. The walls and islands keep the
+//! tool's outside radius (and the stock to leave) whatever its end.
 
 use cavalier_contours::polyline::{PlineSource, Polyline};
 use cavalier_contours::shape_algorithms::{Shape, ShapeOffsetOptions};
@@ -24,15 +28,15 @@ use super::path::{self, Path};
 use super::{Depths, Direction, Heights, check_mill};
 use crate::CamError;
 use crate::geom::{Contour, POS_EPS, Region};
-use crate::tool::{Cutting, Tool};
+use crate::tool::{Cutting, Tool, ToolShape, fmt_mm};
 use crate::toolpath::{PathBuilder, Toolpath};
 
 /// A pocket operation.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PocketOp {
     pub region: Region,
-    /// The distance between loops (mm); at most the tool's diameter.
-    /// `None`: 40 % of the diameter.
+    /// The distance between loops (mm); at most the width the tool's end
+    /// cuts flat ([`Tool::flat_width`]). `None`: 40 % of that width.
     #[serde(default)]
     pub stepover: Option<f64>,
     #[serde(default)]
@@ -53,9 +57,36 @@ pub struct PocketOp {
 }
 
 impl PocketOp {
+    /// The distance between the loops of the pocket: its stepover, or 40 %
+    /// of the width the tool's end cuts flat.
     pub fn stepover_for(&self, tool: &Tool) -> f64 {
-        self.stepover.unwrap_or(tool.diameter * 0.4)
+        self.stepover_across(tool.flat_width())
     }
+
+    /// The distance between loops spaced for a floor `width` wide under
+    /// the tool ([`Room::width`]).
+    fn stepover_across(&self, width: f64) -> f64 {
+        self.stepover.unwrap_or(width * 0.4)
+    }
+}
+
+/// A tool whose end has no flat (a bull nose whose corner radius is its
+/// whole radius) cannot clear a pocket's floor, as a ball end mill cannot
+/// (mitcad#2591); the others without a flat refused in [`check_mill`]'s
+/// words.
+fn check_flat_end(tool: &Tool) -> Result<(), CamError> {
+    // A corner radius beyond the radius is the tool's own error.
+    tool.validate().map_err(CamError::new)?;
+    if tool.flat_width() > 1e-6 {
+        return Ok(());
+    }
+    let message = if matches!(tool.shape, ToolShape::BullNose { .. }) {
+        "The operation needs an end mill with a flat end; this bull nose's corner radius is its \
+         whole radius, so its end is round like a ball end mill's."
+    } else {
+        "The operation needs a flat or bull nose end mill; this tool's end is not flat."
+    };
+    Err(CamError::new(message))
 }
 
 /// Where a pocket's tool center may go: inside `region` and at least
@@ -68,6 +99,10 @@ impl PocketOp {
 pub(crate) struct Room<'a> {
     pub region: &'a Region,
     pub clear: f64,
+    /// The width of floor the tool cuts flat, which spaces the loops: a
+    /// pocket's is the tool's flat width (mitcad#2591); 3D roughing, which
+    /// takes the tool as its cylinder, gives the diameter.
+    pub width: f64,
 }
 
 impl<'a> Room<'a> {
@@ -77,6 +112,7 @@ impl<'a> Room<'a> {
         Room {
             region: &op.region,
             clear: tool.radius() + op.stock_to_leave,
+            width: tool.flat_width(),
         }
     }
 }
@@ -93,6 +129,7 @@ pub struct PocketLoop {
 /// The loops of a pocket at one depth in cutting order (the innermost
 /// first), each oriented for the operation's direction.
 pub fn pocket_loops(op: &PocketOp, tool: &Tool) -> Result<Vec<PocketLoop>, CamError> {
+    check_flat_end(tool)?;
     loops_in(op, tool, Room::of(op, tool))
 }
 
@@ -100,7 +137,7 @@ pub fn pocket_loops(op: &PocketOp, tool: &Tool) -> Result<Vec<PocketLoop>, CamEr
 fn loops_in(op: &PocketOp, tool: &Tool, room: Room) -> Result<Vec<PocketLoop>, CamError> {
     op.region.validate().map_err(CamError::new)?;
     room.region.validate().map_err(CamError::new)?;
-    let stepover = op.stepover_for(tool);
+    let stepover = op.stepover_across(room.width);
     if !(stepover.is_finite() && stepover > 0.0) {
         return Err(CamError::new("The stepover must be more than zero."));
     }
@@ -108,6 +145,15 @@ fn loops_in(op: &PocketOp, tool: &Tool, room: Room) -> Result<Vec<PocketLoop>, C
         return Err(CamError::new(
             "The stepover must not be more than the tool's diameter.",
         ));
+    }
+    if stepover > room.width + 1e-9 {
+        // Loops farther apart than the flat of a bull nose's end leave
+        // ridges on the floor between them (mitcad#2591).
+        return Err(CamError::new(format!(
+            "The stepover must not be more than the flat of the tool's end, {} mm (its diameter \
+             less twice its corner radius): wider passes leave ridges on the floor between them.",
+            fmt_mm(room.width)
+        )));
     }
     if !(op.stock_to_leave.is_finite() && op.stock_to_leave >= 0.0) {
         return Err(CamError::new("The stock to leave must be zero or more."));
@@ -117,7 +163,9 @@ fn loops_in(op: &PocketOp, tool: &Tool, room: Room) -> Result<Vec<PocketLoop>, C
     let first = room.clear;
     let mut rings: Vec<(f64, Shape<f64>)> = Vec::new();
     let mut d = first;
-    let small = tool.radius() * 0.5;
+    // A quarter of the flat width: what is left round the middle is within
+    // the flat of the last loop's end.
+    let small = room.width * 0.25;
     loop {
         let s = shape.parallel_offset(d, &options);
         if is_empty(&s) {
@@ -129,8 +177,9 @@ fn loops_in(op: &PocketOp, tool: &Tool, room: Room) -> Result<Vec<PocketLoop>, C
     if rings.is_empty() {
         return Err(CamError::new("The tool does not fit into the pocket."));
     }
-    // The middle: loops at half the radius until nothing is left beyond
-    // the reach of the last one.
+    // The middle: loops at a quarter of the flat width (half the radius
+    // of a flat end mill) until nothing is left beyond the reach of the
+    // last one.
     let mut last = rings.last().expect("a ring").0;
     loop {
         let s = shape.parallel_offset(last + small, &options);
@@ -231,6 +280,7 @@ pub(crate) fn pocket_fits(region: &Region, wall: f64, c: [f64; 2], radius: f64) 
 
 /// The toolpath of a pocket operation.
 pub fn pocket(op: &PocketOp, tool: &Tool) -> Result<Toolpath, CamError> {
+    check_flat_end(tool)?;
     pocket_in(op, tool, Room::of(op, tool))
 }
 
@@ -245,7 +295,7 @@ pub(crate) fn pocket_in(op: &PocketOp, tool: &Tool, room: Room) -> Result<Toolpa
     op.entry.validate()?;
     let levels = op.depths.levels()?;
     let loops = loops_in(op, tool, room)?;
-    let stepover = op.stepover_for(tool);
+    let stepover = op.stepover_across(room.width);
     let wall = room.clear;
     let allowed = region_shape(room.region)
         .parallel_offset((wall - 1e-4).max(0.0), &ShapeOffsetOptions::default());
@@ -681,5 +731,176 @@ pub(crate) mod tests {
             }
             at = m.to();
         }
+    }
+
+    /// The farthest a grid point of the region more than `wall` from its
+    /// walls is from the tool's center at the floor (0.5 mm grid).
+    fn farthest_from_floor(region: &Region, wall: f64, p: &Toolpath, z: f64) -> f64 {
+        let pts = floor_points(p, z);
+        let inner = region_shape(region).parallel_offset(wall, &ShapeOffsetOptions::default());
+        let inside = |q: [f64; 2]| {
+            inner
+                .ccw_plines
+                .iter()
+                .any(|o| Contour::from_pline(&o.polyline).contains(q))
+                && !inner
+                    .cw_plines
+                    .iter()
+                    .any(|h| Contour::from_pline(&h.polyline).contains(q))
+        };
+        let (min, max) = p.bounds().unwrap();
+        let mut farthest: f64 = 0.0;
+        let mut checked = 0;
+        let mut x = min[0];
+        while x <= max[0] {
+            let mut y = min[1];
+            while y <= max[1] {
+                if inside([x, y]) {
+                    checked += 1;
+                    let d = pts
+                        .iter()
+                        .map(|q| (q[0] - x).hypot(q[1] - y))
+                        .fold(f64::INFINITY, f64::min);
+                    farthest = farthest.max(d);
+                }
+                y += 0.5;
+            }
+            x += 0.5;
+        }
+        assert!(checked > 0);
+        farthest
+    }
+
+    /// The reporter's round pocket of mitcad#2591 (GitHub #749): 34 mm
+    /// across, 3 mm deep.
+    fn round_pocket() -> (Region, PocketOp) {
+        let region = Region::new(Contour::circle([30.0, 20.0], 17.0), vec![]);
+        let mut o = op(region.clone());
+        o.depths = Depths {
+            top: 0.0,
+            bottom: -3.0,
+            step_down: 3.0,
+        };
+        (region, o)
+    }
+
+    fn bull_nose(diameter: f64, corner_radius: f64) -> Tool {
+        let mut t = Tool::flat_end_mill(3, diameter);
+        t.shape = crate::tool::ToolShape::BullNose { corner_radius };
+        t
+    }
+
+    /// A 6 mm bull nose with a 1 mm corner radius cuts a flat floor 4 mm
+    /// wide (mitcad#2591): its default stepover is 40 % of that, a 4 mm
+    /// stepover is taken, and with both the flat of its end reaches every
+    /// point of the floor, between the loops and round the middle, while
+    /// the walls keep its outside radius.
+    #[test]
+    fn a_bull_nose_spaces_the_loops_for_its_flat_and_clears_the_floor_flat() {
+        let tool = bull_nose(6.0, 1.0);
+        let (region, mut o) = round_pocket();
+        assert!((o.stepover_for(&tool) - 1.6).abs() < 1e-12);
+        for stepover in [None, Some(4.0)] {
+            o.stepover = stepover;
+            let p = pocket(&o, &tool).unwrap();
+            let far = farthest_from_floor(&region, tool.radius(), &p, -3.0);
+            // Within the flat's 2 mm, allowing for the sampling of the arcs
+            // (0.05 mm past the flat would be a ridge of 0.001 mm).
+            assert!(
+                far <= 2.0 + 0.05,
+                "{stepover:?}: a point {far} mm from the tool's center"
+            );
+            assert_no_gouge(&region, 3.0, &p, 0.0);
+            let loops = pocket_loops(&o, &tool).unwrap();
+            assert!((loops.last().unwrap().offset - 3.0).abs() < 1e-12);
+        }
+        // The walls keep the outside radius and the stock to leave.
+        o.stock_to_leave = 0.5;
+        let loops = pocket_loops(&o, &tool).unwrap();
+        assert!((loops.last().unwrap().offset - 3.5).abs() < 1e-12);
+    }
+
+    /// The reported case: 5.5 mm between the loops of that bull nose would
+    /// leave rings about 0.34 mm high on the floor; the stepover is refused
+    /// in words that give the flat's width.
+    #[test]
+    fn a_stepover_wider_than_a_bull_noses_flat_is_refused() {
+        let tool = bull_nose(6.0, 1.0);
+        let (region, mut o) = round_pocket();
+        o.stepover = Some(5.5);
+        let e = pocket(&o, &tool).unwrap_err();
+        assert_eq!(
+            e.message,
+            "The stepover must not be more than the flat of the tool's end, 4 mm (its diameter \
+             less twice its corner radius): wider passes leave ridges on the floor between them."
+        );
+        assert_eq!(pocket_loops(&o, &tool).unwrap_err(), e);
+        // Spaced as if the tool were flat across its diameter (as before),
+        // the loops are at radii 14, 8.5, 3 and 1.5, and halfway between
+        // two of them the floor is 2.75 mm from both: beyond the flat.
+        let room = Room {
+            region: &region,
+            clear: tool.radius(),
+            width: tool.diameter,
+        };
+        let p = pocket_in(&o, &tool, room).unwrap();
+        let far = farthest_from_floor(&region, tool.radius(), &p, -3.0);
+        assert!(far > 2.0 + 0.25, "the old spacing leaves {far} mm");
+    }
+
+    /// A bull nose whose corner radius is its whole radius is a ball end
+    /// mill: neither clears a pocket (mitcad#2591), offset or adaptive.
+    #[test]
+    fn a_bull_nose_without_a_flat_is_refused_like_a_ball_end_mill() {
+        let (_, mut o) = round_pocket();
+        let mut ball = Tool::flat_end_mill(2, 6.0);
+        ball.shape = crate::tool::ToolShape::BallEndMill;
+        let round = bull_nose(6.0, 3.0);
+        for adaptive in [None, Some(Adaptive::default())] {
+            o.adaptive = adaptive;
+            assert!(pocket(&o, &ball).is_err(), "{adaptive:?}");
+            let e = pocket(&o, &round).unwrap_err();
+            assert!(
+                e.message.contains("needs an end mill with a flat end"),
+                "{e}"
+            );
+        }
+        o.adaptive = None;
+        assert!(pocket_loops(&o, &ball).is_err());
+        assert!(pocket_loops(&o, &round).is_err());
+        // A corner radius beyond the radius is the tool's own error.
+        let e = pocket(&o, &bull_nose(6.0, 4.0)).unwrap_err();
+        assert!(
+            e.message
+                .contains("corner radius must be within its radius"),
+            "{e}"
+        );
+    }
+
+    /// The flat end mill keeps its default (40 % of the diameter), takes
+    /// a stepover up to its diameter and keeps its radius from the walls.
+    #[test]
+    fn a_flat_end_mill_keeps_its_stepover_and_wall() {
+        let tool = Tool::flat_end_mill(1, 6.0);
+        let (region, mut o) = round_pocket();
+        assert!((o.stepover_for(&tool) - 2.4).abs() < 1e-12);
+        o.stepover = Some(5.5);
+        let p = pocket(&o, &tool).unwrap();
+        assert_cleared(&region, &tool, &p, -3.0);
+        assert_no_gouge(&region, 3.0, &p, 0.0);
+        let loops = pocket_loops(&o, &tool).unwrap();
+        assert!((loops.last().unwrap().offset - 3.0).abs() < 1e-12);
+        let offsets: Vec<f64> = loops.iter().map(|l| l.offset).collect();
+        // The loops of the report's setup D: radii 1.5, 3, 8.5 and 14.
+        assert_eq!(offsets.len(), 4, "{offsets:?}");
+        for (got, want) in offsets.iter().zip([15.5, 14.0, 8.5, 3.0]) {
+            assert!((got - want).abs() < 1e-9, "{offsets:?}");
+        }
+        o.stepover = Some(6.5);
+        let e = pocket(&o, &tool).unwrap_err();
+        assert_eq!(
+            e.message,
+            "The stepover must not be more than the tool's diameter."
+        );
     }
 }

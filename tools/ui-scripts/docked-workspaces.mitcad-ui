@@ -60,7 +60,7 @@ wait-idle
 expect-ever '^Menu bar hidden: Docked$' 30
 expect-ever '^Menu bar button at ' 30
 expect-ever '^Projects panel at the start: hidden [(]no choice yet in this layout[)]$' 30
-expect-ever '^Ribbon workspace: DESIGN [(]tabs SOLID, SURFACE, SHEET METAL, BUILD, MANAGE[)]$' 30
+expect-ever '^Ribbon workspace: DESIGN [(]tabs SOLID, SURFACE, SHEET PARTS, BUILD, MANAGE[)]$' 30
 expect-ever '^Ribbon workspace at ' 30
 expect-ever '^Ribbon tab START at ' 30
 expect-ever '^Ribbon tab SOLID at ' 30
@@ -156,7 +156,7 @@ key Return
 wait-log '^Ribbon workspace chosen: DESIGN$'
 wait-log '^Workspace RENDER left: the rendered view off$'
 wait-log '^Render workspace closed$' 30
-wait-log '^Ribbon workspace: DESIGN [(]tabs SOLID, SURFACE, SHEET METAL, BUILD, MANAGE[)]$'
+wait-log '^Ribbon workspace: DESIGN [(]tabs SOLID, SURFACE, SHEET PARTS, BUILD, MANAGE[)]$'
 wait-idle
 wait-log '^Ribbon tab SOLID at '
 wait-log '^Ribbon tab MAKE_PRINT out of sight$'

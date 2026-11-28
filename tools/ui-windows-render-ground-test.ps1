@@ -19,7 +19,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{ 'view.rendered' = 'F8'; 'view.orthographic' = 'F9'; 'view.perspective' = 'F11';
+Ui-Init $App $Out $QtBin @{ 'view.rendered' = 'F8'; 'view.orthographic' = 'F3'; 'view.perspective' = 'F11';
   'view.iso' = 'F12' } -StepPause 0
 # On the CPU, few samples: the test checks what the frames cover.
 Add-Content -Encoding ascii (Join-Path $script:UiSettings 'Mitcad\Mitcad.ini') @('[render]', 'device=cpu')
@@ -133,7 +133,7 @@ Ui-StartApp 'render-ground' @('--open', $design)
 Ui-ExpectLog 'box.mitcad' 'the box opened'
 Ui-Step 'fit (F6)'                       { Ui-Key 'F6' }
 
-foreach ($projection in @(@{ Name = 'Orthographic'; Key = 'F9' }, @{ Name = 'Perspective'; Key = 'F11' })) {
+foreach ($projection in @(@{ Name = 'Orthographic'; Key = 'F3' }, @{ Name = 'Perspective'; Key = 'F11' })) {
   $name = $projection.Name
   Write-Host "--- ${name}: under the ground and back"
   Ui-Step $name                          { Ui-Key $projection.Key }

@@ -48,7 +48,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{ 'solid.offset_face' = 'F7'; 'make.print3d' = 'F8'; 'inspect.print_analysis' = 'F9' } -StepPause 0
+Ui-Init $App $Out $QtBin @{ 'solid.offset_face' = 'F7'; 'make.print3d' = 'F8'; 'inspect.print_analysis' = 'F12' } -StepPause 0
 if (-not $Cli) {
   $Cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
     ForEach-Object { Join-Path (Split-Path $script:UiApp) $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
@@ -233,7 +233,7 @@ Write-Host 'ok   the 3MF file went to the slicer'
 
 Write-Host '--- 5. Print Analysis starts from it'
 Ui-Mark
-Ui-Step 'print analysis (F9)'            { Ui-Key 'F9' }
+Ui-Step 'print analysis (F12)'            { Ui-Key 'F12' }
 Ui-ExpectNew 'Print Analysis bed face: F1.b0/F1:top' 'the analysis starts with the top as its bed face'
 Ui-Step 'cancel it (Esc)'                { Ui-Key 'Escape' }
 Ui-StopApp

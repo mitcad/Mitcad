@@ -23,6 +23,10 @@ namespace {
 // the documented two-byte-aligned device-state message.
 constexpr std::uint32_t kDeviceStateMessage = 0x33645352; // '3dSR'
 constexpr std::uint32_t kReadDeviceId = 0x33646964;       // '3did'
+// The client takes the device over: the driver passes its buttons to
+// MitCad and runs no assignment of its own for them, so a labeled key
+// (a QuickView key, Rotation Toggle) has one owner and acts once
+// (mitcad#2642).
 constexpr std::uint16_t kTakeOverAssignments = 1;
 constexpr std::uint32_t kAxesAndButtons = 0x3fff;
 constexpr std::uint16_t kButtonEvent = 2;

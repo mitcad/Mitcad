@@ -41,6 +41,17 @@ public:
                         CefRefPtr<CefV8Context> context) override {
     const auto prefix = m_prefixes.find(browser->GetIdentifier());
     const std::string url = frame->GetURL().ToString();
+    if (prefix != m_prefixes.end()) {
+      // A tutorial's browser, any of its frames (mitcad#2615): no WebRTC,
+      // which reaches addresses outside the request filter (STUN and TURN
+      // servers), removed before the page's own scripts run.
+      CefRefPtr<CefV8Value> global = context->GetGlobal();
+      for (const char* name : mitcad::cef::kTutorialRemovedGlobals) {
+        if (global->HasValue(name)) {
+          global->DeleteValue(name);
+        }
+      }
+    }
     if (!m_router || prefix == m_prefixes.end() || !mitcad::cef::bridgePrefixMatches(url, prefix->second)) {
       return; // no bridge outside the tutorial's own folder
     }

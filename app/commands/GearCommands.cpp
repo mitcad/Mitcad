@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Gear (mitcad#472; commands.md, "Gears"): spur, helical, herringbone,
-// ring, rack and straight bevel gears with involute teeth, placed by a
+// ring, rack and straight bevel gears with involute teeth, and gears, rings
+// and racks with cycloidal teeth (mitcad#2607: the Type list's Cycloid
+// entries, a model kind with `tooth_form: cycloid`), placed by a
 // pick (mitcad#656, PlaceInputs.hpp): on a shaft, whose diameter and the
 // bore clearance give the bore, on an axis, at a point, or on a face at
 // distances from two of its edges; turned by Angle (its phase). Mesh With
@@ -38,7 +40,16 @@ const Choices kKinds = {{QStringLiteral("spur"), QStringLiteral("Spur")},
                         {QStringLiteral("herringbone"), QStringLiteral("Herringbone")},
                         {QStringLiteral("ring"), QStringLiteral("Ring")},
                         {QStringLiteral("rack"), QStringLiteral("Rack")},
-                        {QStringLiteral("bevel"), QStringLiteral("Bevel")}};
+                        {QStringLiteral("bevel"), QStringLiteral("Bevel")},
+                        {QStringLiteral("cycloid"), QStringLiteral("Cycloid")},
+                        {QStringLiteral("cycloid_ring"), QStringLiteral("Cycloid Ring")},
+                        {QStringLiteral("cycloid_rack"), QStringLiteral("Cycloid Rack")}};
+
+// The Cycloid labels for the catalogues (Gear's Type and Gear Pair's,
+// mitcad#2607).
+[[maybe_unused]] constexpr const char* kCycloidLabels[] = {QT_TRANSLATE_NOOP("Choice", "Cycloid"),
+                                                          QT_TRANSLATE_NOOP("Choice", "Cycloid Ring"),
+                                                          QT_TRANSLATE_NOOP("Choice", "Cycloid Rack")};
 
 const Choices kPressureAngles = {{QStringLiteral("20"), QStringLiteral("20") + QChar(0x00B0)},
                                  {QStringLiteral("14.5"), QStringLiteral("14.5") + QChar(0x00B0)},
@@ -60,6 +71,25 @@ bool isOneOf(const CommandState& state, std::initializer_list<const char*> kinds
   return false;
 }
 
+// Cycloidal teeth (mitcad#2607): the Type list's Cycloid entries.
+bool cycloidal(const CommandState& state) { return isOneOf(state, {"cycloid", "cycloid_ring", "cycloid_rack"}); }
+
+// The model's kind of the Type chosen: a Cycloid is a spur gear, or a
+// helical one with Helical Teeth.
+QString modelKind(const CommandState& state) {
+  const QString kind = kindOf(state);
+  if (kind == QStringLiteral("cycloid")) {
+    return state.checked(QStringLiteral("helical")) ? QStringLiteral("helical") : QStringLiteral("spur");
+  }
+  if (kind == QStringLiteral("cycloid_ring")) {
+    return QStringLiteral("ring");
+  }
+  if (kind == QStringLiteral("cycloid_rack")) {
+    return QStringLiteral("rack");
+  }
+  return kind;
+}
+
 // The gear picked to mesh with: not for a bevel gear (its pair is its mate).
 bool meshes(const CommandState& state) {
   return !state.items(QStringLiteral("mesh_with")).isEmpty() && kindOf(state) != QStringLiteral("bevel");
@@ -71,7 +101,7 @@ bool rackMate(const CommandState& state) { return meshes(state) && mateKind(stat
 // A rack and its pinion: the mesh alone places the gear (the model takes
 // no `at` with a rack).
 bool byMesh(const CommandState& state) {
-  return meshes(state) && (rackMate(state) || kindOf(state) == QStringLiteral("rack"));
+  return meshes(state) && (rackMate(state) || modelKind(state) == QStringLiteral("rack"));
 }
 
 // An earlier gear beside its mate toward a point or an axis (mitcad#656:
@@ -80,12 +110,14 @@ bool towardKept(const CommandState& state) {
   return state.object(QStringLiteral("toward_kept")).value(QStringLiteral("on")).toBool();
 }
 
-bool takesBore(const CommandState& state) { return isOneOf(state, {"spur", "helical", "herringbone", "bevel"}); }
+bool takesBore(const CommandState& state) {
+  return isOneOf(state, {"spur", "helical", "herringbone", "bevel", "cycloid"});
+}
 
 // A rack and a bevel pair keep their plane and centre (the model takes no
 // `at` for them).
 bool keepsPlane(const CommandState& state) {
-  return kindOf(state) == QStringLiteral("rack") ||
+  return modelKind(state) == QStringLiteral("rack") ||
          (kindOf(state) == QStringLiteral("bevel") && state.checked(QStringLiteral("pair")));
 }
 
@@ -114,7 +146,8 @@ bool shaftBore(const CommandState& state) {
 
 bool helixShown(const CommandState& state) {
   return isOneOf(state, {"helical", "herringbone"}) ||
-         (isOneOf(state, {"ring", "rack"}) && state.checked(QStringLiteral("helical")));
+         (isOneOf(state, {"ring", "rack", "cycloid", "cycloid_ring", "cycloid_rack"}) &&
+          state.checked(QStringLiteral("helical")));
 }
 
 // Remembers the kind of the gear feature `uid` for the inputs that follow it.
@@ -187,11 +220,11 @@ CommandDef gearCommand(const CommandContext& context, DocumentHost& host) {
   def.id = QStringLiteral("solid.gear");
   def.name = QObject::tr("Gear");
   def.icon = QStringLiteral("gear");
-  def.tooltip = QObject::tr("A spur, helical, herringbone, ring, rack or bevel gear with involute teeth");
+  def.tooltip = QObject::tr("A gear, ring or rack with involute or cycloidal teeth, or a bevel gear");
   def.keywords = {QStringLiteral("spur"),        QStringLiteral("helical"), QStringLiteral("herringbone"),
                   QStringLiteral("rack"),        QStringLiteral("pinion"),  QStringLiteral("bevel"),
                   QStringLiteral("ring"),        QStringLiteral("internal"), QStringLiteral("involute"),
-                  QStringLiteral("cog")};
+                  QStringLiteral("cog"),         QStringLiteral("cycloid"), QStringLiteral("cycloidal")};
   def.featureType = QStringLiteral("gear");
   const auto shared = std::make_shared<GearShared>();
   const PlacePanel place = placePanel();
@@ -204,11 +237,15 @@ CommandDef gearCommand(const CommandContext& context, DocumentHost& host) {
                             {QStringLiteral("herringbone"), QStringLiteral("gear-herringbone")},
                             {QStringLiteral("ring"), QStringLiteral("gear-ring")},
                             {QStringLiteral("rack"), QStringLiteral("gear-rack")},
-                            {QStringLiteral("bevel"), QStringLiteral("gear-bevel")}}),
+                            {QStringLiteral("bevel"), QStringLiteral("gear-bevel")},
+                            {QStringLiteral("cycloid"), QStringLiteral("gear-spur")},
+                            {QStringLiteral("cycloid_ring"), QStringLiteral("gear-ring")},
+                            {QStringLiteral("cycloid_rack"), QStringLiteral("gear-rack")}}),
       valueInput(QStringLiteral("module"), QObject::tr("Module"), ValueKind::Length, QStringLiteral("2 mm")).withStepMinimum(0.0, true)
           .withExactDefault(),
       valueInput(QStringLiteral("teeth"), QObject::tr("Teeth"), ValueKind::Unitless, QStringLiteral("20")),
-      choiceInput(QStringLiteral("pressure_angle"), QObject::tr("Pressure Angle"), kPressureAngles, QStringLiteral("20")),
+      choiceInput(QStringLiteral("pressure_angle"), QObject::tr("Pressure Angle"), kPressureAngles, QStringLiteral("20"))
+          .withVisible([](const CommandState& s) { return !cycloidal(s); }),
       valueInput(QStringLiteral("face_width"), QObject::tr("Face Width"), ValueKind::Length, QStringLiteral("10 mm")).withStepMinimum(0.0, true),
       selectionInput(QStringLiteral("mesh_with"), QObject::tr("Mesh With"), SelectKind::Feature | SelectKind::Face, 0, 1)
           .withAccepts([](const SelectionItem& item) { return !item.creatingFeature().isEmpty(); })
@@ -230,18 +267,18 @@ CommandDef gearCommand(const CommandContext& context, DocumentHost& host) {
       valueInput(QStringLiteral("position"), QObject::tr("Position"), ValueKind::Length, QStringLiteral("0 mm"))
           .withVisible(rackMate),
       checkInput(QStringLiteral("helical"), QObject::tr("Helical Teeth"), false)
-          .withVisible([](const CommandState& s) { return isOneOf(s, {"ring", "rack"}); }),
+          .withVisible([](const CommandState& s) { return isOneOf(s, {"ring", "rack", "cycloid", "cycloid_ring", "cycloid_rack"}); }),
       valueInput(QStringLiteral("helix_angle"), QObject::tr("Helix Angle"), ValueKind::Angle, QStringLiteral("20") + QChar(0x00B0)).withStepMinimum(0.0, true)
           .withVisible(helixShown),
       checkInput(QStringLiteral("left_handed"), QObject::tr("Left-Handed"), false).withVisible(helixShown),
       valueInput(QStringLiteral("gap"), QObject::tr("Gap"), ValueKind::Length, QStringLiteral("0 mm")).withStepMinimum(0.0)
           .withVisible([](const CommandState& s) { return kindOf(s) == QStringLiteral("herringbone"); }),
       valueInput(QStringLiteral("rim"), QObject::tr("Rim Thickness"), ValueKind::Length, QStringLiteral("5 mm")).withStepMinimum(0.0, true)
-          .withVisible([](const CommandState& s) { return kindOf(s) == QStringLiteral("ring"); }),
+          .withVisible([](const CommandState& s) { return modelKind(s) == QStringLiteral("ring"); }),
       valueInput(QStringLiteral("height"), QObject::tr("Height"), ValueKind::Length, QStringLiteral("20 mm"))
-          .withVisible([](const CommandState& s) { return kindOf(s) == QStringLiteral("rack"); }),
+          .withVisible([](const CommandState& s) { return modelKind(s) == QStringLiteral("rack"); }),
       valueInput(QStringLiteral("length"), QObject::tr("Length"), ValueKind::Length, QString())
-          .withVisible([](const CommandState& s) { return kindOf(s) == QStringLiteral("rack"); }),
+          .withVisible([](const CommandState& s) { return modelKind(s) == QStringLiteral("rack"); }),
       valueInput(QStringLiteral("shaft_angle"), QObject::tr("Shaft Angle"), ValueKind::Angle, QStringLiteral("90") + QChar(0x00B0))
           .withVisible([](const CommandState& s) { return kindOf(s) == QStringLiteral("bevel"); }),
       valueInput(QStringLiteral("mate_teeth"), QObject::tr("Mate Teeth"), ValueKind::Unitless, QStringLiteral("20"))
@@ -251,7 +288,17 @@ CommandDef gearCommand(const CommandContext& context, DocumentHost& host) {
       valueInput(QStringLiteral("backlash"), QObject::tr("Backlash"), ValueKind::Length, QStringLiteral("0 mm"))
           .withPrintedFit(QStringLiteral("gear"))
           .withHeading(QObject::tr("Profile")),
-      valueInput(QStringLiteral("profile_shift"), QObject::tr("Profile Shift"), ValueKind::Unitless, QStringLiteral("0")),
+      valueInput(QStringLiteral("profile_shift"), QObject::tr("Profile Shift"), ValueKind::Unitless, QStringLiteral("0"))
+          .withVisible([](const CommandState& s) { return !cycloidal(s); }),
+      // Cycloidal teeth's rolling circles (mitcad#2607): Auto, 7.5 modules.
+      valueInput(QStringLiteral("addendum_rolling_diameter"), QObject::tr("Addendum Rolling Circle"), ValueKind::Length,
+                 QString())
+          .withStepMinimum(0.0, true)
+          .withVisible(cycloidal),
+      valueInput(QStringLiteral("dedendum_rolling_diameter"), QObject::tr("Dedendum Rolling Circle"), ValueKind::Length,
+                 QString())
+          .withStepMinimum(0.0, true)
+          .withVisible(cycloidal),
       choiceInput(QStringLiteral("bore"), QObject::tr("Bore"), kBores, QStringLiteral("none"))
           .withHeading(QObject::tr("Bore and Hub"))
           .withVisible(takesBore),
@@ -290,7 +337,7 @@ CommandDef gearCommand(const CommandContext& context, DocumentHost& host) {
 
   const auto buildGear = [place](const CommandState& state, const CommandContext& model) {
     Built result;
-    const QString kind = kindOf(state);
+    const QString kind = modelKind(state);
     QJsonObject gear{{QStringLiteral("type"), QStringLiteral("gear")},
                      {QStringLiteral("kind"), kind},
                      {QStringLiteral("module"), state.expression(QStringLiteral("module"))},
@@ -375,8 +422,17 @@ CommandDef gearCommand(const CommandContext& context, DocumentHost& host) {
       }
     }
     const QString pressure = state.choice(QStringLiteral("pressure_angle"));
-    if (pressure != QStringLiteral("20") && !pressure.isEmpty()) {
+    if (pressure != QStringLiteral("20") && !pressure.isEmpty() && !cycloidal(state)) {
       gear.insert(QStringLiteral("pressure_angle"), pressure + QStringLiteral(" deg"));
+    }
+    if (cycloidal(state)) {
+      // Its rolling circles: typed, or Auto (mitcad#2607).
+      gear.insert(QStringLiteral("tooth_form"), QStringLiteral("cycloid"));
+      for (const char* key : {"addendum_rolling_diameter", "dedendum_rolling_diameter"}) {
+        if (std::isfinite(state.value(QLatin1String(key)))) {
+          gear.insert(QLatin1String(key), state.expression(QLatin1String(key)));
+        }
+      }
     }
     if (helixShown(state)) {
       gear.insert(QStringLiteral("helix_angle"), state.expression(QStringLiteral("helix_angle")));
@@ -406,7 +462,7 @@ CommandDef gearCommand(const CommandContext& context, DocumentHost& host) {
     if (std::isfinite(state.value(QStringLiteral("backlash")))) {
       gear.insert(QStringLiteral("backlash"), state.expression(QStringLiteral("backlash")));
     }
-    if (nonZero(state, QStringLiteral("profile_shift"))) {
+    if (!cycloidal(state) && nonZero(state, QStringLiteral("profile_shift"))) {
       gear.insert(QStringLiteral("profile_shift"), state.expression(QStringLiteral("profile_shift")));
     }
     const bool pair = kind == QStringLiteral("bevel") && state.checked(QStringLiteral("pair"));
@@ -451,7 +507,10 @@ CommandDef gearCommand(const CommandContext& context, DocumentHost& host) {
   for (InputDef& input : def.inputs) {
     const QString value = input.id == QStringLiteral("length")         ? QStringLiteral("pitch_line_length")
                           : input.id == QStringLiteral("hub_diameter") ? QStringLiteral("hub_diameter")
-                                                                       : QString();
+                          : input.id == QStringLiteral("addendum_rolling_diameter") ||
+                                  input.id == QStringLiteral("dedendum_rolling_diameter")
+                              ? input.id
+                              : QString();
     if (value.isEmpty()) {
       continue;
     }
@@ -523,7 +582,17 @@ CommandDef gearCommand(const CommandContext& context, DocumentHost& host) {
     const QString uid = feature.value(QStringLiteral("uid")).toString();
     shared->editing = uid;
     const QString kind = feature.value(QStringLiteral("kind")).toString(QStringLiteral("spur"));
-    state.setChoice(QStringLiteral("kind"), kind);
+    // A cycloid gear, ring or rack: the Type list's Cycloid entries
+    // (mitcad#2607; Helical Teeth from its helix angle below).
+    const bool cycloid = feature.value(QStringLiteral("tooth_form")).toString() == QStringLiteral("cycloid");
+    state.setChoice(QStringLiteral("kind"), !cycloid                       ? kind
+                                            : kind == QStringLiteral("ring") ? QStringLiteral("cycloid_ring")
+                                            : kind == QStringLiteral("rack") ? QStringLiteral("cycloid_rack")
+                                                                             : QStringLiteral("cycloid"));
+    loadValue(state, QStringLiteral("addendum_rolling_diameter"), feature.value(QStringLiteral("addendum_rolling_diameter")),
+              feature, context);
+    loadValue(state, QStringLiteral("dedendum_rolling_diameter"), feature.value(QStringLiteral("dedendum_rolling_diameter")),
+              feature, context);
     state.setChecked(QStringLiteral("pair"), feature.value(QStringLiteral("pair")).toBool());
     const QJsonObject mesh = feature.value(QStringLiteral("mesh_with")).toObject();
     if (!mesh.isEmpty()) {
@@ -621,6 +690,13 @@ CommandDef gearCommand(const CommandContext& context, DocumentHost& host) {
   // and a thread of the ISO metric standard.
   def.canEdit = [&context](const QJsonObject& feature) {
     if (!placeShowable(feature, context)) {
+      return false;
+    }
+    // Cycloidal teeth: the Type list has spur, helical, ring and rack ones
+    // (mitcad#2607).
+    const QString kind = feature.value(QStringLiteral("kind")).toString();
+    if (feature.value(QStringLiteral("tooth_form")).toString() == QStringLiteral("cycloid") &&
+        (kind == QStringLiteral("herringbone") || kind == QStringLiteral("bevel"))) {
       return false;
     }
     const QJsonObject mesh = feature.value(QStringLiteral("mesh_with")).toObject();

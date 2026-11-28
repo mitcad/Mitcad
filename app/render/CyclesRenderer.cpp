@@ -959,16 +959,16 @@ private:
         corners[i] = ccl::make_float2(data.uvs[v * 2], data.uvs[v * 2 + 1]);
       }
     }
-    const bool grain = body.material.textureGrain ||
-                       std::any_of(body.faces.begin(), body.faces.end(),
-                                   [](const FaceMaterial& group) { return group.material.textureGrain; });
-    if (grain) {
+    if (alongGrain(body)) {
       // Along the grain (mitcad#2186, GrainProjection.hpp): each corner's
       // grain coordinates (mm) as a UV map of their own, and its face's
       // grain directions, the tangent frame of a normal map. A vector
       // attribute holds packed_float3 (12 bytes, Attribute::data_sizeof),
-      // not float3: written as float3 they overran their buffers.
-      const GrainMesh frames = grainMeshOf(data);
+      // not float3: written as float3 they overran their buffers. The
+      // coordinates carry the body's grain offset (mitcad#2605, by its id,
+      // the shaded view's key), which every map of the set reads; the
+      // mesh is the body's own (lookKey names the body).
+      const GrainMesh frames = grainMeshOf(data, grainOffset(body.id));
       auto* coordinates =
           mesh->attributes.add(ccl::ustring(kGrainUvAttribute), ccl::TypeFloat2, ccl::ATTR_ELEMENT_CORNER)
               ->data_for_write<ccl::float2>();

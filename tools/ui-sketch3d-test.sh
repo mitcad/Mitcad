@@ -202,7 +202,7 @@ ui_start_display
 # Keys of the test's own for some tools without one (Fit Point Spline goes
 # through the command search, which S opens).
 mkdir -p "$UI_CONFIG/Mitcad"
-printf '[shortcuts]\nsketch.arc_center=F8\nsketch.arc_tangent=F9\nsketch.fillet=F7\n' >> "$UI_CONFIG/Mitcad/Mitcad.conf"
+printf '[shortcuts]\nsketch.arc_center=F8\nsketch.arc_tangent=F12\nsketch.fillet=F7\n' >> "$UI_CONFIG/Mitcad/Mitcad.conf"
 ui_start_app --open "$FILE"
 ui_step "fit (F6)"                       ui_key F6
 ui_expect_log "Browser Root/Sketches/3DSketch1 at" "the Browser lists the 3D sketch under Sketches"
@@ -412,7 +412,7 @@ ui_expect_new "3D sketch Fit Point Spline: made c" "the spline made at once"
 ui_step "Esc (the tool)"                 ui_key Escape
 ui_expect_new "3D sketch tool Fit Point Spline: stopped" "the tool ends"
 ui_mark
-ui_step "Tangent Arc (F9)"               ui_key F9
+ui_step "Tangent Arc (F12)"               ui_key F12
 ui_expect_new "3D sketch tool Tangent Arc: started" "Tangent Arc draws in the 3D sketch"
 ui_expect_log "3D sketch entity " "the sketch's points are drawn (logged when they changed, with the spline)"
 ui_step "click B, AB's end"              ui_click_logged "3D sketch entity $(grep -oE "3D sketch entity F[0-9]+/p2 at" "$UI_LOG" | tail -1 | sed 's/^3D sketch entity //; s/ at$//')"

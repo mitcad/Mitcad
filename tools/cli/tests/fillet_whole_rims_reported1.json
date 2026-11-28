@@ -1,0 +1,13 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. GitHub mitcad/Mitcad#741's first design (mitcad#2582; opened with --open, never committed; tools/cli/fillet-whole-rims-reported-test.cmake): a cylinder 10 across and 10 high (Extrude1 F5, Body1 F5.b0) whose end rim Fillet1 (F6, d3 = 5 mm) rounds with the cylinder's own radius. Built before 0.1 % smaller with a warning that it leaves a sliver of the end face; now a hemisphere of 5 tangent to the cylinder's other half, the other end flat, 250 pi - 125 / 3 pi, without a note."},
+  {"expect": {"parameter": "d3", "value": 5}},
+  {"expect": {"feature": "Fillet1", "status": "ok", "body": "Body1", "volume": 654.4984694978736,
+    "area": 392.69908169872417, "faces": 3, "min_face_area": 1, "tolerance": 1e-6}},
+  {"expect": {"query": {"query": "feature", "uid": "F6"}, "result": {"status": "ok", "level": null}}},
+  {"expect": {"query": {"query": "faces", "body": "F5.b0", "geometry": true, "surface": "sphere"},
+    "result": {"total": 1, "faces": [{"surface": "sphere", "radius": 5, "area": 157.07963267948966}]}, "tolerance": 1e-6}},
+  {"expect": {"query": {"query": "faces", "body": "F5.b0", "geometry": true, "surface": "cylinder"},
+    "result": {"total": 1, "faces": [{"surface": "cylinder", "radius": 5, "area": 157.07963267948966}]}, "tolerance": 1e-6}},
+  {"expect": {"query": {"query": "faces", "body": "F5.b0", "geometry": true, "surface": "plane"},
+    "result": {"total": 1, "faces": [{"surface": "plane", "area": 78.53981633974483}]}, "tolerance": 1e-6}}
+]

@@ -143,6 +143,22 @@ QStringList stringList(const QJsonValue& value) {
   return list;
 }
 
+// A tab's place under its earlier key, as a layer saved before the rename
+// names it, under the tab's key now: SHEET METAL is SHEET PARTS
+// (mitcad#2602), "SHEET METAL/CREATE" is "SHEET PARTS/CREATE". Any other
+// place is returned as it is.
+QString renamedTabPlace(const QString& place) {
+  static const QString oldKey = QStringLiteral("SHEET METAL");
+  static const QString newKey = QStringLiteral("SHEET PARTS");
+  if (place == oldKey) {
+    return newKey;
+  }
+  if (place.startsWith(oldKey + QLatin1Char('/'))) {
+    return newKey + place.mid(oldKey.size());
+  }
+  return place;
+}
+
 // Descends from a list of entries along submenu keys.
 template <typename Entries>
 auto descend(Entries* entries, const QStringList& keys, int from) -> Entries* {
@@ -602,7 +618,7 @@ LayoutUserLayer LayoutUserLayer::fromJson(const QJsonObject& json, QString* erro
     } else {
       return fail(QStringLiteral("an unknown change \"%1\"").arg(op));
     }
-    change.place = object.value(QStringLiteral("place")).toString();
+    change.place = renamedTabPlace(object.value(QStringLiteral("place")).toString());
     change.id = object.value(QStringLiteral("id")).toString();
     change.after = object.value(QStringLiteral("after")).toString();
     change.on = object.value(QStringLiteral("on")).toBool(true);
@@ -613,6 +629,10 @@ LayoutUserLayer LayoutUserLayer::fromJson(const QJsonObject& json, QString* erro
     layer.changes.push_back(std::move(change));
   }
   layer.hiddenTabs = stringList(json.value(QStringLiteral("hiddenTabs")));
+  for (QString& tab : layer.hiddenTabs) {
+    tab = renamedTabPlace(tab);
+  }
+  layer.hiddenTabs.removeDuplicates();
   // The Make tab hidden before it became the Make workspace's three tabs
   // (the owner, 18.11.2026): all three hidden. Its pins go to their
   // commands' tabs (ToolbarPins); its other changes name places that are
@@ -632,7 +652,12 @@ LayoutUserLayer LayoutUserLayer::fromJson(const QJsonObject& json, QString* erro
   for (auto it = tabs.begin(); it != tabs.end(); ++it) {
     const QStringList ids = stringList(it.value());
     if (!ids.isEmpty()) {
-      layer.pins.insert(it.key(), ids);
+      QStringList& kept = layer.pins[renamedTabPlace(it.key())];
+      for (const QString& id : ids) {
+        if (!kept.contains(id)) {
+          kept.append(id);
+        }
+      }
     }
   }
   return layer;
@@ -1007,8 +1032,9 @@ bool CommandLayoutStore::migratePins() {
   for (const QString& tab : tabs) {
     const QStringList ids = pinIds(settings.value(tab));
     // A tab the layer already has pins of keeps them (the layer is newer).
-    if (!ids.isEmpty() && !m_user.pins.contains(tab)) {
-      m_user.pins.insert(tab, ids);
+    const QString key = renamedTabPlace(tab);
+    if (!ids.isEmpty() && !m_user.pins.contains(key)) {
+      m_user.pins.insert(key, ids);
       count += static_cast<int>(ids.size());
     }
   }

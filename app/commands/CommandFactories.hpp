@@ -207,4 +207,8 @@ CommandDef meshOffsetCommand(const CommandContext& context);
 CommandDef meshAlignCommand(const CommandContext& context);
 CommandDef meshPlaneCutCommand(const CommandContext& context);
 
+// WoodJointCommands.cpp (mitcad#2604): Wood Joint in the Build tab's Connect
+// group, a woodworking joint between two parts chosen by its Type.
+CommandDef woodJointCommand(const CommandContext& context);
+
 } // namespace mitcad::cmd

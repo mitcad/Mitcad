@@ -15,7 +15,8 @@
 // Rotation in and out of a sketch and a device's
 // default button for its rotation lock key (mitcad#1910); two designs on
 // the process's one connection, the input reaching the active one only
-// (mitcad#2297).
+// (mitcad#2297); a SpaceMouse Enterprise's QuickView keys' tap and hold
+// and its Rotation Toggle (mitcad#2642).
 #include "UnitTests.hpp"
 #include <algorithm>
 #include <array>
@@ -1686,6 +1687,7 @@ void deviceButtonTests() {
   CHECK(spaceMouseLockKeyButton(0x046d, 0xc62b) == 26);
   CHECK(spaceMouseLockKeyButton(0x256f, 0xc631) == 26 && spaceMouseLockKeyButton(0x256f, 0xc632) == 26);
   CHECK(spaceMouseLockKeyButton(0x256f, 0xc638) == 26);
+  CHECK(spaceMouseLockKeyButton(0x256f, 0xc633) == 26); // an Enterprise's Rotation Toggle
   CHECK(spaceMouseLockKeyButton(0x256f, 0xc635) == -1); // a Compact: no lock key
   CHECK(spaceMouseLockKeyButton(0x256f, 0xc652) == -1); // a universal receiver
   CHECK(spaceMouseLockKeyButton(0x1234, 0xc62b) == -1);
@@ -1755,6 +1757,273 @@ void deviceButtonTests() {
     // Connected again: bound already, nothing changes.
     backend->connection(true, QStringLiteral("SpaceMouse Pro (HID 046d:c62b)"));
     CHECK(changes == 1);
+  }
+  qInstallMessageHandler(previous);
+}
+
+// A SpaceMouse Enterprise's labeled keys (mitcad#2642, GitHub
+// mitcad/Mitcad#772): the opposite views, the device's default buttons
+// (its QuickView keys and Rotation Toggle, explicit entries and None
+// kept), the pure tap-or-hold decision from given times, and the
+// controller: each gesture runs its view once in the design that has the
+// input, a hold never runs the tap's view first, a key held while the
+// device goes or another design gets the input runs nothing, other
+// devices' buttons and a QuickView key bound to another command run at
+// the press as before, and Rotation Toggle keeps the cap from turning the
+// view across view changes while pan and zoom still work.
+void quickViewTests() {
+  using namespace mitcad;
+  const QString top = QStringLiteral("view.top");
+  const QString bottom = QStringLiteral("view.bottom");
+  const QString front = QStringLiteral("view.front");
+  const QString back = QStringLiteral("view.back");
+  const QString right = QStringLiteral("view.right");
+  const QString left = QStringLiteral("view.left");
+  const QString lock = spaceMouseLockRotationCommand();
+  const QString enterprise = QStringLiteral("SpaceMouse Enterprise (HID 256f:c633)");
+
+  // The opposite views; any other command has none.
+  CHECK(spaceMouseOppositeView(top) == bottom && spaceMouseOppositeView(bottom) == top);
+  CHECK(spaceMouseOppositeView(front) == back && spaceMouseOppositeView(back) == front);
+  CHECK(spaceMouseOppositeView(right) == left && spaceMouseOppositeView(left) == right);
+  CHECK(spaceMouseOppositeView(QStringLiteral("view.fit")).isEmpty());
+  CHECK(isSpaceMouseStandardView(left) && !isSpaceMouseStandardView(QStringLiteral("view.home")));
+  // The QuickView keys: T/B (button 3), R/L (5), F/BK (6) on an
+  // Enterprise only; a hold only for a standard view bound to one.
+  const std::uint32_t keys = spaceMouseQuickViewKeys(0x256f, 0xc633);
+  CHECK(keys == ((1u << 2) | (1u << 4) | (1u << 5)));
+  CHECK(spaceMouseQuickViewKeys(0x046d, 0xc633) == keys);
+  CHECK(spaceMouseQuickViewKeys(0x046d, 0xc62b) == 0 && spaceMouseQuickViewKeys(0x256f, 0xc635) == 0);
+  CHECK(spaceMouseHoldCommand(keys, 2, top) == bottom && spaceMouseHoldCommand(keys, 5, front) == back);
+  CHECK(spaceMouseHoldCommand(keys, 4, right) == left && spaceMouseHoldCommand(keys, 2, bottom) == top);
+  CHECK(spaceMouseHoldCommand(keys, 2, QStringLiteral("view.fit")).isEmpty());
+  CHECK(spaceMouseHoldCommand(keys, 6, bottom).isEmpty()); // Bottom's own number: at once
+  CHECK(spaceMouseHoldCommand(0, 2, top).isEmpty() && spaceMouseHoldCommand(keys, 40, top).isEmpty());
+
+  // The Enterprise's default buttons where the settings have no entry.
+  {
+    SpaceMouseSettings settings;
+    std::vector<int> added;
+    CHECK(addSpaceMouseDeviceButtons(settings, enterprise, &added));
+    CHECK((added == std::vector<int>{2, 3, 4, 5, 6, 7, 26}));
+    CHECK(settings.buttons.size() == 27 && settings.buttons.at(0) == QStringLiteral("view.fit"));
+    CHECK(settings.buttons.at(2) == top && settings.buttons.at(3) == left && settings.buttons.at(4) == right);
+    CHECK(settings.buttons.at(5) == front && settings.buttons.at(6) == bottom && settings.buttons.at(7) == back);
+    CHECK(settings.buttons.at(8).isEmpty() && settings.buttons.at(26) == lock);
+    CHECK(!addSpaceMouseDeviceButtons(settings, enterprise));
+    // A user's entries, a command or None, stay; only the keys after the
+    // list's end get theirs.
+    SpaceMouseSettings own;
+    own.buttons = {QStringLiteral("view.fit"), QStringLiteral("view.home"), QStringLiteral("view.iso"), QString()};
+    added.clear();
+    CHECK(addSpaceMouseDeviceButtons(own, enterprise, &added));
+    CHECK((added == std::vector<int>{4, 5, 6, 7, 26}));
+    CHECK(own.buttons.at(2) == QStringLiteral("view.iso") && own.buttons.at(3).isEmpty());
+    CHECK(own.buttons.at(4) == right && own.buttons.at(26) == lock);
+  }
+
+  // The pure decision from given times.
+  {
+    SpaceMouseKeyGestures gestures;
+    gestures.press(2, top, bottom, 1000);
+    CHECK(gestures.waiting(2) && gestures.nextDueMs() == 1000 + kSpaceMouseHoldMs);
+    CHECK(gestures.due(1000 + kSpaceMouseHoldMs - 1).empty());
+    const SpaceMouseKeyGestures::Run tap = gestures.release(2, 1200);
+    CHECK(tap.button == 2 && tap.command == top && !tap.held && gestures.empty());
+    // Held: the hold once at its time, the release then nothing.
+    gestures.press(2, top, bottom, 2000);
+    const auto held = gestures.due(2000 + kSpaceMouseHoldMs);
+    CHECK(held.size() == 1 && held.front().command == bottom && held.front().held);
+    CHECK(gestures.due(2000 + 2 * kSpaceMouseHoldMs).empty() && gestures.nextDueMs() < 0);
+    CHECK(gestures.release(2, 3000).command.isEmpty() && gestures.empty());
+    // A release found past the hold time (the timer late) runs the hold.
+    gestures.press(5, front, back, 4000);
+    const SpaceMouseKeyGestures::Run late = gestures.release(5, 4000 + kSpaceMouseHoldMs + 10);
+    CHECK(late.command == back && late.held);
+    // Two keys at once, each on its own; cancel forgets them both.
+    gestures.press(2, top, bottom, 5000);
+    gestures.press(4, right, left, 5100);
+    CHECK(gestures.nextDueMs() == 5000 + kSpaceMouseHoldMs);
+    CHECK(gestures.release(4, 5200).command == right && gestures.waiting(2));
+    gestures.cancel();
+    CHECK(gestures.empty() && gestures.release(2, 5300).command.isEmpty());
+    // A release without a press runs nothing.
+    CHECK(gestures.release(7, 6000).command.isEmpty());
+  }
+
+  // The controller on one connection with two designs.
+  std::int64_t now = 10000;
+  FakeBackend* backend = nullptr;
+  const SpaceMouseConnection::Factory factory = [&backend]() -> std::unique_ptr<SpaceMouseBackend> {
+    auto made = std::make_unique<FakeBackend>(false);
+    backend = made.get();
+    return made;
+  };
+  struct Design {
+    SpaceMouseSettings settings;
+    SpaceMouseRates last;
+    QStringList commands;
+    SpaceMouseController* controller = nullptr;
+    SpaceMouseController::Hooks hooks(std::int64_t* clock) {
+      SpaceMouseController::Hooks made;
+      made.settings = [this] { return settings; };
+      made.flat = [] { return false; };
+      made.rates = [this](const SpaceMouseRates& rates) { last = rates; };
+      made.change = [this](const SpaceMouseSettings& changed) { settings = changed; };
+      // The view commands as MainWindow runs them; Lock Rotation toggles
+      // the controller's lock as ViewController's command does.
+      made.runCommand = [this](const QString& id) {
+        commands.append(id);
+        if (id == spaceMouseLockRotationCommand() && controller != nullptr) {
+          controller->toggleRotationLock();
+        }
+      };
+      made.now = [clock] { return *clock; };
+      return made;
+    }
+  };
+  Design first;
+  Design second;
+  const auto connection = std::make_shared<SpaceMouseConnection>(factory);
+  const QtMessageHandler previous = qInstallMessageHandler(catchMessage);
+  caught().clear();
+  {
+    SpaceMouseController a(first.hooks(&now), connection);
+    SpaceMouseController b(second.hooks(&now), connection);
+    first.controller = &a;
+    second.controller = &b;
+    a.refresh();
+    b.refresh();
+    CHECK(backend != nullptr);
+    if (backend != nullptr) {
+      backend->connection(true, enterprise);
+      CHECK(connection->device() == enterprise);
+      CHECK(first.settings.buttons.value(2) == top && first.settings.buttons.value(26) == lock);
+      CHECK(second.settings.buttons.value(5) == front);
+      CHECK(caught().contains(QStringLiteral("3D mouse: button 3 runs view.top by default")));
+      CHECK(caught().contains(QStringLiteral("3D mouse: button 27 runs view.space_mouse_lock_rotation by default")));
+      const auto press = [&](int index, std::int64_t heldMs) {
+        backend->button(index, true);
+        now += heldMs;
+        a.keysDue();
+        b.keysDue();
+        backend->button(index, false);
+        now += 50;
+      };
+
+      // Each tap runs its view once, at the release; nothing at the press.
+      backend->button(2, true);
+      CHECK(first.commands.isEmpty() && caught().contains(QStringLiteral("3D mouse: button 3 waits for a tap or a hold")));
+      now += 120;
+      backend->button(2, false);
+      CHECK(first.commands == QStringList(top));
+      press(5, 150);
+      press(4, 150);
+      CHECK((first.commands == QStringList{top, front, right}));
+      // Each hold runs the opposite view once when due, never the tap's
+      // first, and the release nothing.
+      first.commands.clear();
+      backend->button(2, true);
+      now += kSpaceMouseHoldMs - 1;
+      a.keysDue();
+      CHECK(first.commands.isEmpty());
+      now += 1;
+      a.keysDue();
+      CHECK(first.commands == QStringList(bottom));
+      CHECK(caught().contains(QStringLiteral("3D mouse: button 3 held runs view.bottom")));
+      now += 2000;
+      a.keysDue();
+      backend->button(2, false);
+      CHECK(first.commands == QStringList(bottom));
+      press(5, kSpaceMouseHoldMs + 100);
+      press(4, kSpaceMouseHoldMs + 100);
+      CHECK((first.commands == QStringList{bottom, back, left}));
+      // A route that tells the hold itself sends the held view's own
+      // number: it runs at once.
+      first.commands.clear();
+      backend->button(6, true);
+      CHECK(first.commands == QStringList(bottom));
+      backend->button(6, false);
+      CHECK(first.commands == QStringList(bottom) && second.commands.isEmpty());
+
+      // Another design gets the input while a key is held: nothing runs,
+      // neither there nor here, and the release runs nothing.
+      first.commands.clear();
+      backend->button(2, true);
+      b.activate();
+      now += kSpaceMouseHoldMs + 10;
+      a.keysDue();
+      b.keysDue();
+      backend->button(2, false);
+      CHECK(first.commands.isEmpty() && second.commands.isEmpty());
+      // The design that has the input now runs its own gestures.
+      press(2, 100);
+      CHECK(second.commands == QStringList(top) && first.commands.isEmpty());
+      a.activate();
+      second.commands.clear();
+      // The device goes while a key is held: nothing, also at its release.
+      backend->button(5, true);
+      backend->connection(false, enterprise);
+      CHECK(connection->device().isEmpty());
+      now += kSpaceMouseHoldMs + 10;
+      a.keysDue();
+      backend->button(5, false);
+      CHECK(first.commands.isEmpty() && second.commands.isEmpty());
+      // Back: the keys work again. A key bound to another command, or to
+      // None, has no hold: its command at the press, or nothing.
+      backend->connection(true, enterprise);
+      first.settings.buttons[2] = QStringLiteral("view.fit");
+      first.settings.buttons[5] = QString();
+      backend->button(2, true);
+      CHECK(first.commands == QStringList(QStringLiteral("view.fit")));
+      backend->button(2, false);
+      press(5, kSpaceMouseHoldMs + 10);
+      CHECK(first.commands == QStringList(QStringLiteral("view.fit")));
+      first.settings.buttons[2] = top;
+      first.settings.buttons[5] = front;
+
+      // Rotation Toggle: one press runs Lock Rotation once; the cap pans
+      // and zooms but does not turn, across view changes, until toggled
+      // off.
+      first.commands.clear();
+      backend->button(26, true);
+      backend->button(26, false);
+      CHECK(first.commands == QStringList(lock) && a.rotationLocked() && first.settings.lockRotation);
+      backend->motion({0.0, 0.0, 0.0, 0.8, 0.8, 0.8});
+      CHECK(!first.last.turning());
+      backend->motion({0.8, 0.0, 0.0, 0.0, 0.0, 0.0});
+      CHECK(first.last.moving() && !first.last.turning() && first.last.panX != 0.0);
+      backend->motion({0.0, 0.0, 0.8, 0.0, 0.0, 0.0});
+      CHECK(first.last.zoom != 0.0);
+      backend->motion({});
+      press(2, 100);
+      press(2, kSpaceMouseHoldMs + 10);
+      CHECK((first.commands == QStringList{lock, top, bottom}) && a.rotationLocked());
+      backend->motion({0.0, 0.8, 0.0, 0.0, 0.8, 0.0});
+      CHECK(!first.last.turning() && first.last.panY != 0.0);
+      backend->motion({});
+      backend->button(26, true);
+      backend->button(26, false);
+      CHECK(!a.rotationLocked() && !first.settings.lockRotation);
+      backend->motion({0.0, 0.0, 0.0, 0.0, 0.8, 0.0});
+      CHECK(first.last.turning());
+      backend->motion({});
+    }
+  }
+  // Another device on the same keys: every button at its press, as before.
+  {
+    Design other;
+    SpaceMouseController c(other.hooks(&now), std::make_shared<SpaceMouseConnection>(factory));
+    other.settings.buttons = {QString(), QString(), top};
+    c.refresh();
+    CHECK(backend != nullptr);
+    if (backend != nullptr) {
+      backend->connection(true, QStringLiteral("SpaceMouse Pro (HID 046d:c62b)"));
+      backend->button(2, true);
+      CHECK(other.commands == QStringList(top));
+      backend->button(2, false);
+      CHECK(other.commands == QStringList(top));
+    }
   }
   qInstallMessageHandler(previous);
 }
@@ -1956,6 +2225,7 @@ int spaceMouseTests() {
   timingTests();
   rotationLockTests();
   deviceButtonTests();
+  quickViewTests();
   windowPlacedTests();
   twoDesignTests();
   return failures;

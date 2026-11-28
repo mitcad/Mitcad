@@ -35,7 +35,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{ 'tools.material_library' = 'F9'; 'tools.printer_library' = 'F8';
+Ui-Init $App $Out $QtBin @{ 'tools.material_library' = 'F12'; 'tools.printer_library' = 'F8';
                             'tools.process_library' = 'F7'; 'solid.material' = 'F11' } -StepPause 0
 if (-not $Cli) {
   $Cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
@@ -182,7 +182,7 @@ Ui-Sync
 Write-Host '--- 2. Material Library... without a design: My library, Shop PETG edited'
 Ui-FocusMain
 Ui-Mark
-Ui-Step 'Material Library (F9)'          { Ui-Key 'F9' }
+Ui-Step 'Material Library (F12)'          { Ui-Key 'F12' }
 Ui-ExpectNew 'Materials opened without a design' 'the Materials manager opened on the libraries'
 Ui-ExpectNew 'Materials loaded: ' 'its list filled when the items were read' 60
 Ui-ExpectNew 'Materials groups: My library 1 | Built-in ' 'My library and Built-in, no This design'

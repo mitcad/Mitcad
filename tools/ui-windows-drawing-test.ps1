@@ -21,7 +21,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{ 'file.export_drawing' = 'F9' } -StepPause 0
+Ui-Init $App $Out $QtBin @{ 'file.export_drawing' = 'F12' } -StepPause 0
 $cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
   ForEach-Object { Join-Path (Split-Path $script:UiApp) $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $cli) { Ui-Fail "no mitcad-cli.exe beside $($script:UiApp)" }
@@ -61,7 +61,7 @@ Ui-ExpectLog 'Bodies shown: F2.b0' 'the bodies shown'
 Write-Host '--- 1. Export Drawing: SVG on A3'
 $svg = Join-Path $work 'drawing.svg'
 Ui-Mark
-Ui-Step 'export drawing (F9)'            { Ui-Key 'F9' }
+Ui-Step 'export drawing (F12)'            { Ui-Key 'F12' }
 Ui-ExpectNew 'Drawing dialog opened: format pdf, sheet A4, scale fit' 'the dialog opened with the defaults'
 Ui-ExpectNew 'Drawing dialog OK at' 'the dialog laid out'
 Ui-Step 'focus the dialog'               { Ui-FocusDialog '^Export Drawing$' }
@@ -98,7 +98,7 @@ Write-Host 'ok   the SVG holds the three views, the plate''s width, the holes'' 
 
 Write-Host '--- 2. The choices kept'
 Ui-Mark
-Ui-Step 'export drawing (F9)'            { Ui-Key 'F9' }
+Ui-Step 'export drawing (F12)'            { Ui-Key 'F12' }
 Ui-ExpectNew 'Drawing dialog opened: format svg, sheet A3, scale fit' 'the dialog opened with the kept choices'
 Ui-Step 'cancel (Esc)'                   { Ui-FocusDialog '^Export Drawing$'; Ui-Key 'Escape'; Ui-FocusMain }
 

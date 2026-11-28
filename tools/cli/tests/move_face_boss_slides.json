@@ -39,9 +39,26 @@
   {"expect": {"body": "Body1", "volume": 73420.313230, "tolerance": 2e-5, "faces": 9}},
   {"expect": {"body": "Body1", "center": [16.606372, 9.773592, 5.440602], "tolerance": 0.002}},
 
-  {"comment": "50 along x the boss would stand over the plate's edge: refused, with the reason in words."},
+  {"comment": "50 along x the boss's foot (59.5 to 71.7) keeps only 1 on the plate before its side (60.5) (mitcad#2632, GitHub #769): the plate's top cannot hold it past its own edge, so the boss moves whole and overhangs the side. Previewed, committed and recomputed: one body of the same volume, the boss's faces found by their names, the overhang's underside a step face of its own (10 faces), the centre of mass 50 times the boss's share of the volume along x. (Before, it was refused: the moved faces would run past the boundary of a neighbouring face.)"},
+  {"preview": {"cmd": "edit_feature", "uid": "F6", "def": {"type": "move_face", "body": "F2.b0",
+    "faces": ["F4:side(c1)", "F5:chamfer(E{F4:end(r{c1})|F4:side(c1)})", "F4:end(r{c1})"],
+    "transform": {"type": "translate_xyz", "x": 50, "y": 0, "z": 0}}}},
   {"cmd": "edit_feature", "uid": "F6", "def": {"type": "move_face", "body": "F2.b0",
     "faces": ["F4:side(c1)", "F5:chamfer(E{F4:end(r{c1})|F4:side(c1)})", "F4:end(r{c1})"],
     "transform": {"type": "translate_xyz", "x": 50, "y": 0, "z": 0}}},
-  {"expect": {"feature": "MoveFace1", "status": "error", "error_contains": "neighbouring face"}}
+  {"expect": {"feature": "MoveFace1", "status": "ok", "bodies": 1}},
+  {"expect": {"body": "Body1", "volume": 73420.313230, "tolerance": 2e-5, "faces": 10, "has_face": "F4:side(c1)"}},
+  {"expect": {"body": "Body1", "has_face": "F5:chamfer(E{F4:end(r{c1})|F4:side(c1)})"}},
+  {"expect": {"body": "Body1", "has_face": "F4:end(r{c1})"}},
+  {"expect": {"body": "Body1", "center": [18.473208, 9.773592, 5.440602], "tolerance": 0.002}},
+  {"cmd": "recompute"},
+  {"expect": {"feature": "MoveFace1", "status": "ok", "bodies": 1}},
+  {"expect": {"body": "Body1", "volume": 73420.313230, "tolerance": 2e-5, "faces": 10}},
+  {"expect": {"body": "Body1", "center": [18.473208, 9.773592, 5.440602], "tolerance": 0.002}},
+
+  {"comment": "60 along x the foot (from 69.5) lies wholly past the plate's side: nothing would hold the boss, refused with the reason in words."},
+  {"cmd": "edit_feature", "uid": "F6", "def": {"type": "move_face", "body": "F2.b0",
+    "faces": ["F4:side(c1)", "F5:chamfer(E{F4:end(r{c1})|F4:side(c1)})", "F4:end(r{c1})"],
+    "transform": {"type": "translate_xyz", "x": 60, "y": 0, "z": 0}}},
+  {"expect": {"feature": "MoveFace1", "status": "error", "error_contains": "would no longer meet the rest of the body"}}
 ]

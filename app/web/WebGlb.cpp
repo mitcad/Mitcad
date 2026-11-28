@@ -227,9 +227,17 @@ public:
 
   // A material's index (equal materials share one).
   int material(const render::MaterialData& m);
-  // The glTF mesh of a body's mesh with its body's material and its faces'.
+  // The glTF mesh of a body's mesh with its body's material and its faces',
+  // images laid along the grain with the placed body's grain offset (mm,
+  // render::grainOffset, mitcad#2605).
   int mesh(const render::MeshData& data, int bodyMaterial,
-           const std::vector<std::pair<int, const render::FaceMaterial*>>& faces);
+           const std::vector<std::pair<int, const render::FaceMaterial*>>& faces,
+           const std::array<double, 2>& grainOffset);
+  // Whether a material lays its images along the grain.
+  bool alongGrain(int material) const {
+    return material >= 0 && static_cast<std::size_t>(material) < m_projections.size() &&
+           m_textured[static_cast<std::size_t>(material)] && m_projections[static_cast<std::size_t>(material)].grain;
+  }
   void node(const QJsonObject& entry) {
     m_sceneNodes.append(static_cast<int>(m_nodes.size()));
     m_nodes.append(entry);
@@ -472,7 +480,8 @@ int GlbWriter::material(const render::MaterialData& m) {
 }
 
 int GlbWriter::mesh(const render::MeshData& data, int bodyMaterial,
-                    const std::vector<std::pair<int, const render::FaceMaterial*>>& faces) {
+                    const std::vector<std::pair<int, const render::FaceMaterial*>>& faces,
+                    const std::array<double, 2>& grainOffset) {
   const std::size_t triangles = data.indices.size() / 3;
   const std::size_t vertices = data.positions.size() / 3;
   // Each triangle's material: the body's, or its face's.
@@ -537,7 +546,9 @@ int GlbWriter::mesh(const render::MeshData& data, int bodyMaterial,
       // the image from its top.
       const bool ownUvs = projection.uv && data.uvs.size() == vertices * 2;
       // Each vertex's grain coordinates (mitcad#2186), by its face.
-      const render::GrainMesh grain = projection.grain ? render::grainMeshOf(data) : render::GrainMesh{};
+      // With the body's grain offset (mitcad#2605), as the views lay them.
+      const render::GrainMesh grain =
+          projection.grain ? render::grainMeshOf(data, grainOffset) : render::GrainMesh{};
       std::vector<float> points;
       std::vector<float> directions;
       std::vector<float> uv;
@@ -700,25 +711,35 @@ QJsonArray occurrenceItems(const QJsonArray& occurrences, const QString& prefix,
 }
 
 // The glTF mesh of a body's mesh and looks, made once per mesh and looks
-// (`meshes`); -1 for a body without triangles.
+// (`meshes`); -1 for a body without triangles. A body whose images lie
+// along the grain has a mesh of its own: its texture coordinates carry its
+// grain offset (mitcad#2605), named by its uid and occurrence as the views
+// name it.
 int bodyMesh(GlbWriter& writer, QHash<QString, int>& meshes, const PageBody& body) {
   if (!body.mesh || body.mesh->indices.empty()) {
     return -1;
   }
   const int material = writer.material(body.material);
+  bool grain = writer.alongGrain(material);
   std::vector<std::pair<int, const render::FaceMaterial*>> faces;
   QString key = QStringLiteral("%1|%2").arg(reinterpret_cast<quintptr>(body.mesh.get())).arg(material);
   for (const render::FaceMaterial& group : body.faces) {
     const int own = writer.material(group.material);
+    grain = grain || writer.alongGrain(own);
     faces.emplace_back(own, &group);
     key += QStringLiteral("|%1:").arg(own);
     for (const std::uint32_t face : group.faces) {
       key += QString::number(face) + QLatin1Char(',');
     }
   }
+  const std::string grainKey = render::grainKey(body.uid.toStdString(), body.occurrence.toStdString());
+  if (grain) {
+    key += QStringLiteral("|grain of ") + QString::fromStdString(grainKey);
+  }
   int mesh = meshes.value(key, -2);
   if (mesh == -2) {
-    mesh = writer.mesh(*body.mesh, material, faces);
+    mesh = writer.mesh(*body.mesh, material, faces,
+                       grain ? render::grainOffset(grainKey) : std::array<double, 2>{0.0, 0.0});
     meshes.insert(key, mesh);
   }
   return mesh;

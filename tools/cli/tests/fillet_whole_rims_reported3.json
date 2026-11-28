@@ -1,0 +1,13 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. GitHub mitcad/Mitcad#741's third design (mitcad#2582; opened with --open, never committed; tools/cli/fillet-whole-rims-reported-test.cmake): an annulus 40 across with a bore of 20, 10 high (Extrude1 F9, Body1 F9.b0), its four rims rounded with 5 by Fillet1 (F10, d22) in one constant set. Built before 0.1 % smaller with a warning; now a torus about the annulus's axis, its tube circle of radius 15, its section 5: 750 pi^2, no planar or cylindrical face left, without a note."},
+  {"expect": {"parameter": "d22", "value": 5}},
+  {"expect": {"feature": "Fillet1", "status": "ok", "body": "Body1", "volume": 7402.203300817607,
+    "area": 2960.8813203268074, "faces": 4, "min_face_area": 1, "tolerance": 1e-6}},
+  {"expect": {"query": {"query": "feature", "uid": "F10"}, "result": {"status": "ok", "level": null}}},
+  {"expect": {"query": {"query": "faces", "body": "F9.b0", "geometry": true, "surface": "torus"},
+    "result": {"total": 4, "faces": [{"major_radius": 15, "minor_radius": 5}, {"major_radius": 15, "minor_radius": 5},
+                                     {"major_radius": 15, "minor_radius": 5}, {"major_radius": 15, "minor_radius": 5}]},
+    "tolerance": 1e-6}},
+  {"expect": {"query": {"query": "faces", "body": "F9.b0", "geometry": true}, "none": {"surface": "plane"}}},
+  {"expect": {"query": {"query": "faces", "body": "F9.b0", "geometry": true}, "none": {"surface": "cylinder"}}}
+]

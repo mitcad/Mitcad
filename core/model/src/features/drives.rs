@@ -8,6 +8,8 @@
 //! (the working pressure angle of the shifted mesh makes its centre
 //! distance `a`: `gear_profile::mesh_distance`), or by helical teeth whose
 //! helix angle makes it exact (`m (z1 + z2) / (2 cos beta) = a`).
+//! Cycloidal pairs (mitcad#2607) take the exact and the helix fits only,
+//! with the default rolling circles, and only tooth counts those make.
 //!
 //! Belt Drive goes through the tooth counts of the pulleys near the ratio
 //! and gives for each the catalogue belts that go round them and the
@@ -84,6 +86,8 @@ pub struct GearPairOptions {
     pub max_helix_angle: f64,
     /// The most candidates.
     pub limit: usize,
+    /// Cycloidal teeth (mitcad#2607): no profile shifts, none undercut.
+    pub cycloid: bool,
 }
 
 impl Default for GearPairOptions {
@@ -101,6 +105,7 @@ impl Default for GearPairOptions {
             max_profile_shift: 0.5,
             max_helix_angle: 30f64.to_radians(),
             limit: 20,
+            cycloid: false,
         }
     }
 }
@@ -166,6 +171,20 @@ fn candidate(
     ratio_deviation: f64,
     options: &GearPairOptions,
 ) -> GearPairCandidate {
+    // Cycloidal teeth (mitcad#2607) have no undercut to correct.
+    if options.cycloid {
+        return GearPairCandidate {
+            module,
+            teeth,
+            fit,
+            profile_shift: shifts,
+            helix_angle,
+            ratio,
+            ratio_deviation,
+            undercut: [false, false],
+            corrected: false,
+        };
+    }
     let alpha = options.pressure_angle;
     let allowed = |x: f64| x.abs() <= options.max_profile_shift && (-1.0..=0.8).contains(&x);
     let total = shifts[0] + shifts[1];
@@ -196,6 +215,26 @@ fn candidate(
         undercut: [0, 1].map(|i| undercuts(teeth[i], alpha, helix_angle, x[i])),
         corrected: x != shifts,
     }
+}
+
+/// Whether a cycloidal gear of `teeth` with the default rolling circles
+/// can be made (mitcad#2607).
+fn cycloid_fits(module: f64, teeth: f64, helix_angle: f64) -> bool {
+    let circle = gear_profile::cycloid::ROLLING_DIAMETER * module;
+    gear_profile::cycloid::Cycloid {
+        tooth: gear_profile::Tooth {
+            module,
+            teeth,
+            pressure_angle: 20f64.to_radians(),
+            helix_angle,
+            shift: 0.0,
+            backlash: 0.0,
+        },
+        addendum: circle,
+        dedendum: circle,
+    }
+    .check_external()
+    .is_ok()
 }
 
 /// The splits of `sum` teeth near the ratio, both counts within the limits
@@ -298,7 +337,10 @@ pub fn gear_pairs(
             if exact_sum.ceil() != exact_sum.floor() {
                 sums.push(exact_sum.ceil());
             }
-            for sum in sums.into_iter().filter(|s| *s > 0.0 && !exact(*s)) {
+            for sum in sums
+                .into_iter()
+                .filter(|s| *s > 0.0 && !exact(*s) && !o.cycloid)
+            {
                 for (z1, z2, ratio, ratio_deviation) in split(sum) {
                     let Some(x) = shifts_for(m, z1, z2, distance, o.pressure_angle) else {
                         continue;
@@ -344,6 +386,14 @@ pub fn gear_pairs(
                 sum += 1.0;
             }
         }
+    }
+    // Cycloidal gears whose default rolling circles make their teeth.
+    if o.cycloid {
+        out.retain(|c| {
+            c.teeth
+                .iter()
+                .all(|z| cycloid_fits(c.module, *z, c.helix_angle))
+        });
     }
     // Free of undercut first; then the ratio's deviation in steps of
     // [`DEVIATION_STEP`] (the ratio is what is asked), the fit, the pairs

@@ -15,7 +15,7 @@
 #      row, Diameter1 given an H7 fit; both
 #      green, two decimals, in the group Shop; Diameter1 in Inspect; Shop
 #      hidden and shown again.
-#   5. Export Snapshot (F9 here) of the group Inspect.
+#   5. Export Snapshot (F12 here) of the group Inspect.
 #   6. Datum Label on Body1's top face and Feature Control Frame on Body2's
 #      round face from the Make tab's Annotate group (perpendicularity,
 #      diameter 0.05 (M), to A); AxisDistance1's row
@@ -43,7 +43,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{ 'view.annotations' = 'F8'; 'view.export_snapshot' = 'F9'
+Ui-Init $App $Out $QtBin @{ 'view.annotations' = 'F8'; 'view.export_snapshot' = 'F12'
   'make.dimension' = 'Shift+F2'; 'make.datum_label' = 'Shift+F3'; 'make.frame' = 'Shift+F4'
   'make.hole_callout' = 'Shift+F5' } -StepPause 0
 
@@ -228,7 +228,7 @@ if (-not $area) { Ui-Fail 'the app did not log its view area' }
 $view = $area -split ' ' | ForEach-Object { [int]$_ }
 $png = Join-Path $work 'inspect.png'
 Ui-Mark
-Ui-Step 'export snapshot (F9)'            { Ui-Key 'F9' }
+Ui-Step 'export snapshot (F12)'            { Ui-Key 'F12' }
 Ui-ExpectNew 'Snapshot dialog opened: size 2x, transparent off, annotations all (2 shown)' 'the dialog opened'
 Ui-Step 'type the file' {
   Ui-FocusDialog '^Export Snapshot$'

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/commands/GearCommands.cpp app/framework/CommandSession.cpp
 # check-all sources: core/model/src/features/gear.rs core/model/src/features/gear_profile.rs geometry/src/gear.cpp
+# check-all sources: core/model/src/features/gear_profile/cycloid.rs
 # check-all sources: app/commands/PlaceInputs.cpp core/model/src/features/seat.rs core/model-api/src/seats.rs tools/cli
 # check-all sources: core/model/src/print_fits.rs core/model-api/src/gears.rs app/commands/DriveCommands.cpp core/model-api/src/drives.rs
 # Gear (mitcad#472) through the real UI; the Windows counterpart is
@@ -41,6 +42,11 @@
 #      the active component); the motor's shaft first, as a seat with its
 #      occurrence link, and the root's second list the gears for the axes
 #      60 mm apart, and OK makes both gears there.
+#   6. Cycloidal teeth (mitcad#2607), in an empty design: Cycloid picked in
+#      the Type list, placed on XY: the note shows its diameters (pitch 40,
+#      outside 44, root 35); OK makes Gear1 (Cycloid). Then Cycloid Rack
+#      meshing it, 10 teeth, 12 high: the note shows its pitch line and the
+#      centre distance (20 mm); OK makes the rack.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-gear-test.sh [screenshot.png]
@@ -228,6 +234,39 @@ ui_expect_new "Preview Gear Pair: ok" "the pair previewed" 30
 ui_mark
 ui_step "OK (Enter)"                       ui_key Return
 ui_expect_new "Added gear pair, module " "both gears added" 30
+grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
+
+echo "--- 6. Cycloidal teeth (mitcad#2607): a gear and a rack meshing it"
+ui_stop_app
+ui_start_app
+ui_mark
+ui_step "Gear"                             ui_command "Gear"
+ui_expect_new "Command Gear started" "the panel opened, waiting for a pick" 30
+ui_step "Cycloid"                          ui_click_logged "Panel Gear input kind=cycloid"
+ui_place_on_xy Gear
+ui_expect_new "Panel Gear note: Pitch diameter 40 mm, outside 44 mm, root 35 mm" "the cycloid gear's diameters shown"
+ui_mark
+ui_step "OK (Enter)"                       ui_key Return
+ui_expect_new "Added gear (Cycloid), 20 teeth, module 2" "the cycloid gear added" 30
+ui_mark
+ui_step "Gear"                             ui_command "Gear"
+ui_expect_new "Command Gear started" "the panel opened, waiting for a pick" 30
+ui_step "Cycloid Rack"                     ui_click_logged "Panel Gear input kind=cycloid_rack"
+ui_step "teeth 10"                         ui_type_in "Panel Gear input teeth" "10"
+ui_step "height 12"                        ui_type_in "Panel Gear input height" "12"
+ui_mark
+ui_step "Mesh With"                        ui_click_logged "Panel Gear input mesh_with"
+ui_expect_new "Pick places:" "the picks are logged"
+ui_expect_new "Pick face F1.b0/F1:" "a face of the cycloid gear can be picked"
+face=$(sed -n 's/^Pick face F1\.b0\/\(F1:[a-z_]*([0-9]*)\) at [0-9]*,[0-9]*$/\1/p' "$UI_LOG" | tail -1)
+[ -n "$face" ] || ui_fail "no face of the cycloid gear to pick"
+ui_mark
+ui_step "click $face"                      ui_click_pick "face F1.b0/$face at"
+ui_expect_new "Panel Gear note: Pitch line 62.8319 mm, center distance 20 mm" \
+  "the cycloid rack's pitch line and centre distance shown" 30
+ui_mark
+ui_step "OK (Enter)"                       ui_key Return
+ui_expect_new "Added gear (Cycloid Rack), 10 teeth, module 2" "the cycloid rack added" 30
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
 
 ui_finish "UI gear test"

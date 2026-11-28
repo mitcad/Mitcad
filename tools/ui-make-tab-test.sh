@@ -15,10 +15,10 @@
 # plate with its flat pattern (Body1) and a 40 x 30 x 10 block with a
 # counterbored hole (Body2) that sets Walls 5 of its own; the design prints
 # with the printer Bench and the process Standard:
-#   - The tabs Solid, Surface, Sheet Metal, Build and Manage
+#   - The tabs Solid, Surface, Sheet Parts, Build and Manage
 #     (mitcad#1975), 3D Print, Laser and CNC in the Make workspace; the Solid tab's groups without the moved commands
 #     (Modify without Edit Materials…, Inspect without Remove Section
-#     Analysis, Assemble without Insert Component, no Sheet Metal or
+#     Analysis, Assemble without Insert Component, no Sheet Parts or
 #     Surface group, Render with Render Image… alone).
 #   - 3D Print's groups Printers and Prepare (every command a button),
 #     Laser's Export, CNC's Setup, 2D Milling, 3D Milling, Turning and
@@ -204,7 +204,7 @@ ui_expect_log "Browser Make markers: none" "no markers on the Solid tab"
 echo "--- The tabs, and the Solid tab without the moved commands"
 # The toolbar panel shows the Design workspace's tabs; Make is a workspace
 # of its own, chosen from the selector (mitcad#1990, ui_click_tab).
-for tab in SOLID SURFACE "SHEET METAL" BUILD MANAGE; do
+for tab in SOLID SURFACE "SHEET PARTS" BUILD MANAGE; do
   ui_expect_log "Ribbon tab $tab at" "the $tab tab"
 done
 for tab in MAKE_PRINT MAKE_LASER MAKE_CNC; do
@@ -228,9 +228,9 @@ grep -F "Ribbon SOLID/RENDER at" "$UI_LOG" && ui_fail "a Render group on the Sol
 echo "ok   no Render group on the Solid tab"
 grep -F "Ribbon SOLID/MAKE" "$UI_LOG" && ui_fail "a Make group on the Solid tab"
 echo "ok   no Make group on the Solid tab"
-# Surface and Sheet Metal are tabs of their own (mitcad#1975).
-grep -E "Ribbon SOLID/(SURFACE|SHEET METAL) at" "$UI_LOG" && ui_fail "a Surface or Sheet Metal group on the Solid tab"
-echo "ok   no Surface or Sheet Metal group on the Solid tab"
+# Surface and Sheet Parts are tabs of their own (mitcad#1975).
+grep -E "Ribbon SOLID/(SURFACE|SHEET PARTS) at" "$UI_LOG" && ui_fail "a Surface or Sheet Parts group on the Solid tab"
+echo "ok   no Surface or Sheet Parts group on the Solid tab"
 
 echo "--- The Make workspace's tabs and their groups"
 ui_mark

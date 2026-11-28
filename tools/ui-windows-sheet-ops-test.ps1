@@ -42,7 +42,7 @@ param(
 
 # Plain F keys but F2 (Rename): no shortcut is another one without its modifier.
 Ui-Init $App $Out $QtBin @{
-  'sheet.bend' = 'F7'; 'sheet.fold' = 'F8'; 'sheet.cut' = 'F9'; 'sheet.corner_relief' = 'F11'
+  'sheet.bend' = 'F7'; 'sheet.fold' = 'F8'; 'sheet.cut' = 'Shift+F12'; 'sheet.corner_relief' = 'F11'
   'sheet.unfold' = 'F12'; 'sheet.refold' = 'F5'; 'sheet.corner_round' = 'Shift+F2'
   'sheet.corner_chamfer' = 'F3'; 'sheet.flat_pattern' = 'F4' } -StepPause 0
 $work = Join-Path $script:UiOut 'files'
@@ -388,7 +388,7 @@ Ops-ExpectVolume 'F3.b0' $relieved 'the rectangle again'
 
 Write-Host '--- Sheet Cut across the back bend'
 Ui-Mark
-Ui-Step 'sheet cut (F9)'                    { Ui-Key 'F9' }
+Ui-Step 'sheet cut (Shift+F12)'                    { Ui-Key 'Shift+F12' }
 Ui-ExpectNew 'Command Sheet Cut started' 'Sheet Cut started'
 Ui-ExpectNew 'Sheet Cut Profiles: 1 profile' 'the newest profile taken'
 Ui-Mark

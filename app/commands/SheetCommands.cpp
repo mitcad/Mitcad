@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// The SHEET METAL group of the SOLID tab (mitcad#210; the model's side in
+// The SHEET PARTS tab (mitcad#210, renamed in mitcad#2602; the model's side in
 // commands.md, "Sheet rules and base Face" to "Sheet Unfold, Refold and Flat
 // Pattern"): Sheet Rules, Face, Flange, Hem, Convert to Sheet Metal, Bend, Fold,
 // Corner Round, Corner Chamfer, Unfold, Refold, Sheet Cut and Flat Pattern. Picks on a sheet body
@@ -2682,6 +2682,10 @@ Selection loftedItems(const QJsonObject& profile, const CommandContext& context)
 
 bool pressBrake(const CommandState& s) { return s.choice(QStringLiteral("method")) == QStringLiteral("press_brake"); }
 
+// Press brake with bends (mitcad#2560), which may meet in a point and take
+// a corner relief there (mitcad#2576).
+bool loftedBends(const CommandState& s) { return pressBrake(s) && s.checked(QStringLiteral("bends")); }
+
 // Die formed and laid flat approximately, by triangulation (mitcad#2560).
 bool loftedApproximate(const CommandState& s) {
   return !pressBrake(s) && s.choice(QStringLiteral("development")) == QStringLiteral("triangulated");
@@ -2734,6 +2738,16 @@ CommandDef sheetLoftedFlangeCommand(const CommandContext& context) {
       checkInput(QStringLiteral("bends"), QObject::tr("Bends"), false)
           .withTooltip(QObject::tr("On: the folds are bends of the rules' bend radius; off: sharp folds"))
           .withVisible(pressBrake),
+      // mitcad#2576: the corner relief where bends meet in a point.
+      checkInput(QStringLiteral("custom_relief"), QObject::tr("Own Corner Relief"), false)
+          .withTooltip(QObject::tr("Off: where bends meet in a point, the rules' corner relief opens there"))
+          .withVisible(loftedBends),
+      valueInput(QStringLiteral("relief"), QObject::tr("Corner Relief"), ValueKind::Length, QStringLiteral("8 mm"))
+          .withStepMinimum(0.0, true)
+          .withTooltip(QObject::tr("How far from a point where bends meet its relief cuts across the facets"))
+          .withVisible([](const CommandState& s) {
+            return loftedBends(s) && s.checked(QStringLiteral("custom_relief"));
+          }),
       choiceInput(QStringLiteral("development"), QObject::tr("Development"), kConvertDevelopments,
                   QStringLiteral("exact"))
           .withTooltip(QObject::tr("Exact: lies flat as it is. Approximate: other profiles, by triangulation"))
@@ -2798,6 +2812,9 @@ CommandDef sheetLoftedFlangeCommand(const CommandContext& context) {
       }
       if (state.checked(QStringLiteral("bends"))) {
         result.def.insert(QStringLiteral("bends"), true);
+        if (state.checked(QStringLiteral("custom_relief"))) {
+          result.def.insert(QStringLiteral("relief"), state.expression(QStringLiteral("relief")));
+        }
       }
     } else {
       result.def.insert(QStringLiteral("method"), QStringLiteral("die_formed"));
@@ -2844,6 +2861,10 @@ CommandDef sheetLoftedFlangeCommand(const CommandContext& context) {
     }
     state.setChecked(QStringLiteral("flip"), feature.value(QStringLiteral("flip")).toBool());
     state.setChecked(QStringLiteral("bends"), feature.value(QStringLiteral("bends")).toBool());
+    state.setChecked(QStringLiteral("custom_relief"), feature.contains(QStringLiteral("relief")));
+    if (feature.contains(QStringLiteral("relief"))) {
+      loadValue(state, QStringLiteral("relief"), feature.value(QStringLiteral("relief")), feature, model);
+    }
     state.setChoice(QStringLiteral("development"),
                     feature.value(QStringLiteral("development")).toString(QStringLiteral("exact")));
     loadCount(state, QStringLiteral("triangles"), feature.value(QStringLiteral("triangles")), feature, model);
@@ -2861,6 +2882,167 @@ CommandDef sheetLoftedFlangeCommand(const CommandContext& context) {
                      .arg(text(state, "chord_tolerance"), bends)
                : QStringLiteral("Added lofted flange, press brake, %1 facets per region%2")
                      .arg(text(state, "facets"), bends);
+  };
+  return def;
+}
+
+// ---------------------------------------------------------------------------
+// Bead (mitcad#2645; the model's `sheet_bead`): stiffening ribs pressed into
+// a flat face of a sheet along sketch lines and arcs on that face.
+
+namespace {
+
+// Their labels for the catalogues: the panel translates them in the
+// context Choice (choiceLabel, framework/CommandPanel.cpp).
+const Choices kBeadProfiles = {{QStringLiteral("round"), QStringLiteral("Round")},
+                               {QStringLiteral("u"), QStringLiteral("U")},
+                               {QStringLiteral("v"), QStringLiteral("V")},
+                               {QStringLiteral("trapezoid"), QStringLiteral("Trapezoid")}};
+const Choices kBeadDirections = {{QStringLiteral("out"), QStringLiteral("Out of the Face")},
+                                 {QStringLiteral("in"), QStringLiteral("Into the Face")}};
+const Choices kBeadEnds = {{QStringLiteral("round"), QStringLiteral("Round")},
+                           {QStringLiteral("run_out"), QStringLiteral("Run-Out")}};
+[[maybe_unused]] constexpr const char* kBeadLabels[] = {
+    QT_TRANSLATE_NOOP("Choice", "U"),           QT_TRANSLATE_NOOP("Choice", "V"),
+    QT_TRANSLATE_NOOP("Choice", "Trapezoid"),   QT_TRANSLATE_NOOP("Choice", "Out of the Face"),
+    QT_TRANSLATE_NOOP("Choice", "Into the Face"), QT_TRANSLATE_NOOP("Choice", "Run-Out")};
+
+bool isBeadCurve(const SelectionItem& item) {
+  return item.geometry == QStringLiteral("line") || item.geometry == QStringLiteral("arc") ||
+         item.geometry == QStringLiteral("circle");
+}
+
+} // namespace
+
+CommandDef sheetBeadCommand(const CommandContext& context) {
+  CommandDef def;
+  def.id = QStringLiteral("sheet.bead");
+  def.name = QObject::tr("Bead");
+  def.icon = QStringLiteral("sheet-bead");
+  def.tooltip = QObject::tr("Presses stiffening ribs into a flat face along sketch lines and arcs on it");
+  def.keywords = {QStringLiteral("sheet metal"), QStringLiteral("rib"), QStringLiteral("stiffener"),
+                  QStringLiteral("form"), QStringLiteral("press")};
+  def.featureType = QStringLiteral("sheet_bead");
+  const auto trapezoid = [](const CommandState& s) {
+    return s.choice(QStringLiteral("profile")) == QStringLiteral("trapezoid");
+  };
+  const auto runOut = [](const CommandState& s) {
+    return s.choice(QStringLiteral("ends")) == QStringLiteral("run_out");
+  };
+  const auto ownRadius = [](const CommandState& s) { return s.checked(QStringLiteral("custom_radius")); };
+  def.inputs = {
+      selectionInput(QStringLiteral("body"), QObject::tr("Body"), SelectKind::Body | SelectKind::Face, 1, 1)
+          .withTooltip(QObject::tr("Pick a sheet-metal body or one of its faces"))
+          .withAccepts([&context](const SelectionItem& item) {
+            if (item.kind == SelectKind::Face) {
+              return isPanelFace(item);
+            }
+            try {
+              for (const QJsonValue& value : context.queryArray(QStringLiteral("sheet_bodies"))) {
+                if (str(value.toObject(), "body") == item.owner) {
+                  return true;
+                }
+              }
+            } catch (const std::exception&) {
+            }
+            return false;
+          })
+          .withConvert([](const SelectionItem& item) {
+            SelectionItem body{SelectKind::Body, item.owner, QString(), QString()};
+            body.occurrence = item.occurrence;
+            return body;
+          }),
+      selectionInput(QStringLiteral("curves"), QObject::tr("Center Lines"), SelectKind::SketchCurve, 1, 0)
+          .withTooltip(QObject::tr("Lines and arcs of a sketch on a flat face, joined end to end"))
+          .withAccepts(isBeadCurve),
+      choiceInput(QStringLiteral("profile"), QObject::tr("Profile"), kBeadProfiles, QStringLiteral("round"))
+          .withTooltip(QObject::tr("The shape across the bead: round, U, V or trapezoid")),
+      valueInput(QStringLiteral("width"), QObject::tr("Width"), ValueKind::Length, QStringLiteral("10 mm"))
+          .withStepMinimum(0.0, true)
+          .withTooltip(QObject::tr("Across the bead on the face, between its edges")),
+      valueInput(QStringLiteral("depth"), QObject::tr("Depth"), ValueKind::Length, QStringLiteral("3 mm"))
+          .withStepMinimum(0.0, true)
+          .withTooltip(QObject::tr("From the face to the bead's crown")),
+      valueInput(QStringLiteral("angle"), QObject::tr("Flank Angle"), ValueKind::Angle, QStringLiteral("60 deg"))
+          .withTooltip(QObject::tr("The angle of the trapezoid's flanks to the face"))
+          .withVisible(trapezoid),
+      choiceInput(QStringLiteral("direction"), QObject::tr("Direction"), kBeadDirections, QStringLiteral("out"))
+          .withTooltip(QObject::tr("The bead stands out of the sketch's face, or is pressed into it")),
+      choiceInput(QStringLiteral("ends"), QObject::tr("Ends"), kBeadEnds, QStringLiteral("round"))
+          .withTooltip(QObject::tr("Round, or a straight ramp from the face up to the crown")),
+      valueInput(QStringLiteral("run_out"), QObject::tr("Run-Out"), ValueKind::Length, QString())
+          .withStepMinimum(0.0, true)
+          .withTooltip(QObject::tr("Along the center line, from an end to where the ramp reaches the crown"))
+          .withAuto([](const CommandState&, const CommandContext&) { return QObject::tr("Same as Width"); })
+          .withVisible(runOut),
+      checkInput(QStringLiteral("custom_radius"), QObject::tr("Own Bend Radius"), false)
+          .withTooltip(QObject::tr("Off: the bead's bends have the rules' bend radius")),
+      valueInput(QStringLiteral("radius"), QObject::tr("Bend Radius"), ValueKind::Length, QStringLiteral("1 mm"))
+          .withStepMinimum(0.0, true)
+          .withTooltip(QObject::tr("The inside radius of the bead's bends"))
+          .withVisible(ownRadius),
+  };
+  def.enabled = [&context] { return hasSheets(context); };
+  def.build = [](const CommandState& state, const CommandContext&) {
+    Built result;
+    const QString body = state.items(QStringLiteral("body")).first().owner;
+    QString sketch;
+    QJsonArray curves;
+    for (const SelectionItem& item : state.items(QStringLiteral("curves"))) {
+      if (sketch.isEmpty()) {
+        sketch = item.owner;
+      } else if (item.owner != sketch) {
+        return Built::failure(QObject::tr("Select lines and arcs of one sketch."), QStringLiteral("curves"));
+      }
+      curves.append(item.name);
+    }
+    result.def = {{QStringLiteral("type"), QStringLiteral("sheet_bead")},
+                  {QStringLiteral("body"), body},
+                  {QStringLiteral("sketch"), sketch},
+                  {QStringLiteral("curves"), curves},
+                  {QStringLiteral("profile"), state.choice(QStringLiteral("profile"))},
+                  {QStringLiteral("width"), state.expression(QStringLiteral("width"))},
+                  {QStringLiteral("depth"), state.expression(QStringLiteral("depth"))},
+                  {QStringLiteral("direction"), state.choice(QStringLiteral("direction"))},
+                  {QStringLiteral("ends"), state.choice(QStringLiteral("ends"))}};
+    if (state.choice(QStringLiteral("profile")) == QStringLiteral("trapezoid")) {
+      result.def.insert(QStringLiteral("angle"), state.expression(QStringLiteral("angle")));
+    }
+    if (state.choice(QStringLiteral("ends")) == QStringLiteral("run_out") &&
+        !state.text(QStringLiteral("run_out")).trimmed().isEmpty()) {
+      result.def.insert(QStringLiteral("run_out"), state.expression(QStringLiteral("run_out")));
+    }
+    if (state.checked(QStringLiteral("custom_radius"))) {
+      result.def.insert(QStringLiteral("radius"), state.expression(QStringLiteral("radius")));
+    }
+    return result;
+  };
+  def.load = [](const QJsonObject& feature, CommandState& state, const CommandContext& model) {
+    state.setItems(QStringLiteral("body"), {SelectionItem{SelectKind::Body, str(feature, "body"), QString(), QString()}});
+    const QString sketch = str(feature, "sketch");
+    Selection curves;
+    for (const QJsonValue& curve : feature.value(QStringLiteral("curves")).toArray()) {
+      curves.append(itemOf(QJsonObject{{QStringLiteral("sketch"), sketch}, {QStringLiteral("curve"), curve}}, model));
+    }
+    state.setItems(QStringLiteral("curves"), curves);
+    state.setChoice(QStringLiteral("profile"), feature.value(QStringLiteral("profile")).toString(QStringLiteral("round")));
+    state.setChoice(QStringLiteral("direction"), feature.value(QStringLiteral("direction")).toString(QStringLiteral("out")));
+    state.setChoice(QStringLiteral("ends"), feature.value(QStringLiteral("ends")).toString(QStringLiteral("round")));
+    for (const char* field : {"width", "depth", "angle", "run_out"}) {
+      const QString id = key(field);
+      if (feature.contains(id)) {
+        loadValue(state, id, feature.value(id), feature, model);
+      }
+    }
+    if (feature.contains(QStringLiteral("radius"))) {
+      state.setChecked(QStringLiteral("custom_radius"), true);
+      loadValue(state, QStringLiteral("radius"), feature.value(QStringLiteral("radius")), feature, model);
+    }
+  };
+  def.describe = [](const CommandState& state, const CommandContext&) {
+    return QStringLiteral("Added %1 bead, width %2, depth %3, %4, %5 ends")
+        .arg(state.choice(QStringLiteral("profile")), text(state, "width"), text(state, "depth"),
+             state.choice(QStringLiteral("direction")), state.choice(QStringLiteral("ends")));
   };
   return def;
 }
@@ -2896,6 +3078,8 @@ void registerSheetMetalCommands(CommandRegistry& registry, const CommandContext&
   registerSheetProcessCommands(registry, context);
   // Lofted Flange (mitcad#2512).
   registry.add(sheetLoftedFlangeCommand(context));
+  // Bead (mitcad#2645).
+  registry.add(sheetBeadCommand(context));
 }
 
 } // namespace mitcad

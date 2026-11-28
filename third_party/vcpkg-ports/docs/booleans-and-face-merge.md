@@ -1,4 +1,4 @@
-# Booleans and the face merge: 0110, 0220, 0360, 0590, 0680, 1040, 1285, 1695, 2170, 2284, 2384
+# Booleans and the face merge: 0110, 0220, 0360, 0590, 0680, 1040, 1285, 1695, 2170, 2284, 2384, 2623
 
 OCCT's face merge after booleans (`ShapeUpgrade_UnifySameDomain`) and the
 boolean's wire splitter, and the volume integration that measures a
@@ -52,6 +52,13 @@ boolean's result (2284). The face merge's speed-ups are 0006 in
   image stopped 4.2 micrometres below the top, where the two sides are
   tangent, and the union of the loft with its mirror image kept the loft
   alone (mitcad#2384, GitHub mitcad/Mitcad#641).
+- **2623** lets the face merge join faces across the edge where their
+  surface closes on itself without being periodic: it bounds and trims the
+  periodic B-spline it made of the surface, not the surface itself, past
+  whose bounds the trim reached (a tab joined into a shelled bowl: "V
+  parameters out of range", and the boolean's result was kept unmerged),
+  and it makes a B-spline periodic on a copy, not on the surface the input
+  shares (mitcad#2623, follow-up of mitcad#2538).
 
 ## 0110: a chain that cannot be concatenated
 
@@ -568,6 +575,45 @@ for a longer one; `IsParallel` keeps `aTol`. The point put on the
 boundary is still the surfaces' common point that `SeekPointOnBoundary`
 finds.
 
+## 2623: faces merged across the closure of a surface that is not periodic
+
+The patch 2623 comes from mitcad#2623, a follow-up of mitcad#2538 and
+GitHub mitcad/Mitcad#674: a bowl revolved, its top's edge rounded and
+shelled, with ribs inside whose ends are replaced onto the outer
+rounding, and the reporter's Join of a tab on the rim up to the body.
+OCCT's face merge after the Join (the boolean's `SimplifyResult`) threw
+"Geom_RectangularTrimmedSurface::V parameters out of range"; since
+mitcad#2538 `run_operation` (geometry/src/boolean.cpp) catches that and
+runs the operation again without the merge, so the result kept its faces
+as the operation left them.
+
+### 2623-shapeupgrade-unifysamedomain-trim-on-the-periodic-bspline-made
+
+`IntUnifyFaces` joins the faces of one surface. With B-spline faces
+joined (`ConcatBSplines`, as `SimplifyResult` asks for), when the faces
+meet at an edge with two pcurves on their surface, where it closes on
+itself smoothly without a seam of a face, and the surface is not
+periodic in that direction, it makes the surface periodic: a B-spline by
+`SetUPeriodic` / `SetVPeriodic`, any other surface (a surface of
+revolution, an offset surface) approximated by a B-spline
+(`GeomConvert_ApproxSurface`, 1e-4) first, and builds the reference face
+on it. The relocation that follows, when the faces' union falls into two
+intervals of the new period, moves their pcurves to a new origin and
+trims the surface from there over one period. It took the bounds and the
+surface to trim from the surface the faces started from: on an
+approximated surface the trim reached past that surface's own bounds and
+threw. The patch keeps the surface the merged face is built on (the
+periodic B-spline when one was made) and bounds, trims and copies that
+one.
+
+A surface that already was a B-spline was made periodic in place: the
+faces' surface, which the input shape and the faces not merged share
+(the merge's safe input mode copies the topology, not the geometry), changed
+under them. The patch makes a copy periodic. MitCad runs its booleans on a
+copy of their inputs (`InputCopy`, geometry/src/history.hpp) whose faces
+share the inputs' surfaces, so a cached body's B-spline surface could be
+made periodic by a later boolean's merge.
+
 ## Reports and tests
 
 - 0220: mitcad#284 and the coaxial cylinders' join in
@@ -658,3 +704,19 @@ finds.
   cases are unchanged; 2384-loft-mirror-join-proxy (the same cone as a
   rational B-spline made in DRAW, by arc length and over [0, 1]) joins
   right with and without the patch.
+- 2623: mitcad#2623 and
+  `geometry/tests/port/p2623-closed-surface-merged-across-its-closure.cpp`
+  (ctest `geometry.port.2623`): the outer half of a ring revolved from an
+  exact rational circle (a surface of revolution closed in v, not
+  periodic), cut to y >= 0 so that two faces meet at the circle's start,
+  merges into one valid face on the trimmed periodic B-spline with the
+  volume kept (without the patch the merge throws); and a half tube whose
+  side is a rational B-spline closed in u, not periodic, merges into one
+  face while the input's surface stays not periodic (without the patch it
+  is made periodic in place). The reported design in
+  `tools/cli/tests/extrude_replace_reported674.json` (ctest
+  `cli.extrude_replace_reported`, from `MITCAD_MITCAD_REPORTED`): the
+  reporter's Join up to the body builds with no failed merge in the
+  boolean trace, and the rib ends stay merged with the rounding. In the
+  OCCT lab, the case 2623-closed-surface-merged-across-its-closure (the
+  same two bodies made in DRAW).

@@ -525,3 +525,9 @@ pub use document::{
 // Curvature combs of sketch curves and edges, with their inflections
 // (mitcad#2520).
 pub mod curvature_comb;
+// Replace Component (mitcad#2640).
+pub use document::{
+    ReplaceMatch, ReplaceOptions, ReplaceWith, ReplacedComponent, ReplacedReference,
+};
+// Interference checks kept in the document (mitcad#2664).
+pub use document::InterferenceAnalysis;

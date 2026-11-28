@@ -298,12 +298,15 @@ public:
     }
   }
 
-  // The cube's own perspective (mitcad#774), on or off.
-  void setPerspective(bool perspective) {
-    if (perspective != m_perspective) {
-      m_perspective = perspective;
-      SetToUpdate();
+  // The cube's own perspective (mitcad#774), on or off; true when it
+  // changed.
+  bool setPerspective(bool perspective) {
+    if (perspective == m_perspective) {
+      return false;
     }
+    m_perspective = perspective;
+    SetToUpdate();
+    return true;
   }
 
   // The direction towards the eye; true when the perspective changed.
@@ -650,10 +653,9 @@ void setViewCubeBackdrop(AIS_ViewCube& cube, bool dark) {
   }
 }
 
-void setViewCubePerspective(AIS_ViewCube& cube, bool perspective) {
-  if (auto* glass = dynamic_cast<GlassViewCube*>(&cube)) {
-    glass->setPerspective(perspective);
-  }
+bool setViewCubePerspective(AIS_ViewCube& cube, bool perspective) {
+  auto* glass = dynamic_cast<GlassViewCube*>(&cube);
+  return glass != nullptr && glass->setPerspective(perspective);
 }
 
 bool setViewCubeEye(AIS_ViewCube& cube, const gp_Dir& toEye) {

@@ -118,10 +118,19 @@ $extension"
     if [ "$type_index" -eq 0 ]; then fail "$plist" "document type $document_index has no UTI"; fi
     document_index=$((document_index + 1))
   done
-  supported_extensions=$(sed -n '/^FileKind fileKind(/,/^}/p' "$SCRIPT_DIR/../app/files/FileFormats.cpp" |
-    grep -oE 'QStringLiteral\("[a-z0-9]+"\)' | sed 's/QStringLiteral("//; s/")//' | sort -u)
   declared_extensions=$(printf '%s\n' "$document_extensions" | sed '/^$/d' | tr '[:upper:]' '[:lower:]' | sort -u)
-  if [ "$preview" -eq 0 ] && [ "$declared_extensions" != "$supported_extensions" ]; then
+  if ! supported_extensions=$(awk '
+    /^const Suffix kSuffixes\[\] = \{$/ { in_suffixes = 1; next }
+    in_suffixes && /^};$/ { complete = 1; exit }
+    in_suffixes && /^[[:space:]]*\{"[a-z0-9]+",[[:space:]]*FileKind::[[:alnum:]_]+\},?$/ {
+      split($0, fields, "\"")
+      print fields[2]
+      found = 1
+    }
+    END { if (!found || !complete) exit 1 }
+  ' "$SCRIPT_DIR/../app/files/FileFormats.cpp" | sort -u); then
+    fail "$plist" "could not read the supported extensions from the kSuffixes table in FileFormats.cpp"
+  elif [ "$preview" -eq 0 ] && [ "$declared_extensions" != "$supported_extensions" ]; then
     fail "$plist" "document extensions differ from FileFormats.cpp (expected: $(echo "$supported_extensions" | tr '\n' ' '); declared: $(echo "$declared_extensions" | tr '\n' ' '))"
   fi
 fi

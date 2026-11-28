@@ -125,15 +125,22 @@ struct BodyData {
   std::vector<FaceMaterial> faces;
 
   // Identifies the materials of the body and its faces: bodies of the same
-  // mesh with the same look share a Cycles mesh.
+  // mesh with the same look share a Cycles mesh. One laid along the grain
+  // carries its body's grain offset in its mesh (GrainProjection.hpp,
+  // grainOffset, mitcad#2605), so its key names the body too.
   std::string lookKey() const {
     std::string key = materialKey;
+    bool grain = material.textureGrain;
     for (const FaceMaterial& group : faces) {
       key += '|';
       for (const std::uint32_t face : group.faces) {
         key += std::to_string(face) + ',';
       }
       key += group.materialKey;
+      grain = grain || group.material.textureGrain;
+    }
+    if (grain) {
+      key += "|grain of " + id;
     }
     return key;
   }

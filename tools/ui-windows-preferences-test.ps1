@@ -67,7 +67,7 @@ public static class PreferencesTestWindow {
 
 # Popups close at once in session 0: the Cloud and Navigation pages by keys
 # of the test's own.
-Ui-Init $App $Out $QtBin @{ 'tools.preferences.cloud' = 'F8'; 'tools.preferences.navigation' = 'F9' } -StepPause 0
+Ui-Init $App $Out $QtBin @{ 'tools.preferences.cloud' = 'F8'; 'tools.preferences.navigation' = 'F12' } -StepPause 0
 
 $work = Join-Path $script:UiOut 'preferences'
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
@@ -263,7 +263,7 @@ try {
   Remove-Item Env:MITCAD_TEST_PREFERENCES_SHOTS -ErrorAction SilentlyContinue
 }
 Preferences-Fit 'git [0-9][^ ]* at ' 'the Cloud page names the git program found'
-Page-Fills 'Navigation' 'F9' 'Navigation page: bindings table' 'navigation' 138
+Page-Fills 'Navigation' 'F12' 'Navigation page: bindings table' 'navigation' 138
 Page-Fills 'Cloud' 'F8' 'Cloud page: known brokers list' 'cloud' 110
 
 Write-Host '--- 2. MITCAD_GIT naming a file that is not there'

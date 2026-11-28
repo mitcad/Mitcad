@@ -12,7 +12,7 @@
 # with its flat pattern (Body1) and a 40 x 30 x 10 block with a
 # counterbored hole (Body2) that sets Walls 5 of its own; the design prints
 # with the printer Bench and the process Standard.
-#   1. The tabs Solid, Surface, Sheet Metal, Build, 3D Print, Laser, CNC
+#   1. The tabs Solid, Surface, Sheet Parts, Build, 3D Print, Laser, CNC
 #      and Manage (mitcad#1975); 3D Print's groups Printers and Prepare
 #      (every command a button), Laser's Export, CNC's Setup, 2D Milling,
 #      3D Milling, Turning and Toolpath, and on each Materials (the
@@ -209,7 +209,7 @@ Ui-ExpectLog 'Browser Make markers: none' 'no markers on the Solid tab'
 Write-Host "--- 1. The Make workspace's tabs and their groups"
 # The Docked tab row's selector (mitcad#2082): Design's tabs in sight,
 # Make's in its own workspace until it is chosen (Ui-ClickTab chooses it).
-foreach ($tab in 'SOLID', 'SURFACE', 'SHEET METAL', 'BUILD', 'MANAGE') {
+foreach ($tab in 'SOLID', 'SURFACE', 'SHEET PARTS', 'BUILD', 'MANAGE') {
   Ui-ExpectLog "Ribbon tab $tab at" "the $tab tab"
 }
 foreach ($tab in 'MAKE_PRINT', 'MAKE_LASER', 'MAKE_CNC') {

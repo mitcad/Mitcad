@@ -8,14 +8,25 @@
   body { font: 14px/1.5 system-ui, sans-serif; margin: 12px; }
   li.now { font-weight: bold; }
   li.done { color: #777; text-decoration: line-through; }
+  #offer, #end { border-top: 1px solid #999; padding-top: 8px; }
 </style>
 </head>
 <body>
 <h1>Your first part</h1>
 <p>A rectangle on the XY plane, extruded 20 mm into a block. MitCad points
-at what to use next; Escape or Leave Tutorial stops at any time.</p>
+at what to use next; Escape or Leave Tutorial stops at any time. Continue on
+the lesson's card goes on where you left.</p>
 <ol id="steps"></ol>
-<p id="end" hidden>Done: your first part. Leave Tutorial closes this pane.</p>
+<p id="offer" hidden></p>
+<div id="end" hidden>
+  <h2>Lesson complete</h2>
+  <p>Your first part is done: the block is in your design, and the
+  tutorials list shows this lesson as Done. Start Again on its card starts
+  it from the beginning.</p>
+  <p><button id="back">Back to Tutorials</button></p>
+  <p>Back to Tutorials leaves the lesson and shows the list; your design
+  stays open. Help › Tutorials… shows the list at any time.</p>
+</div>
 <script>
 // The steps name commands and inputs as MitCad names them, never places on
 // the screen (docs/tutorials.md, "Guide steps").
@@ -39,6 +50,11 @@ for (const step of steps) {
   list.appendChild(item);
 }
 let next = 0;
+// What the page logs as "mitcad:tutorial:..." is in MitCad's log, for the
+// tests that take this tutorial to its end.
+function say(text) {
+  console.log("mitcad:tutorial:" + text);
+}
 // Where the user is, for the Start page's card ("In progress (step 2 of 5)",
 // "Done") and to continue there later (docs/tutorials.md, "Progress").
 // mitcad.call works with every MitCad that has the bridge; an older one
@@ -46,49 +62,158 @@ let next = 0;
 function progress(value) {
   mitcad.call("set_progress", value).catch(() => {});
 }
+// The first `count` steps marked done, none shown.
+function mark(count) {
+  steps.forEach((step, index) => {
+    const item = document.getElementById("step-" + step.id);
+    item.classList.toggle("done", index < count);
+    item.classList.remove("now");
+  });
+}
 function show(index) {
+  next = index;
   document.querySelectorAll("li").forEach(li => li.classList.remove("now"));
   document.getElementById("step-" + steps[index].id).classList.add("now");
   progress({step: index + 1, steps: steps.length});
-  mitcad.startStep(steps[index]).catch(error => console.log("mitcad:tutorial:step refused: " + error.message));
+  mitcad.startStep(steps[index]).catch(error => say("step refused: " + error.message));
 }
-// Left at a later step: the steps before it marked done, and the choice to
-// go on there or to start over.
-function offerToContinue(step) {
-  next = step - 1;
-  for (let i = 0; i < next; i += 1) {
-    document.getElementById("step-" + steps[i].id).classList.add("done");
+function startOver() {
+  document.getElementById("end").hidden = true;
+  mark(0);
+  show(0);
+}
+// The end: every step done, the lesson complete and the way back to the
+// tutorials list, where its card says Done.
+function finish() {
+  mark(steps.length);
+  document.getElementById("end").hidden = false;
+  progress({done: true});
+  say("finished");
+}
+document.getElementById("back").onclick = () => {
+  say("back to the tutorials");
+  // show_tutorials leaves the lesson and shows the list; a MitCad without
+  // it refuses it, and the lesson is left as Leave Tutorial leaves it.
+  mitcad.call("show_tutorials").catch(() => mitcad.call("leave"));
+};
+// A query of the design (docs/tutorials.md, "Reading the design"), asked
+// again for a few seconds while the design computes.
+async function ask(request) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await mitcad.call("query", request);
+    } catch (error) {
+      if (attempt >= 10 || !/computing/.test(error.message)) {
+        throw error;
+      }
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
   }
-  const offer = document.createElement("p");
-  offer.textContent = "You stopped at step " + step + " of " + steps.length + ". ";
+}
+// What the design has of this lesson: "block" (a solid made by an
+// extrude), "rectangle" (a sketch with a closed profile) or "nothing". A
+// MitCad without queries refuses them: nothing is known to be there.
+async function designHas() {
+  try {
+    const bodies = await ask({query: "bodies"});
+    if (bodies.solids > 0) {
+      await ask({query: "feature", type: "extrude"});
+      return "block";
+    }
+  } catch (error) {
+    // No extrude: the sketch is what counts.
+  }
+  try {
+    const feature = await ask({query: "feature", type: "sketch"});
+    const sketch = await ask({query: "sketch", name: feature.name});
+    return sketch.profiles.length > 0 ? "rectangle" : "nothing";
+  } catch (error) {
+    return "nothing";
+  }
+}
+// Where a learner who left at step `left` goes on. Leaving ends the step
+// shown; MitCad continues the lesson in the design it was left in while a
+// window still shows it, else in a new design. So the page goes on at the
+// step this design is ready for, never at one whose sketch or panel is
+// missing, and says why.
+async function whereToGoOn(left) {
+  const state = await mitcad.state();
+  if (state.mode === "command" && state.command === "solid.extrude") {
+    return {index: 3, why: "panel",
+            text: "The Extrude panel is open, so the lesson goes on with the distance."};
+  }
+  if (state.mode === "sketch") {
+    return {index: 1, why: "sketch", text: "Your sketch is open, so the lesson goes on with the rectangle."};
+  }
+  const has = await designHas();
+  if (has === "block") {
+    return {index: steps.length, why: "block", text: "Your block is in this design already."};
+  }
+  if (has === "rectangle") {
+    return {index: 2, why: "rectangle",
+            text: left > 3
+              ? "Your rectangle is in this design. The Extrude panel closed when you left, so open Extrude again."
+              : "Your rectangle is in this design, so the lesson goes on with Extrude."};
+  }
+  return {index: 0, why: "no rectangle",
+          text: left > 2
+            ? "This design has no rectangle (yours stayed in the design you left), so the lesson goes on " +
+              "from the sketch: draw the rectangle again, then extrude it."
+            : "The sketch closed when you left, so the lesson goes on with Create Sketch."};
+}
+// Left at a later step: the steps the design has marked done, and the
+// choice to go on there or to start over.
+async function offerToContinue(left) {
+  const where = await whereToGoOn(left);
+  const finished = where.index >= steps.length;
+  mark(where.index);
+  const offer = document.getElementById("offer");
+  offer.textContent = "You stopped at step " + left + " of " + steps.length + ". " + where.text + " ";
   const goOn = document.createElement("button");
-  goOn.textContent = "Continue";
-  goOn.onclick = () => { offer.remove(); show(next); };
+  goOn.textContent = finished ? "Finish the lesson" : "Continue at step " + (where.index + 1);
+  goOn.onclick = () => {
+    offer.hidden = true;
+    if (finished) {
+      finish();
+    } else {
+      show(where.index);
+    }
+  };
   const over = document.createElement("button");
   over.textContent = "Start over";
   over.onclick = () => {
-    offer.remove();
-    document.querySelectorAll("li").forEach(li => li.classList.remove("done"));
-    next = 0;
-    show(0);
+    offer.hidden = true;
+    startOver();
   };
   offer.append(goOn, " ", over);
-  list.before(offer);
-  console.log("mitcad:tutorial:offered to continue at " + step);
+  offer.hidden = false;
+  say("offered to continue at " + (where.index + 1) + ", left at " + left + " (" + where.why + ")");
+}
+// Done before (opened again without Start Again): the end as it was, and
+// the choice to start over.
+function showFinished() {
+  mark(steps.length);
+  document.getElementById("end").hidden = false;
+  const offer = document.getElementById("offer");
+  offer.textContent = "You have finished this lesson. ";
+  const over = document.createElement("button");
+  over.textContent = "Start over";
+  over.onclick = () => {
+    offer.hidden = true;
+    startOver();
+  };
+  offer.append(over);
+  offer.hidden = false;
+  say("finished before");
 }
 if (window.mitcad) {
-  // What the page logs as "mitcad:tutorial:..." is in MitCad's log, for
-  // the tests that take this tutorial to its end.
   mitcad.on("step_done", event => {
     document.getElementById("step-" + event.step).classList.add("done");
-    console.log("mitcad:tutorial:done " + event.step);
-    next += 1;
-    if (next < steps.length) {
-      show(next);
+    say("done " + event.step);
+    if (next + 1 < steps.length) {
+      show(next + 1);
     } else {
-      document.getElementById("end").hidden = false;
-      progress({done: true});
-      console.log("mitcad:tutorial:finished");
+      finish();
     }
   });
   mitcad.on("step_left", event => {
@@ -102,8 +227,10 @@ if (window.mitcad) {
   });
   mitcad.state().then(state => {
     const saved = state.progress;
-    if (saved && saved.state === "in_progress" && saved.step > 1 && saved.step <= steps.length) {
-      offerToContinue(saved.step);
+    if (saved && saved.state === "done") {
+      showFinished();
+    } else if (saved && saved.state === "in_progress" && saved.step > 1 && saved.step <= steps.length) {
+      offerToContinue(saved.step).catch(() => show(0));
     } else {
       show(0);
     }

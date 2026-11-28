@@ -1,0 +1,7 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "Bracket_v2.mitcad of tools/ui-scripts/replace-component.mitcad-ui (mitcad#2640): Bracket edited, its box 8 mm high, 800 mm3."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [0, 0],
+    "length": 10, "width": 10, "height": 8, "operation": "new_body"}},
+  {"expect": {"bodies": 1, "world_volume": 800}}
+]

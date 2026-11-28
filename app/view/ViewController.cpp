@@ -3194,16 +3194,34 @@ void ViewController::showPreferences(const QString& page, const QString& query) 
   activePickPriority->setChecked(m_settings.activePickPriority);
   activePickPriority->setToolTip(
       tr("A click takes the active component's items before nearer ones of other components"));
-  // Both choices about the active component in one row (Preferences fits a
+  // The active component's header row tinted in its component's colour in
+  // the Browser (mitcad#2618, GitHub mitcad/Mitcad#670), off by default:
+  // saved and applied to every window's Browser when the dialog is
+  // accepted, at once in the Settings window. No mnemonic: every letter of
+  // its label is taken on this page.
+  auto* highlightActive = new QCheckBox(tr("Highlight the active component in the Browser"));
+  highlightActive->setObjectName(QStringLiteral("browserHighlightActive"));
+  highlightActive->setChecked(browserHighlightActive());
+  highlightActive->setToolTip(tr("Tints the active component's row in the Browser with its component color"));
+  const auto applyHighlightActive = [highlightActive] {
+    const bool on = highlightActive->isChecked();
+    if (on != browserHighlightActive()) {
+      qDebug().noquote() << QStringLiteral("Preferences: browser active highlight %1").arg(onOff(on));
+    }
+    setBrowserHighlightActive(on);
+  };
+  // The choices about the active component in one row (Preferences fits a
   // 1366 x 768 screen with Text size, Icon size and Font, mitcad#1556).
   auto* activeComponentRow = new QHBoxLayout;
   activeComponentRow->addWidget(ghostInactive);
   activeComponentRow->addSpacing(12);
   activeComponentRow->addWidget(activePickPriority);
+  activeComponentRow->addSpacing(12);
+  activeComponentRow->addWidget(highlightActive);
   activeComponentRow->addStretch(1);
   if (window != nullptr) {
     // macOS sizes a check box a few pixels short of its text (as control()).
-    for (QCheckBox* box : {ghostInactive, activePickPriority}) {
+    for (QCheckBox* box : {ghostInactive, activePickPriority, highlightActive}) {
       box->ensurePolished();
       box->setMinimumWidth(box->sizeHint().width() + 8);
     }
@@ -3395,11 +3413,13 @@ void ViewController::showPreferences(const QString& page, const QString& query) 
   if (window != nullptr) {
     connect(ghostInactive, &QCheckBox::toggled, host, saving(applyGhostInactive));
     connect(activePickPriority, &QCheckBox::toggled, host, saving(applyActivePickPriority));
+    connect(highlightActive, &QCheckBox::toggled, host, saving(applyHighlightActive));
     connect(navigationBar, &QCheckBox::toggled, host, saving(applyNavigationBar));
     connect(quickAccess, &QCheckBox::toggled, host, saving(applyQuickAccess));
   } else {
     connect(dialog.get(), &QDialog::accepted, ghostInactive, applyGhostInactive);
     connect(dialog.get(), &QDialog::accepted, activePickPriority, applyActivePickPriority);
+    connect(dialog.get(), &QDialog::accepted, highlightActive, applyHighlightActive);
     connect(dialog.get(), &QDialog::accepted, navigationBar, applyNavigationBar);
     connect(dialog.get(), &QDialog::accepted, quickAccess, applyQuickAccess);
   }

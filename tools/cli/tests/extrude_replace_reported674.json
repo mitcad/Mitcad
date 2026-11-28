@@ -36,11 +36,16 @@
   {"expect": {"feature": "Extrude2", "status": "error",
     "error_contains": "does not cut across the whole profile: a part of the profile meets the target's body only at faces"}},
 
-  {"comment": "Up to the body each part of the tab ends at the body's first face above it: under the rib at its underside, then at the inner rounding and the inner wall, and the part on the rim where it leaves the wall. The Join builds. (Before, OCCT's face merge after the Join failed on its result with 'V parameters out of range' and so did the Join; the result now keeps its faces as the operation left them, mitcad#2538.)"},
+  {"comment": "Up to the body each part of the tab ends at the body's first face above it: under the rib at its underside, then at the inner rounding and the inner wall, and the part on the rim where it leaves the wall. The Join builds, its faces merged. (Before mitcad#2538, OCCT's face merge after the Join failed on its result with 'V parameters out of range' and so did the Join; then the result kept its faces as the operation left them. The merge made the surface the faces lie on, which closes on itself without being periodic, a periodic B-spline and trimmed the surface it started from past its bounds; since port patch 2623 it trims the B-spline it made, mitcad#2623. The test's CMake script checks the boolean trace for a failed merge.)"},
   {"cmd": "edit_feature", "uid": "F11", "def": {"type": "extrude",
     "profiles": [{"sketch": "F10", "region": "r{c5[c9,c12],c9[c5,c19],c12[c15,c5],c15[c12,c17],c17[c15,c19],c19[c17,c9]}"}],
     "extent": {"type": "to_object", "object": {"type": "body", "body": "F2.b0"}},
     "flip": true, "operation": "join", "participants": ["F2.b0"]}},
   {"expect": {"feature": "Extrude2", "status": "ok"}},
-  {"expect": {"bodies": 1}}
+  {"expect": {"bodies": 1}},
+  {"comment": "The rib ends replaced onto the rounding still merge with it after the Join: one face holds both names and no face is a replaced end alone."},
+  {"expect": {"query": {"query": "faces", "body": "F2.b0"},
+    "some": {"names": ["F3:fillet(E{F2:side(c2[c3,c6])|F2:side(c3[c15,c2])})", "F8:replace(F7:side(c5[c4+c15,c6+c15]))"]}}},
+  {"expect": {"query": {"query": "faces", "body": "F2.b0"},
+    "none": {"names": ["F8:replace(F7:side(c5[c4+c15,c6+c15]))#0"]}}}
 ]

@@ -557,6 +557,13 @@ void MainWindow::fillModelContextMenu(QMenu& menu, QStringList& entries, const S
       }
     }
   }
+  // Replace Component (mitcad#2640): the component picked in the view.
+  if (selection.size() == 1 && first.kind == SelectKind::Component && !first.occurrence.isEmpty() &&
+      !windowReadOnly()) {
+    const QString path = first.occurrence;
+    addCall(QStringLiteral("component"), tr("Replace Component…"),
+            [this, path] { m_controller->openReplaceComponent(path); });
+  }
   // Save As Mesh (mitcad#734): the bodies of the bodies, faces, edges,
   // vertices and components selected to mesh files; disabled with the
   // reason when none is a solid or mesh body.

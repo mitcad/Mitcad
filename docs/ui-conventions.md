@@ -276,9 +276,9 @@ platform requires it (a system menu item such as *Show Sidebar*).
 | **Command panel** | The panel of a running command: its inputs, OK and Cancel. Not "Inspector". | `CommandPanel`, `NativeForms` |
 | **Toolbar**, **tab**, **group** | The strip of tabs (the Solid tab) and their groups (the Assemble group) of commands. Not "ribbon" in user-facing text; *Ribbon* stays the class name. | `Ribbon` |
 | **Make tabs** (**3D Print tab**, **Laser tab**, **CNC tab**) | The tabs of everything about making a design, one per manufacturing method (mitcad#1049; one Make tab until the owner's split of 18.11.2026): the tabs of the **Make** workspace, in the Floating toolbar panel (mitcad#1990) and in the Docked tab row with its selector (mitcad#2082). Each starts with its method's groups (3D Print: **Slice**, with *Send to Slicer*, the page's most important button, first on the tab (the owner, 18.11.2026), **Printers**, **Prepare**; Laser: **Export**; CNC: **Setup**, **2D Milling**, **3D Milling**, **Turning**, **Toolpath**), then the same **Materials**, **Annotate** and the Solid tab's **Inspect** group (mitcad#1975). A group without commands is not shown. *Send to Slicer* is the command once called *3D Print*; *3D Print* is the tab's name. | `MAKE_PRINT`, `MAKE_LASER`, `MAKE_CNC` in `app/resources/layout/default.json`, `MainWindowMake.cpp` |
-| **Surface tab**, **Sheet Metal tab** | The tabs of surface and sheet metal modeling, after the Solid tab (mitcad#1975; groups of the Solid tab before). Each starts with Create Sketch and ends with the Solid tab's **Construct** and **Select** groups. | `SURFACE`, `SHEET METAL` in `app/resources/layout/default.json` |
+| **Surface tab**, **Sheet Parts tab** | The tabs of surface modeling and of sheet parts, after the Solid tab (mitcad#1975; groups of the Solid tab before). The Sheet Parts tab holds one sheet-parts system whose material and process decide the folds, joints and output (mitcad#1939): sheet metal, board (cardboard, corrugated board, folding carton) and laser-cut sheet such as plywood; it was the Sheet Metal tab until mitcad#2602. Not *Sheet Metal tab*, which names one of its materials only, and not *Sheet tab* (a *sheet* is not a body of open faces in user text, see **Body**). Commands keep their names where they mean metal (*Convert to Sheet Metal*, *sheet metal body*). Each starts with Create Sketch and ends with the Solid tab's **Construct** and **Select** groups. | `SURFACE`, `SHEET PARTS` in `app/resources/layout/default.json` |
 | **Manage tab** | The tab of what belongs to the whole design rather than to its shapes, after the Make tabs (mitcad#1975): **Parameters**, **Configurations**, **Materials**, **Rules**, **Design**. A command that edits the design's parameters, configurations, materials, appearances, rules or settings has its home here and may also show where it is used. | `MANAGE` in `app/resources/layout/default.json` |
-| **Second place** | A command shown in more than one place on the toolbar (mitcad#1975: Create Sketch on Solid, Surface and Sheet Metal; Material on Solid › Modify and the three Make tabs). One command, one shortcut; its first place that is not marked a repeat is its home (`CommandLayout::home`). No two commands share a label on one tab. | `"repeat"` in the layout file |
+| **Second place** | A command shown in more than one place on the toolbar (mitcad#1975: Create Sketch on Solid, Surface and Sheet Parts; Material on Solid › Modify and the three Make tabs). One command, one shortcut; its first place that is not marked a repeat is its home (`CommandLayout::home`). No two commands share a label on one tab. | `"repeat"` in the layout file |
 | **Layout** | The window's arrangement: the **Floating layout** (the default) or the **Docked layout**. *Chrome* is a developer word. | `chromeStyle()`, `FloatingLayout` |
 | **Command Search** | Finds a command by its name or keywords. | `CommandSearch` |
 | **Sketch Palette** | The panel of a sketch's settings and solve state while it is open. | `SketchPalette` |
@@ -309,11 +309,11 @@ interface, the Floating layout. The internal identifier of a control is
 not a name for it.
 
 - **Tabs and groups.** Their identifiers are upper case (`SOLID`,
-  `BUILD`, `MANAGE`, `ASSEMBLE`, `SHEET METAL`, `2D MILLING`). Every layout and frontend shows
+  `BUILD`, `MANAGE`, `ASSEMBLE`, `SHEET PARTS`, `2D MILLING`). Every layout and frontend shows
   them in title case (`displayName()` in `app/framework/Ribbon.cpp`); a
   tab keyed apart from its caption (`MAKE_PRINT`, `MAKE_LASER`,
   `MAKE_CNC`) shows its caption (*3D Print*, *Laser*, *CNC*):
-  write *the Solid tab*, *the Build tab*, *the 3D Print tab*, *the Sheet Metal
+  write *the Solid tab*, *the Build tab*, *the 3D Print tab*, *the Sheet Parts
   tab*, *the Assemble group*, *the 2D Milling group*. The upper-case form belongs to code and to
   developer documents that quote the identifier in backticks. Docked has
   no exception.
@@ -1110,6 +1110,27 @@ change applies at once in every window; the row at the top of the view,
 the selection and the open folders stay. The History list keeps the
 Standard height.
 
+**The active component's highlight** (mitcad#2618, Preferences ›
+Display › **Highlight the active component in the Browser**, off by
+default). While it is on, the header row of the active component (the
+root's, or each occurrence of the active component: the rows whose
+**Activate** radio button is on) is tinted with its component's color,
+the color of its bar, at one intensity: the color at 25% over the row's
+surface (`browserRows::activeComponentTint`), so that it is a pale tint
+on a light theme and a deep one on a dark theme. It is a category color
+with its legend, the bar beside it, not the accent: the selection's band
+stays the one accent fill. 25% is the most that keeps the names' colors
+(`Text`, and `TextHidden` of a hidden component) at least 4.5:1 on the
+tint in both themes with every component color, also under the Rows
+background's hover tint. Only the active component's headers are tinted,
+never their folders or items. In the Docked layout and the Floating
+Card the tint fills the row where the selection's band would be; with
+the Rows background it fills the row's box, under the owner's mark and
+the pointer's tint. A selected header shows the selection's band (or
+box) instead, and its tint again once the selection moves to another
+row while it is still active. The tint follows every activation, also
+the new component New Component activates. Off, the rows look as before.
+
 **Dragging Browser rows** (mitcad#2103, mitcad#2104, mitcad#2532). While
 rows are dragged, the Browser draws where they would go on the row under
 the pointer: a 3 px line before or after the row when they go among its
@@ -1460,7 +1481,7 @@ user's state back. The panel is never moved to another edge of the window
 or floated (declined on GitHub mitcad/Mitcad#571).
 
 The workspaces: **Design** (the
-Solid, Surface, Sheet Metal, Build and Manage tabs), **Make** (a tab per
+Solid, Surface, Sheet Parts, Build and Manage tabs), **Make** (a tab per
 manufacturing method: 3D Print, Laser and CNC; its entry in the list
 reads "3D Print · Laser · CNC"), **Render** (its stages) and
 **Drawing** (an open drawing's tab). A model workspace opens on the tab

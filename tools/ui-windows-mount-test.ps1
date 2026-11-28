@@ -42,7 +42,7 @@ param(
 trap { Ui-Fail "the test script stopped: $_ $($_.InvocationInfo.PositionMessage)" }
 
 Ui-Init $App $Out $QtBin @{
-  'assemble.joint_origin' = 'F7'; 'tools.libraries' = 'F8'; 'insert.library_component' = 'F9'
+  'assemble.joint_origin' = 'F7'; 'tools.libraries' = 'F8'; 'insert.library_component' = 'F3'
   'assemble.joint' = 'F11'; 'tools.publish_library' = 'F12'; 'solid.fillet' = 'Shift+F5' } -StepPause 0
 
 $git = Get-Command git -ErrorAction SilentlyContinue
@@ -206,7 +206,7 @@ function Close-Libraries {
 # id), linked or a copy, Insert: Place Part starts for a part with frames.
 function Insert([string]$Search, [string]$Id, [switch]$Copy) {
   Ui-Mark
-  Ui-Step 'Insert from Library (F9)'       { Ui-Key 'F9' }
+  Ui-Step 'Insert from Library (F3)'       { Ui-Key 'F3' }
   Ui-FocusDialog '^Browse Components$'
   Ui-Step "search $Search"                 { Ui-Key 'alt+s'; Ui-Type $Search }
   Ui-ExpectNew "Library search '$Search': 1 components" 'the search finds it'
@@ -352,7 +352,7 @@ if ($env:MITCAD_GRIDFINITY_LIBRARY -and (Test-Path (Join-Path $env:MITCAD_GRIDFI
   Ui-ExpectNew "Library fetched: library $($manifest.name) ($($manifest.id))" "the model's library fetched" 60
   Close-Libraries
   Ui-Mark
-  Ui-Step 'Insert from Library (F9)'       { Ui-Key 'F9' }
+  Ui-Step 'Insert from Library (F3)'       { Ui-Key 'F3' }
   Ui-FocusDialog '^Browse Components$'
   Ui-Step "search $($gridPart.name)"       { Ui-Key 'alt+s'; Ui-Type $gridPart.name }
   Ui-Step 'a copy (Alt+P)'                 { Ui-Key 'alt+p' }
@@ -365,7 +365,7 @@ if ($env:MITCAD_GRIDFINITY_LIBRARY -and (Test-Path (Join-Path $env:MITCAD_GRIDFI
   $gridBody = (Bodies-Of "Inserted component $($gridPart.name)")[0]
   Ui-Step 'close (Escape)'                 { Ui-Key 'Escape' }
   Ui-Mark
-  Ui-Step 'Insert from Library (F9)'       { Ui-Key 'F9' }
+  Ui-Step 'Insert from Library (F3)'       { Ui-Key 'F3' }
   Ui-FocusDialog '^Browse Components$'
   Ui-Step "search $($footPart.name)"       { Ui-Key 'alt+s'; Ui-Type $footPart.name }
   Ui-Step 'Insert (Alt+I)'                 { Ui-Key 'alt+i' }
@@ -463,7 +463,7 @@ Ui-Step 'Fetch All (Alt+F)'                { Ui-Key 'alt+f' }
 Ui-ExpectNew "Library fetched: library My screws (my-screws) from $mine" 'the own library fetched' 30
 Close-Libraries
 Ui-Mark
-Ui-Step 'Insert from Library (F9)'         { Ui-Key 'F9' }
+Ui-Step 'Insert from Library (F3)'         { Ui-Key 'F3' }
 Ui-FocusDialog '^Browse Components$'
 Ui-Step 'search Screw M8'                  { Ui-Key 'alt+s'; Ui-Type 'Screw M8' }
 Ui-ExpectNew 'Library browser selected my-screws/screw-m8' 'the own screw'
@@ -550,7 +550,7 @@ Ui-Mark
 Ui-Step "select the rim"                   { Ui-ClickPick "$rim at" }
 Ui-ExpectNew 'Selected: 1 edge' "the hole's rim selected"
 Ui-Mark
-Ui-Step 'Insert from Library (F9)'         { Ui-Key 'F9' }
+Ui-Step 'Insert from Library (F3)'         { Ui-Key 'F3' }
 Ui-FocusDialog '^Browse Components$'
 Ui-Step 'search 4762'                      { Ui-Key 'alt+s'; Ui-Type '4762' }
 Ui-ExpectNew "Library search '4762': 1 components" 'the search finds the screw'

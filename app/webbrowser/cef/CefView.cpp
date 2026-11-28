@@ -39,17 +39,25 @@
 #include "webbrowser/BrowserDiagnostics.hpp"
 #include "webbrowser/BrowserKeys.hpp"
 #include "webbrowser/ComponentWebFiles.hpp"
+#include "webbrowser/TutorialPageRules.hpp"
 #include "include/cef_client.h"
 #include "include/cef_context_menu_handler.h"
 #include "include/cef_cookie.h"
 #include "include/cef_display_handler.h"
+#include "include/cef_dialog_handler.h"
 #include "include/cef_download_handler.h"
+#include "include/cef_jsdialog_handler.h"
 #include "include/cef_life_span_handler.h"
 #include "include/cef_load_handler.h"
+#include "include/cef_parser.h"
+#include "include/cef_permission_handler.h"
 #include "include/cef_render_handler.h"
 #include "include/cef_request.h"
 #include "include/cef_request_handler.h"
 #include "include/cef_request_context.h"
+#include "include/cef_resource_request_handler.h"
+#include "include/cef_stream.h"
+#include "include/wrapper/cef_stream_resource_handler.h"
 
 namespace mitcad {
 
@@ -64,13 +72,132 @@ class BrowserClient : public CefClient,
                       public CefLifeSpanHandler,
                       public CefDownloadHandler,
                       public CefContextMenuHandler,
-                      public CefRequestHandler {
+                      public CefRequestHandler,
+                      public CefResourceRequestHandler,
+                      public CefDialogHandler,
+                      public CefJSDialogHandler,
+                      public CefPermissionHandler {
 public:
   explicit BrowserClient(CefView* view) : m_view(view) {}
   void detach() { m_view = nullptr; }
   // The tutorials' bridge (mitcad#2012): the router of a tutorial page's
   // browser, told of its messages, navigations and end.
   void setRouter(CefRefPtr<CefMessageRouterBrowserSide> router) { m_router = router; }
+  // The tutorial pages' strict policy (mitcad#2401, CefBridgeConfig.hpp's
+  // kTutorialPolicy) and what such a browser refuses (mitcad#2615): the file
+  // address prefix of the tutorial's own folder, set before the browser is
+  // made and never changed (it is read on CEF's IO thread).
+  void setTutorialPrefix(const std::string& prefix) { m_tutorialPrefix = prefix; }
+  bool tutorial() const { return !m_tutorialPrefix.empty(); }
+
+  // CefRequestHandler: a tutorial's browser handles its own requests.
+  CefRefPtr<CefResourceRequestHandler> GetResourceRequestHandler(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>,
+                                                                 CefRefPtr<CefRequest>, bool, bool, const CefString&,
+                                                                 bool&) override {
+    return m_tutorialPrefix.empty() ? nullptr : this;
+  }
+
+  // CefResourceRequestHandler (IO thread): a tutorial page loads nothing
+  // from outside its folder, neither from the web nor other local files
+  // (pictures of data: and blob: addresses are the page's own); the
+  // page itself is never one outside it (OnBeforeBrowse, mitcad#2615).
+  ReturnValue OnBeforeResourceLoad(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, CefRefPtr<CefRequest> request,
+                                   CefRefPtr<CefCallback>) override {
+    const std::string url = request->GetURL().ToString();
+    if (tutorialAddress(url, request->GetResourceType() == RT_MAIN_FRAME)) {
+      return RV_CONTINUE;
+    }
+    qInfo().noquote() << QStringLiteral("Tutorial page: refused a request outside the tutorial's folder: %1")
+                             .arg(tutorialrules::logSafeText(QString::fromStdString(url), 200));
+    return RV_CANCEL;
+  }
+
+  // The tutorial's own files with the strict policy as their header.
+  CefRefPtr<CefResourceHandler> GetResourceHandler(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>,
+                                                   CefRefPtr<CefRequest> request) override {
+    const std::string url = request->GetURL().ToString();
+    if (!bridgePrefixMatches(url, m_tutorialPrefix)) {
+      return nullptr;
+    }
+    const QString path = QUrl(QString::fromStdString(url)).toLocalFile();
+    const QFileInfo info(path);
+    if (path.isEmpty() || !info.isFile()) {
+      return nullptr;
+    }
+    CefRefPtr<CefStreamReader> stream = CefStreamReader::CreateForFile(CefString(path.toStdString()));
+    if (stream == nullptr) {
+      return nullptr;
+    }
+    std::string mime = CefGetMimeType(CefString(info.suffix().toLower().toStdString())).ToString();
+    if (mime.empty()) {
+      mime = "application/octet-stream";
+    }
+    CefResponse::HeaderMap headers;
+    headers.insert({CefString("Content-Security-Policy"), CefString(kTutorialPolicy)});
+    headers.insert({CefString("X-Content-Type-Options"), CefString("nosniff")});
+    headers.insert({CefString("Cache-Control"), CefString("no-store")});
+    return new CefStreamResourceHandler(200, CefString("OK"), CefString(mime), headers, stream);
+  }
+
+  // A tutorial's browser (mitcad#2615): no file dialog (a page would read
+  // the file chosen), no alert, confirm or prompt in MitCad's name, no
+  // camera, microphone, location or other permission.
+  CefRefPtr<CefDialogHandler> GetDialogHandler() override { return tutorial() ? this : nullptr; }
+  CefRefPtr<CefJSDialogHandler> GetJSDialogHandler() override { return tutorial() ? this : nullptr; }
+  CefRefPtr<CefPermissionHandler> GetPermissionHandler() override { return tutorial() ? this : nullptr; }
+  bool OnFileDialog(CefRefPtr<CefBrowser>, FileDialogMode, const CefString&, const CefString&,
+                    const std::vector<CefString>&, const std::vector<CefString>&, const std::vector<CefString>&,
+                    CefRefPtr<CefFileDialogCallback> callback) override {
+    qInfo().noquote() << QStringLiteral("Tutorial page: refused a file dialog");
+    callback->Cancel();
+    return true;
+  }
+  bool OnJSDialog(CefRefPtr<CefBrowser>, const CefString&, JSDialogType, const CefString&, const CefString&,
+                  CefRefPtr<CefJSDialogCallback>, bool& suppressMessage) override {
+    qInfo().noquote() << QStringLiteral("Tutorial page: refused a script's dialog");
+    suppressMessage = true;
+    return false;
+  }
+  bool OnBeforeUnloadDialog(CefRefPtr<CefBrowser>, const CefString&, bool,
+                            CefRefPtr<CefJSDialogCallback> callback) override {
+    // The page never keeps the user from leaving it.
+    callback->Continue(true, CefString());
+    return true;
+  }
+  bool OnRequestMediaAccessPermission(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, const CefString&, uint32_t,
+                                      CefRefPtr<CefMediaAccessCallback> callback) override {
+    qInfo().noquote() << QStringLiteral("Tutorial page: refused the camera or microphone");
+    callback->Cancel();
+    return true;
+  }
+  bool OnShowPermissionPrompt(CefRefPtr<CefBrowser>, uint64_t, const CefString&, uint32_t,
+                              CefRefPtr<CefPermissionPromptCallback> callback) override {
+    qInfo().noquote() << QStringLiteral("Tutorial page: refused a permission");
+    callback->Continue(CEF_PERMISSION_RESULT_DENY);
+    return true;
+  }
+
+  // CefLifeSpanHandler: a tutorial page opens no window or tab of its own
+  // (mitcad#2615); a link to the web the user clicked goes to the view,
+  // which hands it to the system's browser after the user's yes.
+  bool OnBeforePopup(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, int, const CefString& targetUrl, const CefString&,
+                     cef_window_open_disposition_t, bool userGesture, const CefPopupFeatures&, CefWindowInfo&,
+                     CefRefPtr<CefClient>&, CefBrowserSettings&, CefRefPtr<CefDictionaryValue>&, bool*) override {
+    if (!tutorial()) {
+      return false;
+    }
+    refused(targetUrl.ToString(), userGesture);
+    return true;
+  }
+  // CefRequestHandler: a link opened in a new tab (a middle click), as a popup.
+  bool OnOpenURLFromTab(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, const CefString& targetUrl,
+                        cef_window_open_disposition_t, bool userGesture) override {
+    if (!tutorial()) {
+      return false;
+    }
+    refused(targetUrl.ToString(), userGesture);
+    return true;
+  }
 
   bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefProcessId source,
                                 CefRefPtr<CefProcessMessage> message) override {
@@ -91,9 +218,19 @@ public:
   CefRefPtr<CefRequestHandler> GetRequestHandler() override { return this; }
 
   // CefRequestHandler: every navigation of the main frame, for the log (a
-  // link that ends in neither a page nor a download shows there).
+  // link that ends in neither a page nor a download shows there). A
+  // tutorial's page stays in its folder (mitcad#2615): a navigation of any
+  // frame elsewhere is refused (by a script or a link), a link to the web
+  // the user clicked goes to the system's browser after the user's yes.
   bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefRequest> request,
                       bool userGesture, bool redirect) override {
+    if (tutorial()) {
+      const std::string url = request->GetURL().ToString();
+      if (!tutorialAddress(url, frame->IsMain())) {
+        refused(url, userGesture && frame->IsMain() && !redirect);
+        return true;
+      }
+    }
     if (m_router) {
       m_router->OnBeforeBrowse(browser, frame);
     }
@@ -297,8 +434,36 @@ public:
   }
 
 private:
+  // Whether a tutorial's browser may load `url`: a file of its folder, the
+  // empty page it starts with (a page, not a part of one), a picture of the
+  // page's own (data:, blob:; not a page).
+  bool tutorialAddress(const std::string& url, bool page) const {
+    if (bridgePrefixMatches(url, m_tutorialPrefix)) {
+      return true;
+    }
+    if (page) {
+      return url == "about:blank";
+    }
+    return url.rfind("data:", 0) == 0 || url.rfind("blob:", 0) == 0;
+  }
+  // A navigation or a window refused: told to the view from the event loop
+  // (never from within CEF's call, which must not show a dialog).
+  void refused(const std::string& url, bool userGesture) {
+    if (m_view == nullptr) {
+      return;
+    }
+    const QString address = QString::fromStdString(url);
+    QPointer<CefView> view(m_view);
+    QTimer::singleShot(0, m_view, [view, address, userGesture] {
+      if (!view.isNull()) {
+        view->navigationRefused(address, userGesture);
+      }
+    });
+  }
+
   CefView* m_view;
   CefRefPtr<CefMessageRouterBrowserSide> m_router;
+  std::string m_tutorialPrefix;
   IMPLEMENT_REFCOUNTING(BrowserClient);
 };
 
@@ -487,20 +652,29 @@ void CefView::createBrowser() {
   // A tutorial's page: the renderer makes the bridge in the frames of its
   // folder only (mitcad#2012).
   CefRefPtr<CefDictionaryValue> extra;
+  CefRefPtr<CefRequestContext> context = cef::requestContext();
+  CefBrowserSettings settings;
   if (m_router) {
     m_client->setRouter(m_router);
+    // Its own files under the strict policy (mitcad#2401), and nothing
+    // outside its folder (mitcad#2615).
+    m_client->setTutorialPrefix(cef::bridgePrefix(m_bridgeFolder));
     extra = CefDictionaryValue::Create();
     extra->SetString(cef::kBridgePrefixKey, cef::bridgePrefix(m_bridgeFolder));
+    // A request context of its own, in memory (mitcad#2615): no cookies,
+    // storage or cache shared with Component from Web or another tutorial.
+    context = cef::tutorialRequestContext();
+    // No WebGL: a tutorial page needs none, and its software rasteriser
+    // (allowed for the supplier sites, CefEngine.cpp) is no surface for it.
+    settings.webgl = STATE_DISABLED;
   }
   CefWindowInfo info;
   info.SetAsWindowless(kNullWindowHandle);
   // Painted from OnPaint's buffer, never a shared GPU texture.
   info.shared_texture_enabled = false;
-  CefBrowserSettings settings;
   settings.windowless_frame_rate = 30;
   settings.background_color = CefColorSetARGB(255, 255, 255, 255);
-  if (!CefBrowserHost::CreateBrowser(info, m_client, CefString("about:blank"), settings, extra,
-                                     cef::requestContext())) {
+  if (!CefBrowserHost::CreateBrowser(info, m_client, CefString("about:blank"), settings, extra, context)) {
     qWarning().noquote() << QStringLiteral("Component browser: CEF did not make the browser");
     m_creating = false;
   }
@@ -819,8 +993,10 @@ void CefView::loadingChanged(bool /*loading*/, bool canGoBack, bool canGoForward
 void CefView::loadEnded(bool ok) {
   // How the page draws WebGL, for the feedback diagnostics (mitcad#1906):
   // the probe's answer comes back through the console (logged).
+  // Not in a tutorial's page, which has no WebGL (createBrowser).
   const QString scheme = m_url.scheme();
-  if (ok && (scheme == QLatin1String("http") || scheme == QLatin1String("https") || scheme == QLatin1String("file"))) {
+  if (ok && m_bridgeFolder.isEmpty() &&
+      (scheme == QLatin1String("http") || scheme == QLatin1String("https") || scheme == QLatin1String("file"))) {
     runJavaScript(QString::fromLatin1(browserdiag::kWebglProbeScript));
   }
   emit loadFinished(ok);
@@ -830,12 +1006,27 @@ void CefView::cursorChanged(int type) { setCursor(QCursor(cursorShape(type))); }
 
 void CefView::logged(bool error, const QString& message, const QString& source, int line) {
   if (message.startsWith(QStringLiteral("mitcad:"))) {
-    if (!cef::noteScriptMessage(message)) {
-      emit consoleMessage(message);
+    // MitCad's own scripts' lines only from their source (mitcad#2615): a
+    // page's own "mitcad:webgl off" writes no marker; a tutorial's page has
+    // no probe.
+    const bool ours = source == QLatin1String(browserdiag::kScriptSource);
+    if (ours && m_bridgeFolder.isEmpty() && cef::noteScriptMessage(message)) {
+      return;
     }
+    emit consoleMessage(message, ours);
     return;
   }
   cef::notePageMessage(m_url.toString(), error, message, source, line);
+}
+
+void CefView::navigationRefused(const QString& url, bool userGesture) {
+  const QUrl address(url);
+  if (userGesture && tutorialrules::webLinkAddress(address)) {
+    emit webLinkClicked(address);
+    return;
+  }
+  qInfo().noquote() << QStringLiteral("Tutorial page: refused a page outside the tutorial's folder: %1")
+                           .arg(tutorialrules::logSafeText(url, 200));
 }
 
 QString CefView::downloadStarting(std::uint32_t id, const QString& suggestedName, const QUrl& url) {

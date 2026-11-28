@@ -105,10 +105,12 @@ type-in '^Panel Hem input gap at ' '2'
 wait-idle
 mark
 click-logged '^Panel Hem input custom_radius at '
+wait-log '^Preview Hem: ok' 30
 wait-idle
+# Re-entering the default radius leaves the current preview valid.
 mark
 type-in '^Panel Hem input radius at ' '1'
-wait-log '^Preview Hem: ok' 30
+wait-log '^Panel field radius: 1$' 30
 wait-idle
 mark
 button '^OK$'

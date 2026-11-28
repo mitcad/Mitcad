@@ -136,6 +136,75 @@ impl Map2 {
     }
 }
 
+/// The offset by which every point of `pairs` (each where it was and where
+/// it is now) moved, within `tolerance` (mitcad#2580); None where they
+/// moved apart, or did not move.
+fn common_offset(pairs: &[(P2, P2)], tolerance: f64) -> Option<P2> {
+    if pairs.is_empty() {
+        return None;
+    }
+    let total = pairs
+        .iter()
+        .fold([0.0, 0.0], |sum, (was, now)| add(sum, sub(*now, *was)));
+    let by = scale(total, 1.0 / pairs.len() as f64);
+    (norm(by) > tolerance
+        && pairs
+            .iter()
+            .all(|(was, now)| dist(sub(*now, *was), by) <= tolerance))
+    .then_some(by)
+}
+
+/// The rigid motion (a turn and an offset) that took every point of
+/// `pairs` (each where it was and where it is now) to where it is, within
+/// `tolerance`, in a Move that turns by `turn` (mitcad#2586); None where
+/// the points changed their places among themselves, or did not move.
+/// Points all in one place show no angle of their own: if they are among
+/// those the Move moved (`selected`) and went where the turn puts them,
+/// they turned with it, else they moved by their offset.
+fn rigid_motion(pairs: &[(P2, P2)], turn: &Map2, selected: bool, tolerance: f64) -> Option<Map2> {
+    if pairs.is_empty() {
+        return None;
+    }
+    let n = pairs.len() as f64;
+    let mean = |pick: fn(&(P2, P2)) -> P2| {
+        scale(
+            pairs.iter().fold([0.0, 0.0], |sum, p| add(sum, pick(p))),
+            1.0 / n,
+        )
+    };
+    let (was, now) = (mean(|p| p.0), mean(|p| p.1));
+    let spread = pairs.iter().map(|(a, _)| dist(*a, was)).fold(0.0, f64::max);
+    let motion = if spread > tolerance {
+        // The angle that turns the points about their middle onto where
+        // they are about theirs (a least-squares fit; checked below).
+        let (mut s, mut c) = (0.0, 0.0);
+        for (a, b) in pairs {
+            let (u, v) = (sub(*a, was), sub(*b, now));
+            s += cross(u, v);
+            c += dot(u, v);
+        }
+        let turned = Map2::rotation([0.0, 0.0], s.atan2(c));
+        Map2 {
+            m: turned.m,
+            t: sub(now, turned.apply(was)),
+        }
+    } else if selected
+        && pairs
+            .iter()
+            .all(|(a, b)| dist(turn.apply(*a), *b) <= tolerance)
+    {
+        return Some(*turn);
+    } else {
+        Map2::translation(sub(now, was))
+    };
+    let moved = pairs.iter().any(|(a, b)| dist(*a, *b) > tolerance);
+    (moved
+        && pairs
+            .iter()
+            .all(|(a, b)| dist(motion.apply(*a), *b) <= tolerance))
+    .then_some(motion)
+}
+
 /// What a drag pulls on.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DragTarget {
@@ -737,6 +806,19 @@ impl SketchEdit<'_> {
         // Where the geometry of the dimensions with a placed value is
         // before the drag (mitcad#2580).
         let placed = self.placed_dimension_points();
+        self.drag_goals_carrying(goals, &placed, None)
+    }
+
+    /// [`SketchEdit::drag_goals`] with the dimensions' geometry as it was
+    /// before the edit (`placed`, taken before a turn moved any point) and
+    /// the map of a Move that turns (`turn`, mitcad#2586), by which the
+    /// placed values turn with what they measure.
+    fn drag_goals_carrying(
+        &mut self,
+        goals: &[Goal],
+        placed: &[(usize, Vec<(EntityUid, P2)>)],
+        turn: Option<(&Map2, &BTreeSet<EntityUid>)>,
+    ) -> Result<(), String> {
         let params = &*self.params;
         let solved = self
             .def
@@ -775,7 +857,7 @@ impl SketchEdit<'_> {
                 },
             );
         }
-        self.carry_dimension_texts(&placed);
+        self.carry_dimension_texts(placed, turn);
         // What finishing the edit would solve again (mitcad#679).
         self.dragged = Some(Box::new((self.def.clone(), self.params.clone(), solved)));
         Ok(())
@@ -827,32 +909,51 @@ impl SketchEdit<'_> {
     /// that stays, or whose geometry changes shape, keeps its value where
     /// it is and goes on spanning its own references. `placed` is
     /// [`SketchEdit::placed_dimension_points`] from before the solve.
-    fn carry_dimension_texts(&mut self, placed: &[(usize, Vec<(EntityUid, P2)>)]) {
-        // Points that moved within this of one offset moved together; an
-        // offset within it is no move. Above the solver's noise (also of
-        // its looser second solve) and far below what the view shows.
+    ///
+    /// A Move that turns (`turn`: its map and the points it moves;
+    /// mitcad#2586) turns the values too: where a dimension's geometry
+    /// turned and moved as one rigid motion, its value goes with that
+    /// motion, about the same centre by the same angle, so it keeps its
+    /// place beside what it measures. The motion is the one the solve
+    /// made. Geometry of a single point (a circle's centre) shows no angle
+    /// of its own: a moved point that went where the turn puts it turns
+    /// its value by the turn (also a circle turned about its own centre);
+    /// held elsewhere, the value moves by the point's offset. Other edits
+    /// only translate values.
+    fn carry_dimension_texts(
+        &mut self,
+        placed: &[(usize, Vec<(EntityUid, P2)>)],
+        turn: Option<(&Map2, &BTreeSet<EntityUid>)>,
+    ) {
+        // Points that moved within this of one offset (or one rigid
+        // motion) moved together; an offset within it is no move. Above
+        // the solver's noise (also of its looser second solve) and far
+        // below what the view shows.
         const TOGETHER: f64 = 1e-5;
         'dimensions: for (i, points) in placed {
-            let mut shifts = Vec::with_capacity(points.len());
+            let mut pairs = Vec::with_capacity(points.len());
             for &(p, was) in points {
                 match self.at(p) {
-                    Ok(now) => shifts.push(sub(now, was)),
+                    Ok(now) => pairs.push((was, now)),
                     Err(_) => continue 'dimensions,
                 }
             }
-            let n = shifts.len() as f64;
-            let total = shifts.iter().fold([0.0, 0.0], |sum, s| add(sum, *s));
-            let by = scale(total, 1.0 / n);
-            if norm(by) <= TOGETHER || shifts.iter().any(|s| dist(*s, by) > TOGETHER) {
+            let Some(motion) = (match turn {
+                Some((map, moved)) => {
+                    let selected = points.iter().all(|(p, _)| moved.contains(p));
+                    rigid_motion(&pairs, map, selected, TOGETHER)
+                }
+                None => common_offset(&pairs, TOGETHER).map(Map2::translation),
+            }) else {
                 continue;
-            }
+            };
             if let Some(text) = self
                 .def
                 .dimensions
                 .get_mut(*i)
                 .and_then(|d| d.text.as_mut())
             {
-                *text = add(*text, by);
+                *text = motion.apply(*text);
             }
         }
     }
@@ -881,6 +982,10 @@ impl SketchEdit<'_> {
             self.entity(r.uid())?;
             points.extend(self.moved_points(r.uid())?);
         }
+        // Where the dimensions' geometry is before the move, before a turn
+        // starts the solve from the turned places below (mitcad#2580,
+        // mitcad#2586).
+        let placed = self.placed_dimension_points();
         // A turn first turns the directions the moved geometry is held to
         // (mitcad#1563): kept, a horizontal line pulled to a vertical
         // place collapsed to a point.
@@ -889,7 +994,7 @@ impl SketchEdit<'_> {
             None => false,
         };
         let mut places = Vec::new();
-        for p in points {
+        for &p in &points {
             places.push((p, map.apply(self.at(p)?)));
         }
         if turned {
@@ -923,7 +1028,7 @@ impl SketchEdit<'_> {
             .into_iter()
             .map(|(p, to)| Goal::Point(p, to))
             .collect();
-        self.drag_goals(&goals)
+        self.drag_goals_carrying(&goals, &placed, map.turn().map(|_| (map, &points)))
     }
 
     /// The middle of entities (mitcad#1563): the center of the box round

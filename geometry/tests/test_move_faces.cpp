@@ -331,8 +331,36 @@ void test_eight_arc_boss_slides_along_its_plate() {
   }
 }
 
-// A boss slid over the edge of its plate is refused with the reason: its
-// foot would run past the plate's top's boundary.
+// The faces of `shape` with a name that begins with `prefix`.
+int faces_named_from(const Shape& shape, const std::string& prefix) {
+  int count = 0;
+  for (int f = 0; f < shape.face_count(); ++f) {
+    const NameList& names = shape.face_names(f);
+    if (std::any_of(names.begin(), names.end(), [&](const std::string& n) { return n.rfind(prefix, 0) == 0; })) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+int solids_of(const Shape& shape) {
+  int solids = 0;
+  for (TopExp_Explorer s(shape.occt(), TopAbs_SOLID); s.More(); s.Next()) {
+    ++solids;
+  }
+  return solids;
+}
+
+// The round boss of radius 6.1 about (20, 20) on the plate 60 x 40,
+// tapered by -1 degree and chamfered by 1, all its faces moved along x
+// (mitcad#2632, GitHub mitcad/Mitcad#769). 25 keeps its foot on the plate
+// (to 51.1): the faces' rebuild slides it. 35 takes the foot past the
+// plate's side at x = 60 (to 61.1): the plate's top would have to lose its
+// boundary there, which the rebuild cannot do (it refused, "the moved faces
+// would run past the boundary of a neighbouring face"); the boss moves
+// whole instead and overhangs the side, one valid solid of the same volume
+// whose overhang's underside is a step face of its own. 50 takes it off
+// the plate (from 63.9): refused, as nothing would hold it.
 void test_boss_slid_off_its_plate() {
   const Region disc = circle(5, 20, 20, 6.1);
   const ShapePtr body = boss_on_plate(disc, -kPi / 180.0, Rim::Chamfered);
@@ -340,8 +368,168 @@ void test_boss_slid_off_its_plate() {
   if (!body) {
     return;
   }
-  CHECK(throws_with([&] { move_faces_rigidly("F7", *body, boss_faces(*body), translation(35, 0, 0)); },
-                    "neighbouring face"));
+  const std::vector<std::string> names = boss_faces(*body);
+  const std::string top = face_name("F4", "end", disc.name);
+  for (const double dx : {25.0, 35.0}) {
+    std::printf("move faces: a round boss by %g along x\n", dx);
+    const ShapePtr moved = move_faces_rigidly("F7", *body, names, translation(dx, 0, 0));
+    CHECK(BRepCheck_Analyzer(moved->occt()).IsValid());
+    CHECK(solids_of(*moved) == 1);
+    CHECK_NEAR(volume_of(*moved), volume_of(*body));
+    for (const std::string& name : names) {
+      CHECK(faces_named(*moved, name) == 1);
+    }
+    CHECK(faces_named(*moved, end_cap("F2", 1)) == 1);
+    const bool overhangs = dx > 30.0;
+    CHECK(faces_named_from(*moved, "F7:step(") == (overhangs ? 1 : 0));
+    CHECK(moved->face_count() == body->face_count() + (overhangs ? 1 : 0));
+    double x0, y0, z0, x1, y1, z1;
+    box_of(moved->occt()).Get(x0, y0, z0, x1, y1, z1);
+    CHECK_NEAR(x0, 0.0);
+    CHECK_NEAR_TOL(x1, overhangs ? 20.0 + dx + 6.1 : 60.0, 1e-7);
+    CHECK_NEAR(z0, 0.0);
+    CHECK_NEAR(z1, 30.0);
+    const gp_Pnt was = middle_of(*body, top);
+    const gp_Pnt now = middle_of(*moved, top);
+    CHECK_NEAR(now.X(), was.X() + dx);
+    CHECK_NEAR(now.Y(), was.Y());
+    CHECK_NEAR(now.Z(), was.Z());
+  }
+  CHECK(throws_with([&] { move_faces_rigidly("F7", *body, names, translation(50, 0, 0)); },
+                    "would no longer meet the rest of the body"));
+}
+
+// A round pocket of radius 5 and depth 5 about (50, 20) in the plate 60 x
+// 40 x 10, its wall and floor moved along x (mitcad#2632): 8 takes it past
+// the plate's side at x = 60 (to 63), where it opens the side as a notch:
+// one valid solid, the plate less the part of the pocket within it. 20
+// takes it off the plate (from 65): refused.
+void test_pocket_moved_over_the_side() {
+  const ShapePtr plate = extrude("F2", {rectangle(1, 0, 0, 60, 40)}, 0, 10);
+  const ShapePtr tool = extrude("F3", {circle(5, 50, 20, 5)}, 5, 10);
+  const BooleanResult cut = boolean(BooleanOp::Cut, {plate.get()}, *tool);
+  CHECK(cut.pieces.size() == 1);
+  if (cut.pieces.size() != 1) {
+    return;
+  }
+  const ShapePtr body = cut.pieces.front().shape;
+  // The pocket's wall and floor: the faces from x = 45 on that lie below
+  // the plate's top.
+  std::vector<std::string> names;
+  for (int f = 0; f < body->face_count(); ++f) {
+    double x0, y0, z0, x1, y1, z1;
+    box_of(body->face(f)).Get(x0, y0, z0, x1, y1, z1);
+    if (x0 > 44.0 && z0 > 4.0 && !body->face_names(f).empty()) {
+      names.push_back(body->face_names(f).front());
+    }
+  }
+  CHECK(names.size() == 2);
+  if (names.size() != 2) {
+    return;
+  }
+  CHECK_NEAR(volume_of(*body), 60.0 * 40.0 * 10.0 - kPi * 25.0 * 5.0);
+  const ShapePtr moved = move_faces_rigidly("F7", *body, names, translation(8, 0, 0));
+  CHECK(BRepCheck_Analyzer(moved->occt()).IsValid());
+  CHECK(solids_of(*moved) == 1);
+  // The circle's segment past x = 60, its centre 2 from that side.
+  const double outside = 25.0 * std::acos(2.0 / 5.0) - 2.0 * std::sqrt(21.0);
+  CHECK_NEAR(volume_of(*moved), 60.0 * 40.0 * 10.0 - (kPi * 25.0 - outside) * 5.0);
+  for (const std::string& name : names) {
+    CHECK(faces_named(*moved, name) == 1);
+  }
+  double x0, y0, z0, x1, y1, z1;
+  box_of(moved->occt()).Get(x0, y0, z0, x1, y1, z1);
+  CHECK_NEAR(x1, 60.0);
+  CHECK_NEAR(z1, 10.0);
+  CHECK(throws_with([&] { move_faces_rigidly("F7", *body, names, translation(20, 0, 0)); },
+                    "would no longer meet the rest of the body"));
+}
+
+// A block on the plate 60 x 40 x 10: x from 10, y 15..25, z 10..20, its end
+// at x = 30 an arc through (30, 15) and (30, 25) bulging out along +x
+// (c2[c1,c3]): about a centre 5 behind its ends (x = 25, radius 5 sqrt 2,
+// meeting the sides at 45 degrees) or a half circle about (30, 20), tangent
+// to the sides.
+ShapePtr arc_ended_block(bool tangent) {
+  const double x0 = 10.0, xe = 30.0, y0 = 15.0, y1 = 25.0, ym = 20.0;
+  const double xc = tangent ? xe : xe - 5.0;
+  const auto name = [](int i) {
+    const auto curve = [](int k) { return "c" + std::to_string((k + 4) % 4 + 1); };
+    return curve(i) + "[" + curve(i - 1) + "," + curve(i + 1) + "]";
+  };
+  const auto line = [&](int i, double ax, double ay, double bx, double by) {
+    Segment s;
+    s.name = name(i);
+    s.kind = SegmentKind::Line;
+    s.start = gp_Pnt2d(ax, ay);
+    s.end = gp_Pnt2d(bx, by);
+    return s;
+  };
+  Segment arc;
+  arc.name = name(1);
+  arc.kind = SegmentKind::Arc;
+  arc.center = gp_Pnt2d(xc, ym);
+  arc.radius = std::hypot(xe - xc, y0 - ym);
+  arc.start_angle = std::atan2(y0 - ym, xe - xc);
+  arc.end_angle = std::atan2(y1 - ym, xe - xc);
+  arc.start = gp_Pnt2d(xe, y0);
+  arc.end = gp_Pnt2d(xe, y1);
+  Loop loop;
+  loop.segments = {line(0, x0, y0, xe, y0), arc, line(2, xe, y1, x0, y1), line(3, x0, y1, x0, y0)};
+  Region region;
+  region.name = "r{" + name(0) + "," + name(1) + "," + name(2) + "," + name(3) + "}";
+  region.loops.push_back(loop);
+  const ShapePtr plate = extrude("F2", {rectangle(1, 0, 0, 60, 40)}, 0, 10);
+  const ShapePtr block = extrude("F4", {region}, 10, 20);
+  const BooleanResult joined = boolean(BooleanOp::Join, {plate.get()}, *block);
+  CHECK(joined.pieces.size() == 1);
+  if (joined.pieces.size() != 1) {
+    return nullptr;
+  }
+  return joined.pieces.front().shape;
+}
+
+// The block's arc end moved alone along +x (mitcad#2632, GitHub
+// mitcad/Mitcad#769, reduced from the reported design): the sides, the top
+// and the plate's top follow it along their planes, and the block grows by
+// the distance times its section, 10 x 10. The arc that meets the sides at
+// an angle failed once moved further than its centre lies behind its ends
+// (5 here; 4.897 in the reported design, which the report gives as about
+// 5): a corner's vertex on the side's edge, which stays, went to where the
+// moved arc's circle crosses that edge's line on the far side ("an edge of
+// a moved face does not reach its vertices"). The tangent half circle's
+// circle touches the line once and moved as far as the plate reaches.
+// Both before the arc's tip would pass the plate's side at x = 60; past it
+// the plate's top would have to lose its boundary there, and an end moved
+// alone is no feature that can move whole: refused with the reason.
+void test_arc_end_moved_out() {
+  for (const bool tangent : {false, true}) {
+    const ShapePtr body = arc_ended_block(tangent);
+    CHECK(body != nullptr);
+    if (!body) {
+      return;
+    }
+    const std::string end = face_name("F4", "side", "c2[c1,c3]");
+    CHECK(faces_named(*body, end) == 1);
+    const double tip = tangent ? 35.0 : 25.0 + 5.0 * std::sqrt(2.0);
+    for (const double dx : {4.9, 5.1, 7.0, 12.0, 20.0}) {
+      std::printf("move faces: an arc end%s by %g along x\n", tangent ? ", tangent" : "", dx);
+      const ShapePtr moved = move_faces_rigidly("F5", *body, {end}, translation(dx, 0, 0));
+      CHECK(BRepCheck_Analyzer(moved->occt()).IsValid());
+      CHECK(solids_of(*moved) == 1);
+      CHECK(moved->face_count() == body->face_count());
+      CHECK(faces_named(*moved, end) == 1);
+      CHECK_NEAR(volume_of(*moved), volume_of(*body) + dx * 10.0 * 10.0);
+      double x0 = 0, y0 = 0, z0 = 0, x1 = 0, y1 = 0, z1 = 0;
+      for (int f = 0; f < moved->face_count(); ++f) {
+        if (has_name(moved->face_names(f), end)) {
+          box_of(moved->face(f)).Get(x0, y0, z0, x1, y1, z1);
+        }
+      }
+      CHECK_NEAR_TOL(x1, tip + dx, 1e-7);
+    }
+    CHECK(throws_with([&] { move_faces_rigidly("F5", *body, {end}, translation(62.0 - tip, 0, 0)); }, ""));
+  }
 }
 
 // A motion that would change the body's faces is refused.
@@ -579,8 +767,14 @@ void test_filleted_boss_turned() {
   check_same_box(box_of_faces(*tilted, boss.faces), box_of_faces(*tiltedStaged, boss.faces));
 }
 
-// Moved over the side of the block: the block's top would have to hold
-// the boss's foot past its own edge.
+// Moved over the side of the block (mitcad#2632): 20 along y takes the
+// foot (y 15..25) 5 past the block's side at y = 40. The block's top would
+// have to hold the foot past its own edge, which the faces' rebuild cannot
+// do (it refused, "the moved faces would reach past the edge of a face
+// around them"): the boss moves whole and overhangs the side, one valid
+// solid of the same volume, every face of the boss there once, the
+// overhang's underside a step face. 40 along y takes it off the block:
+// refused, as nothing would hold it.
 void test_filleted_boss_moved_off_its_block() {
   const Boss boss = filleted_boss();
   CHECK(boss.faces.size() == 17);
@@ -589,8 +783,23 @@ void test_filleted_boss_moved_off_its_block() {
   }
   gp_Trsf motion;
   motion.SetTranslation(gp_Vec(0, 20, 0));
-  CHECK(throws_with([&] { move_faces_rigidly("F6", *boss.body, boss.faces, motion); },
-                    "reach past the edge of a face around them"));
+  const ShapePtr moved = move_faces_rigidly("F6", *boss.body, boss.faces, motion);
+  CHECK(BRepCheck_Analyzer(moved->occt()).IsValid());
+  CHECK(solids_in(*moved) == 1);
+  CHECK_NEAR(volume_of(*moved), volume_of(*boss.body));
+  for (const std::string& name : boss.faces) {
+    CHECK(faces_named(*moved, name) == 1);
+  }
+  CHECK(faces_named(*moved, end_cap("F2", 1)) == 1);
+  CHECK(faces_named_from(*moved, "F6:step(") == 1);
+  CHECK(moved->face_count() == boss.body->face_count() + 1);
+  Bnd_Box expected = box_of_faces(*boss.body, boss.faces);
+  expected = expected.Transformed(motion);
+  check_same_box(box_of_faces(*moved, boss.faces), expected);
+  gp_Trsf off;
+  off.SetTranslation(gp_Vec(0, 40, 0));
+  CHECK(throws_with([&] { move_faces_rigidly("F6", *boss.body, boss.faces, off); },
+                    "would no longer meet the rest of the body"));
 }
 
 // A raised block on a base (mitcad#2548, GitHub mitcad/Mitcad#731): the
@@ -745,6 +954,8 @@ void move_faces_tests() {
   guarded("test_round_boss_slides_along_its_plate", test_round_boss_slides_along_its_plate);
   guarded("test_eight_arc_boss_slides_along_its_plate", test_eight_arc_boss_slides_along_its_plate);
   guarded("test_boss_slid_off_its_plate", test_boss_slid_off_its_plate);
+  guarded("test_pocket_moved_over_the_side", test_pocket_moved_over_the_side);
+  guarded("test_arc_end_moved_out", test_arc_end_moved_out);
 }
 
 } // namespace test

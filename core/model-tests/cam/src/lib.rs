@@ -53,3 +53,15 @@ mod insert_tests;
 // Turn Roughing into undercuts: its Plunge choice, the G71 kept for the
 // roughing without one, the finish after it (mitcad#2549).
 mod rough_plunge_tests;
+
+// A sketch text refused as a CAM outline, with Explode Text named; the
+// curves it makes cut (mitcad#2588).
+mod text_outline_2588_tests;
+// Contour on the line with an engraving cutter or a chamfer mill
+// (mitcad#2589).
+mod v_bit_contour_tests;
+// Estlcam's CNC controller as a milling post (mitcad#2625).
+mod estlcam_2625_tests;
+// Turn Roughing and Turn Finishing within limits along Z, the spun target
+// of a mill-turn setup (mitcad#2629).
+mod spun_limits_2629_tests;

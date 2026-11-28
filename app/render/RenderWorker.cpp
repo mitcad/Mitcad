@@ -700,6 +700,22 @@ int runUpdateTest() {
   apply("face again", released, "-", "-", "-", "-", 1, 0);
   released.bodies.front().faces.clear();
   apply("face cleared", released, "-", "test block@copy", "-", "-", 1, 0);
+  // Along the grain (mitcad#2605): each body shows its own part of the
+  // images (its grain offset in its Cycles mesh), so two bodies of one
+  // mesh in the same grain look take a Cycles mesh each (none instanced);
+  // the same bodies again change nothing, and without the grain the body
+  // is as before.
+  render::SceneUpdate grained;
+  render::BodyData board = released.bodies.front();
+  board.material.textureGrain = true;
+  board.materialKey = "grain";
+  render::BodyData neighbour = board;
+  neighbour.id = "test block@grain";
+  neighbour.transform[7] = -30.0f;
+  grained.bodies = {board, neighbour};
+  apply("grain", grained, "test block@grain", "test block@copy", "-", "-", 1, 0);
+  apply("grain again", grained, "-", "-", "-", "-", 1, 0);
+  apply("grain cleared", released, "-", "test block@copy", "-", "test block@grain", 1, 0);
   // The last scene renders.
   view.sequence = 2;
   renderer->setView(view);

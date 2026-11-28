@@ -212,6 +212,8 @@ void ViewController::restorePreferenceDefaults(const QStringList& pages, bool al
     setTimelinePresentation(TimelinePresentation::Strip);
     // The Browser rows as they always were (mitcad#2513).
     setBrowserRowSpacing(BrowserRowSpacing::Standard);
+    // No highlight of the active component's row (mitcad#2618).
+    setBrowserHighlightActive(false);
     drawings::saveCornerDots(drawings::CornerDots());
     saveSmallCircles(SmallCircles::Adaptive);
     saveOriginDisplay(OriginDisplay());

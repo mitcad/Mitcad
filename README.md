@@ -24,6 +24,8 @@ is the [MIT license](LICENSE).
   Studio, OrcaSlicer, PrusaSlicer, UltiMaker Cura).
 
 How to install and use MitCad: [the user guide](docs/user-guide.md).
+Scripts, `mitcad-cli` and AI assistants drive designs through the model
+API: [the API reference](https://mitcad.org/docs/api/).
 Website: [mitcad.org](https://mitcad.org/). Downloads:
 [the releases](https://github.com/mitcad/Mitcad/releases).
 

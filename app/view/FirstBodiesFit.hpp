@@ -23,6 +23,9 @@ public:
   // A design is installed: its first bodies are fitted.
   void arm() { m_armed = true; }
   bool armed() const { return m_armed; }
+  // The design opened at its saved home view (mitcad#2671): its first
+  // bodies are not fitted, also when they come into the view later.
+  void disarm() { m_armed = false; }
 
   // The view's bodies were replaced: `wasEmpty` it showed none before,
   // `designBodies` it shows a design's own bodies now (not only a command's

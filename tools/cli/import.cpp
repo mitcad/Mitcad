@@ -327,6 +327,15 @@ int import_f3d_timeline(const Arguments& a) {
   if (a.flag("--no-references")) {
     add(R"("no_references": true)");
   }
+  // Only the items the import replays, counted (mitcad#2635): the
+  // application's progress total.
+  if (a.flag("--count-items")) {
+    add(R"("count_items": true)");
+    options += "}";
+    rust::Box<mitcad::Document> document = mitcad::new_document();
+    std::cout << std::string(document->import_f3d_timeline(a.positional[0], options)) << "\n";
+    return 0;
+  }
   const bool json = a.flag("--json");
   if (!json) {
     add(R"("text": true)");
@@ -356,7 +365,7 @@ int import_f3d(const std::vector<std::string>& args) {
                         "--learn", "--references", "--geometric-tolerance", "--retry-bodies",
                         "--accept-deviations", "--own-start-time-scale"},
                        {"--bodies-only", "--history", "--owners", "--json", "--no-verify", "--no-fallback",
-                        "--no-compare", "--no-references"},
+                        "--no-compare", "--no-references", "--count-items"},
                        a, problem)) {
     return usage(problem);
   }

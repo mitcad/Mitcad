@@ -203,8 +203,9 @@ void ScreenshotView::mouseReleaseEvent(QMouseEvent* event) {
 // Help > Send Feedback
 
 FeedbackDialog::FeedbackDialog(const QImage& screenshot, bool designOpen,
-                               std::function<bool(const Feedback&)> preview, QWidget* parent)
-    : QDialog(parent), m_preview(std::move(preview)) {
+                               std::function<bool(const Feedback&)> preview, QWidget* parent, FeedbackStart start)
+    : QDialog(parent), m_preview(std::move(preview)), m_start(start) {
+  const bool region = start == FeedbackStart::Region;
   setObjectName(QStringLiteral("feedbackDialog"));
   setWindowTitle(tr("Send Feedback"));
   auto* layout = new QVBoxLayout(this);
@@ -233,6 +234,7 @@ FeedbackDialog::FeedbackDialog(const QImage& screenshot, bool designOpen,
   m_summary->setPlaceholderText(tr("A short title"));
   form->addRow(tr("&Summary:"), m_summary);
   m_description = new QPlainTextEdit(this);
+  m_description->setObjectName(QStringLiteral("feedbackDescription"));
   m_description->setTabChangesFocus(true);
   m_description->setPlaceholderText(tr("What happened, what you expected, or what you would like"));
   form->addRow(tr("&Description:"), m_description);
@@ -245,7 +247,10 @@ FeedbackDialog::FeedbackDialog(const QImage& screenshot, bool designOpen,
   m_diagnostics = new QCheckBox(tr("Include &diagnostics (MitCad's version, the system, the graphics)"), this);
   m_diagnostics->setChecked(true);
   layout->addWidget(m_diagnostics);
-  m_screenshot = new QCheckBox(tr("Include a &screenshot of the window"), this);
+  m_screenshot = new QCheckBox(region ? tr("Include the &screenshot of the region")
+                                      : tr("Include a &screenshot of the window"),
+                               this);
+  m_screenshot->setObjectName(QStringLiteral("feedbackScreenshot"));
   m_screenshot->setEnabled(!screenshot.isNull());
   layout->addWidget(m_screenshot);
   m_viewRow = new QWidget(this);
@@ -254,7 +259,9 @@ FeedbackDialog::FeedbackDialog(const QImage& screenshot, bool designOpen,
   m_view = new ScreenshotView(m_viewRow);
   m_view->setImage(screenshot);
   viewLayout->addWidget(m_view, 1);
-  auto* reset = new QPushButton(tr("&Whole Window"), m_viewRow);
+  // The image is the region itself for a region's form: the reset goes
+  // back to it, not to the window.
+  auto* reset = new QPushButton(region ? tr("&Whole Region") : tr("&Whole Window"), m_viewRow);
   reset->setToolTip(tr("Undo the crop"));
   reset->setAutoDefault(false);
   viewLayout->addWidget(reset, 0, Qt::AlignTop);
@@ -303,7 +310,19 @@ FeedbackDialog::FeedbackDialog(const QImage& screenshot, bool designOpen,
   connect(buttons, &QDialogButtonBox::accepted, this, &FeedbackDialog::preview);
   connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
   layout->addWidget(buttons);
-  m_summary->setFocus();
+  if (region) {
+    // A region's report (mitcad#2616): a bug, with the region's screenshot
+    // shown, and the description ready for what is wrong there.
+    m_kind->setCurrentIndex(m_kind->findData(QStringLiteral("bug")));
+    m_screenshot->setChecked(!screenshot.isNull());
+    m_description->setFocus();
+    qInfo().noquote() << QStringLiteral("Feedback form for a region: kind %1, screenshot %2, the description has "
+                                        "the keyboard")
+                             .arg(m_kind->currentData().toString(),
+                                  m_screenshot->isChecked() ? QStringLiteral("on") : QStringLiteral("off"));
+  } else {
+    m_summary->setFocus();
+  }
   resize(560, sizeHint().height());
 }
 
@@ -319,6 +338,7 @@ Feedback FeedbackDialog::feedback() const {
   }
   feedback.includeDesign = m_design->isEnabled() && m_design->isChecked();
   feedback.includeLogs = m_logs->isChecked();
+  feedback.screenshotPrivate = m_start == FeedbackStart::Region;
   return feedback;
 }
 
@@ -335,7 +355,8 @@ void FeedbackDialog::preview() {
                                                                .arg(form.screenshot.width())
                                                                .arg(form.screenshot.height()),
                                 form.includeDesign ? QStringLiteral("on") : QStringLiteral("off"),
-                                form.includeLogs ? QStringLiteral("on") : QStringLiteral("off"));
+                                form.includeLogs ? QStringLiteral("on") : QStringLiteral("off"))
+                    + (form.screenshotPrivate ? QStringLiteral(", screenshot private") : QString());
   if (m_preview(form)) {
     accept();
   }

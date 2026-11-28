@@ -952,6 +952,10 @@ QString featureIcon(const QString& type) {
       {QStringLiteral("cell_grid"), QStringLiteral("cell-grid")},
       // Cone (mitcad#2239).
       {QStringLiteral("cone"), QStringLiteral("cone")},
+      // Wood Joint (mitcad#2604).
+      {QStringLiteral("wood_joint"), QStringLiteral("wood-joint")},
+      // Bead (mitcad#2645).
+      {QStringLiteral("sheet_bead"), QStringLiteral("sheet-bead")},
   };
   return icons.value(type, QStringLiteral("feature"));
 }

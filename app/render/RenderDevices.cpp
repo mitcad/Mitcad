@@ -6,6 +6,7 @@
 #include <cctype>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <cstdlib>
 #include <map>
 #include <mutex>
@@ -152,6 +153,51 @@ private:
   bool m_forwarding = false; // the renderer's thread only
 };
 
+// A renderer and its sink, the renderer ending first: its session's thread
+// may write frames until it ends. `ended` is set once both are gone.
+struct OwnedRenderer {
+  OwnedRenderer(std::shared_ptr<DeviceSink> deviceSink, std::unique_ptr<Renderer> owned)
+      : sink(std::move(deviceSink)), renderer(std::move(owned)) {}
+  OwnedRenderer(const OwnedRenderer&) = delete;
+  OwnedRenderer& operator=(const OwnedRenderer&) = delete;
+  ~OwnedRenderer() {
+    renderer.reset();
+    sink.reset();
+    ended->store(true);
+  }
+  std::shared_ptr<DeviceSink> sink;
+  std::unique_ptr<Renderer> renderer;
+  std::shared_ptr<std::atomic<bool>> ended = std::make_shared<std::atomic<bool>>(false);
+};
+
+// Stands in for a failed renderer that has been ended before the same
+// device starts again, until the next renderer is there, or for good when
+// none starts (with the device's error). It renders nothing and keeps
+// nothing: the fallback keeps what the next renderer is given.
+class StandInRenderer final : public Renderer {
+public:
+  StandInRenderer(DeviceInfo device, bool paused, std::string error)
+      : m_device(std::move(device)), m_paused(paused), m_error(std::move(error)) {}
+  std::string description() const override { return "no renderer on " + nameOf(m_device); }
+  SceneChanges updateScene(const SceneUpdate&) override { return {}; }
+  void setView(const ViewData&) override {}
+  void setPaused(bool paused) override { m_paused = paused; }
+  bool isPaused() const override { return m_paused.load(); }
+  void setSamples(int) override {}
+  void setPreviews(const std::vector<int>&) override {}
+  std::string setEnvironment(const EnvironmentData&) override { return {}; }
+  void wait() override {}
+  void setFinal(bool, double) override {}
+  int currentSample() const override { return 0; }
+  DeviceInfo device() const override { return m_device; }
+  std::string deviceError() const override { return m_error; }
+
+private:
+  DeviceInfo m_device;
+  std::atomic<bool> m_paused;
+  std::string m_error;
+};
+
 class FallbackRenderer : public Renderer {
 public:
   FallbackRenderer(FrameSink& sink, RendererFactory factory, DeviceReport report, std::string testFailure)
@@ -237,14 +283,26 @@ public:
   }
 
   // Until the samples are done, also when the device failed on the way and
-  // the CPU rendered them again.
+  // the CPU rendered them again. It does not hold the renderer while it
+  // waits for a replacement: a failed one must be able to end before its
+  // device starts again (watch).
   void wait() override {
     for (;;) {
-      const std::shared_ptr<Renderer> renderer = current();
-      renderer->wait();
+      std::uint64_t generation = 0;
+      {
+        std::shared_ptr<Renderer> renderer;
+        {
+          const std::lock_guard<std::mutex> lock(m_mutex);
+          renderer = m_inner;
+          generation = m_generation;
+        }
+        renderer->wait();
+      }
       std::unique_lock<std::mutex> lock(m_mutex);
-      m_changed.wait(lock, [&] { return m_stop || m_inner != renderer || !replaceable(*renderer); });
-      if (m_stop || m_inner == renderer) {
+      m_changed.wait(lock, [&] {
+        return m_stop || m_generation != generation || (!m_replacing && !replaceable(*m_inner));
+      });
+      if (m_stop || m_generation == generation) {
         return;
       }
     }
@@ -276,14 +334,45 @@ private:
       return false;
     }
     // The renderer and its sink go together, the renderer first: its
-    // session's thread may write frames until it ends, also when a wait()
+    // session's thread may write frames until it ends, also when a call
     // still holds it after the CPU took over.
-    auto pair = std::make_shared<std::pair<std::shared_ptr<DeviceSink>, std::unique_ptr<Renderer>>>(
-        sink, std::move(renderer));
-    m_inner = std::shared_ptr<Renderer>(pair, pair->second.get());
+    auto owned = std::make_shared<OwnedRenderer>(sink, std::move(renderer));
+    m_inner = std::shared_ptr<Renderer>(owned, owned->renderer.get());
     m_innerSink = std::move(sink);
+    m_innerEnded = owned->ended;
     m_first = first && !cpuDenoising ? m_inner.get() : nullptr;
+    ++m_generation;
     return true;
+  }
+
+  // Ends the failed renderer before its device starts again (mitcad#2613;
+  // from watch, with the lock, which it lets go meanwhile; not under the
+  // lock: its session's thread may still deliver a frame). Until it ends,
+  // its Cycles session keeps the GPU's memory and a reference to the
+  // device's CUDA context, which a sticky CUDA error (an illegal address, a
+  // launch timeout) leaves unusable for every later call. A second session
+  // on the same GPU shares that context and fails at its first call into
+  // it, creating its stream, with the old session's error, or gets only
+  // the memory the failed one left (a 4 GB GPU). Once the failed session
+  // has released the context, the retry gets a fresh one. Calls meanwhile
+  // reach a stand-in; the fallback keeps what they set for the next
+  // renderer.
+  void endFailed(std::shared_ptr<Renderer>& failed, std::unique_lock<std::mutex>& lock) {
+    const std::shared_ptr<std::atomic<bool>> ended = m_innerEnded;
+    m_inner = std::make_shared<StandInRenderer>(failed->device(), m_paused, std::string());
+    m_innerSink.reset();
+    m_innerEnded.reset();
+    m_first = nullptr;
+    m_replacing = true;
+    ++m_generation;
+    lock.unlock();
+    m_changed.notify_all();
+    failed.reset();
+    // A call that took it just before (current()) ends it on its thread.
+    while (ended && !ended->load()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    lock.lock();
   }
 
   static std::string fallbackMessage(const DeviceInfo& device, const std::string& why) {
@@ -291,6 +380,12 @@ private:
   }
   static std::string denoisingMessage(const DeviceInfo& device, const std::string& why) {
     return "Denoising on the CPU: Open Image Denoise on " + denoiserNameOf(device) + " failed (" + why + ")";
+  }
+  // The GPU failed, and again with CPU denoising: both reasons, the first
+  // one first (the second is often only its consequence).
+  static std::string retryFallbackMessage(const DeviceInfo& device, const std::string& first,
+                                          const std::string& again) {
+    return fallbackMessage(device, first) + ", and again with denoising on the CPU (" + again + ")";
   }
 
   // The device's error, or the test hook's for the first renderer.
@@ -319,9 +414,10 @@ private:
   // Watches the device: when it fails, another renderer takes over with
   // what the failed one had. A GPU that also denoised on a GPU first gets
   // the same GPU with CPU denoising (Cycles' error does not say whether the
-  // path tracer or the denoiser failed: both share the device), once; else,
-  // or when that fails too, the CPU. The test hook's failure is the path
-  // tracer's.
+  // path tracer or the denoiser failed: both share the device), once, after
+  // the failed renderer has ended (endFailed); else, or when that fails
+  // too, the CPU, whose message then gives both failures. The test hook's
+  // failure is the path tracer's.
   void watch() {
     std::unique_lock<std::mutex> lock(m_mutex);
     while (!m_stop) {
@@ -333,19 +429,38 @@ private:
       const std::string why = failure(*m_inner);
       const bool simulated = m_inner.get() == m_first && m_simulated;
       std::shared_ptr<Renderer> old = m_inner;
-      std::shared_ptr<DeviceSink> oldSink = m_innerSink;
-      oldSink->retire();
+      m_innerSink->retire();
       std::string error;
-      std::string message = fallbackMessage(failed, why);
+      // The same GPU with CPU denoising failed in its turn: the GPU's
+      // first failure is said too.
+      std::string message = m_denoisingRetried && failed.type != "CPU"
+                                ? retryFallbackMessage(failed, m_retriedFailure, why)
+                                : fallbackMessage(failed, why);
+      bool replaced = false;
       if (!m_denoisingRetried && failed.type != "CPU" && gpuDenoising(failed) && !simulated) {
         m_denoisingRetried = true;
+        m_retriedFailure = why;
+        endFailed(old, lock);
+        if (m_stop) {
+          m_replacing = false;
+          continue;
+        }
         std::string retryError;
         if (startOn(failed, true, retryError)) {
           message = denoisingMessage(failed, why);
+          replaced = true;
+        } else {
+          message = retryFallbackMessage(failed, why, retryError);
         }
       }
-      if (m_inner == old && !startOn(DeviceInfo(), true, error)) {
+      if (!replaced && !startOn(DeviceInfo(), true, error)) {
         m_fallbackFailed = true;
+        if (m_replacing) {
+          // The failed renderer has ended: a stand-in keeps its error.
+          m_inner = std::make_shared<StandInRenderer>(failed, m_paused, why);
+          m_replacing = false;
+          ++m_generation;
+        }
         lock.unlock();
         m_report(failed, "The render device failed (" + why + ") and the CPU could not take over (" + error + ")");
         m_changed.notify_all();
@@ -372,6 +487,7 @@ private:
       if (m_view) {
         m_inner->setView(*m_view);
       }
+      m_replacing = false;
       const DeviceInfo now = m_inner->device();
       lock.unlock();
       m_report(now, message);
@@ -391,10 +507,14 @@ private:
   std::condition_variable m_changed;
   std::shared_ptr<Renderer> m_inner;
   std::shared_ptr<DeviceSink> m_innerSink; // the current renderer's
+  std::shared_ptr<std::atomic<bool>> m_innerEnded; // set once the current renderer has ended
   const Renderer* m_first = nullptr;       // the first renderer, while it renders
+  std::uint64_t m_generation = 0;          // counts the renderers m_inner has had
+  bool m_replacing = false;                // a stand-in until the next renderer starts
   std::atomic<bool> m_simulated{false};
   bool m_fallbackFailed = false;
   bool m_denoisingRetried = false; // the same GPU with CPU denoising took over once
+  std::string m_retriedFailure;    // why the GPU failed before that
   bool m_stop = false;
   bool m_paused = false;
   std::thread m_watcher;

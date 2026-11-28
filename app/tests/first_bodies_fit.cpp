@@ -58,12 +58,28 @@ void openedDesignTests() {
   CHECK(fresh.armed());
 }
 
+void homeViewTests() {
+  // A design opened at its saved home view (mitcad#2671): its first bodies,
+  // also ones that come into the empty view later, leave the view there.
+  FirstBodiesFit fit;
+  fit.arm();
+  fit.disarm();
+  CHECK(!fit.armed());
+  CHECK(!fit.shown(true, false));
+  CHECK(!fit.shown(true, true));
+  CHECK(!fit.shown(false, true));
+  // The next design installed without a home view is fitted as before.
+  fit.arm();
+  CHECK(fit.shown(true, true));
+}
+
 } // namespace
 
 int firstBodiesFitTests() {
   failures = 0;
   newDesignTests();
   openedDesignTests();
+  homeViewTests();
   return failures;
 }
 MITCAD_UNIT_TEST(firstBodiesFitTests);

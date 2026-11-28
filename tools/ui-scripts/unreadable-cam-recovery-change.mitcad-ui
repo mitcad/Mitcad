@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+# The first run of the recovery test of a design whose CAM section this
+# MitCad cannot read (mitcad#2587; tools/ui-scripts/unreadable-cam-recovery.mitcad-ui
+# is the next): cam.mitcad (a 10 mm cube whose CAM has two setups with one
+# id, and a field a newer MitCad wrote) opens with both warnings; a 5 mm
+# cube is added; once the change is autosaved (every 2 s for the test,
+# MITCAD_TEST_AUTOSAVE_SECONDS) the session ends as a killed one would, its
+# autosaved files left for the next run.
+wait-idle
+expect-ever 'CAM of .*/cam[.]mitcad not read: two setups or operations have the same id'
+expect-ever 'Unknown fields of .*/cam[.]mitcad not read: future_notes$'
+expect-model-bodies 1 1000
+mark
+model-command '{"cmd":"add_feature","def":{"type":"box","plane":{"type":"origin","plane":"xy"},"corner":[20,0],"length":5,"width":5,"height":5,"operation":"new_body"}}'
+expect-model-bodies 2 1125
+expect-document-modified yes
+wait-log '^Autosaved cam[.]mitcad: ' 30
+kill

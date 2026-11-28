@@ -9,10 +9,12 @@
 
 #include <exception>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 #include <gp_Pln.hxx>
+#include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
 
 #include "mitcad/geometry/cancel.hpp"
@@ -70,6 +72,29 @@ std::optional<gp_Vec> landing_motion(const Shape& body, const std::vector<int>& 
 // region cannot be built or added, or the result is not a valid solid.
 ShapePtr move_planar_faces(const Shape& body, const std::vector<int>& faces, const gp_Pln& plane,
                            const gp_Vec& motion, const std::string& feature);
+
+// The faces of a feature (a boss, a pocket, a rib) moved rigidly as a whole
+// where the faces around cannot follow them along their surfaces
+// (mitcad#2632, GitHub mitcad/Mitcad#769): a boss slid partly over the edge
+// of the plate it stands on, whose top would have to lose a boundary there.
+// The faces are removed (the faces around extended over where they were,
+// as Delete Face does), the region between them and those extended faces
+// (the boss above the plate's top, or a pocket's hollow below it) is moved
+// by `motion` and added to the body again (or removed from it), and the
+// faces around are trimmed where they meet. The moved faces and the faces
+// around keep their names; a face of the moved region that is no face of
+// the body (the underside of the part of a boss that overhangs) is
+// "<feature>:step(<face>)" after the first moved face. Throws NotAFeature
+// where the faces around cannot close over the faces (they bound no
+// feature), and a reason in words where the moved region would no longer
+// meet the rest of the body, a moved face would end up inside it, or the
+// result is not one valid solid.
+class NotAFeature : public std::runtime_error {
+public:
+  using std::runtime_error::runtime_error;
+};
+ShapePtr move_feature_faces(const Shape& body, const std::vector<int>& faces, const gp_Trsf& motion,
+                            const std::string& feature);
 
 // The result of `a`, or where `a` fails, of `b`: the faces' own rebuild and
 // move_planar_faces, in the order that suits the motion. Where both fail,

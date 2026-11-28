@@ -695,6 +695,9 @@ pub fn slot_limits(feature_type: &str, slot: &str) -> Option<Bounds> {
         }),
         // A mortise and tenon's tenons (`mortise_tenon.rs`, `MAX_TENONS`).
         ("mortise_tenon", "count") if slot == "count" => whole(1.0, Some(100.0)),
+        // A wood joint's loose pieces (1 to 100) or box joint fingers (2 to 1000;
+        // `wood_joint.rs`, mitcad#2604).
+        ("wood_joint", "count") if slot == "count" => whole(1.0, Some(1000.0)),
         // A triangulated sheet development's triangles (`sheet_convert.rs`,
         // mitcad#2442).
         ("sheet_convert", "triangles") if slot == "triangles" => whole(2.0, Some(4000.0)),

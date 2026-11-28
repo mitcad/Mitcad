@@ -6,12 +6,16 @@
 // not mirrored, a square face takes the world axis lying longest in it, a
 // face's mesh does not change its directions, and a whole panel's mesh
 // (MeshData, faces by faceTriangles) gets each vertex's grain coordinates
-// in mm from its own face.
+// in mm from its own face; each placed body's grain offset (mitcad#2605)
+// is the model's, shifts its coordinates only, and gives it a Cycles mesh
+// of its own.
 #include "UnitTests.hpp"
 #include "render/GrainProjection.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <vector>
@@ -149,6 +153,80 @@ int grainProjectionTests() {
     // The end's third corner (l, w, t): (w, t), its u along Y.
     CHECK(std::abs(grain.coordinates[8 * 2] - w) < 1e-3 && std::abs(grain.coordinates[8 * 2 + 1] - t) < 1e-3);
     CHECK(near(grain.u[6 * 3], 0) && near(grain.u[6 * 3 + 1], 1) && near(grain.u[6 * 3 + 2], 0));
+
+    // A body's grain offset (mitcad#2605) shifts every vertex's
+    // coordinates by the same amount, on every face, and leaves the
+    // directions as they are: the repeat and the grain stay.
+    const std::array<double, 2> offset = mitcad::render::grainOffset("F3.b0");
+    const mitcad::render::GrainMesh shifted = mitcad::render::grainMeshOf(mesh, offset);
+    CHECK(shifted.coordinates.size() == grain.coordinates.size());
+    bool same = shifted.u == grain.u && shifted.v == grain.v;
+    for (std::size_t i = 0; i < grain.coordinates.size(); ++i) {
+      const double moved = static_cast<double>(shifted.coordinates[i]) - static_cast<double>(grain.coordinates[i]);
+      same = same && std::abs(moved - offset[i % 2]) < 2e-3;
+    }
+    CHECK(same);
+  }
+  {
+    // The grain offsets are the model's (grain.rs,
+    // separate_bodies_take_different_parts_of_the_grain): fixed values by
+    // the body's key, so a body keeps its part of the images on a redraw,
+    // a move and a reopening, and the shaded view, the rendered view and
+    // the exports agree. Two pine boards side by side (F3.b0, F4.b0) lie
+    // far apart within the woods' 800 mm repeat.
+    using mitcad::render::grainKey;
+    using mitcad::render::grainOffset;
+    const auto near = [](const std::array<double, 2>& a, double u, double v) {
+      return std::abs(a[0] - u) < 1e-6 && std::abs(a[1] - v) < 1e-6;
+    };
+    CHECK(near(grainOffset("F3.b0"), 8159.940994810313, 5121.577237732708));
+    CHECK(near(grainOffset("F4.b0"), 1406.768704764545, 9617.54277581349));
+    CHECK(grainKey("F3.b0", "") == "F3.b0");
+    CHECK(grainKey("F3.b0", "O1/O4") == "F3.b0@O1/O4");
+    CHECK(near(grainOffset(grainKey("F3.b0", "O1/O4")), 6916.328517254442, 6243.558961432427));
+    const auto apart = [](const std::array<double, 2>& a, const std::array<double, 2>& b, double repeat) {
+      double most = 0.0;
+      for (int k = 0; k < 2; ++k) {
+        double d = std::fmod(a[k] - b[k], repeat);
+        if (d < 0.0) {
+          d += repeat;
+        }
+        most = std::max(most, std::min(d, repeat - d));
+      }
+      return most;
+    };
+    CHECK(apart(grainOffset("F3.b0"), grainOffset("F4.b0"), 800.0) > 100.0);
+    CHECK(apart(grainOffset("F1.b0"), grainOffset("F1.b1"), 800.0) > 50.0);
+    CHECK(apart(grainOffset("F3.b0@O1"), grainOffset("F3.b0@O2"), 800.0) > 50.0);
+  }
+  {
+    // The rendered view (mitcad#2605): a body laid along the grain carries
+    // its offset in its Cycles mesh, so its look names the body, and two
+    // occurrences of one mesh no longer share one; without the grain they
+    // still do.
+    mitcad::render::BodyData a;
+    a.id = "F3.b0@O1";
+    a.mesh = "mesh";
+    a.materialKey = "pine";
+    mitcad::render::BodyData b = a;
+    b.id = "F3.b0@O2";
+    CHECK(a.lookKey() == b.lookKey());
+    a.material.textureGrain = true;
+    b.material.textureGrain = true;
+    CHECK(a.lookKey() != b.lookKey());
+    CHECK(mitcad::render::alongGrain(a));
+    // A face group along the grain is enough.
+    mitcad::render::BodyData c = b;
+    c.material.textureGrain = false;
+    mitcad::render::FaceMaterial group;
+    group.faces = {0};
+    group.material.textureGrain = true;
+    group.materialKey = "pine";
+    c.faces = {group};
+    CHECK(mitcad::render::alongGrain(c));
+    mitcad::render::BodyData d = c;
+    d.id = "F3.b0@O3";
+    CHECK(c.lookKey() != d.lookKey());
   }
   return failures;
 }

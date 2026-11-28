@@ -195,6 +195,11 @@ public:
   // Reorient Design (mitcad#502): the whole design turned by quarter turns,
   // previewed while its dialog is open; OK keeps it as one undo step.
   void openReorient();
+  // Replace Component (mitcad#2640): the component of the occurrence at
+  // `path` ("O1/O4"), in all its places or that one, replaced by a design
+  // file or another component, previewed while its dialog is open; OK
+  // keeps it as one undo step.
+  void openReplaceComponent(const QString& path);
   // File › Design Properties… (mitcad#1088): the design's summary (the
   // root's property set Summary) and statistics; OK sets the summary's
   // edited fields as one undo step (`set_design_summary`).

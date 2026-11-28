@@ -153,6 +153,46 @@ void listingTests() {
   CHECK(!tutorialInLanguage(QStringLiteral("en"), QStringLiteral("fi")));
 }
 
+// What a tutorial's page may do (mitcad#2615): open only the starting
+// designs its manifest lists, show where it comes from, and, from another
+// source than the public repository, show no outward command.
+void pageRuleTests() {
+  const QJsonObject manifest{{QStringLiteral("designs"),
+                              QJsonArray{QStringLiteral("designs/start.mitcad"), QStringLiteral("./designs/b.mitcad")}}};
+  CHECK(tutorialListsDesign(manifest, QStringLiteral("designs/start.mitcad")));
+  CHECK(tutorialListsDesign(manifest, QStringLiteral("designs/./start.mitcad")));
+  CHECK(tutorialListsDesign(manifest, QStringLiteral("designs/b.mitcad")));
+  CHECK(!tutorialListsDesign(manifest, QStringLiteral("designs/other.mitcad")));
+  CHECK(!tutorialListsDesign(manifest, QStringLiteral("../designs/start.mitcad")));
+  CHECK(!tutorialListsDesign(manifest, QString()));
+  CHECK(!tutorialListsDesign(QJsonObject(), QStringLiteral("designs/start.mitcad")));
+
+  CHECK(tutorialSourceName(QString::fromLatin1(kPublicTutorials)) == QStringLiteral("github.com/mitcad/tutorials"));
+  CHECK(tutorialSourceName(QStringLiteral("https://user@example.com/courses/cad.git/")) ==
+        QStringLiteral("example.com/courses/cad"));
+  CHECK(tutorialSourceName(QStringLiteral("/home/someone/courses/own/")) == QStringLiteral("own"));
+  CHECK(tutorialSourceName(QStringLiteral("C:\\courses\\own.git")) == QStringLiteral("own"));
+  CHECK(tutorialSourceName(QString()).isEmpty());
+
+  CHECK(tutorialFromPublicSource(QString::fromLatin1(kPublicTutorials)));
+  CHECK(tutorialFromPublicSource(QStringLiteral("https://github.com/mitcad/tutorials")));
+  CHECK(!tutorialFromPublicSource(QStringLiteral("https://github.com/someone/tutorials.git")));
+  CHECK(!tutorialFromPublicSource(QStringLiteral("/home/someone/courses/own")));
+  CHECK(!tutorialFromPublicSource(QString()));
+
+  for (const char* outward : {"file.export", "file.export_drawing", "view.export_snapshot", "cloud.publish",
+                              "help.send_feedback", "tools.preferences", "tools.run_script", "tools.macro_record",
+                              "file.sync", "file.open_remote", "file.quit", "insert.component_web", "make.print3d",
+                              "tools.publish_library", "settings.ini"}) {
+    CHECK(guideCommandOutward(QString::fromLatin1(outward)));
+  }
+  for (const char* inside : {"sketch.create", "sketch.rectangle", "solid.extrude", "solid.box", "view.home",
+                             "file.close", "file.design_properties", "help.leave_tutorial", "sketch.delete",
+                             "inspect.print_analysis"}) {
+    CHECK(!guideCommandOutward(QString::fromLatin1(inside)));
+  }
+}
+
 } // namespace
 
 int tutorialSourcesTests() {
@@ -172,6 +212,7 @@ int tutorialSourcesTests() {
   versionTests();
   progressTests();
   listingTests();
+  pageRuleTests();
   QSettings::setDefaultFormat(format);
   QCoreApplication::setOrganizationName(organization);
   QCoreApplication::setApplicationName(application);

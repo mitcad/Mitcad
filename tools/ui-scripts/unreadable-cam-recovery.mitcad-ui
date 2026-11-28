@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: MIT
+# A design whose CAM section this MitCad cannot read, recovered from the
+# autosave of a session that did not end normally (mitcad#2587; the session
+# of tools/ui-scripts/unreadable-cam-recovery-change.mitcad-ui, or of an
+# earlier run of this script): the autosaved text has neither the CAM nor
+# the field a newer MitCad wrote, which the recovered design keeps from its
+# file. Restored, it warns as on opening; an agent's save (MCP
+# document_save) over the file is refused and asks nothing; Save asks
+# before it writes over the file, and the runner's answer is clicked:
+# MITCAD_TEST_ANSWER is the button (Cancel, or Save and Drop Them) and
+# MITCAD_TEST_ANSWERED the word the answer logs (cancelled, save). The
+# session then ends as a killed one would, its own autosave written (after
+# Cancel, the next run recovers it again). The runners
+# (tools/ui-unreadable-cam-recovery-test.sh,
+# tools/ui-macos-unreadable-cam-recovery-test.sh,
+# tools/ui-windows-unreadable-cam-recovery-test.ps1) check the file after
+# the run: as it was byte for byte after Cancel, without the CAM and the
+# newer field after Save and Drop Them. The application starts without
+# --no-recovery.
+expect-ever 'Recovery: 1 document\(s\) found' 30
+expect-ever 'Recoverable cam[.]mitcad: '
+focus-dialog '^Recover Unsaved Work$'
+mark
+key Return
+focus-main
+wait-log '^Recovered cam[.]mitcad from autosave of ' 30
+wait-idle
+expect-model-bodies 2 1125
+expect-document-modified yes
+# What its file has that this MitCad did not read, said as on opening it.
+expect-log 'Unknown fields of .*/cam[.]mitcad not read: future_notes$'
+expect-log 'CAM of .*/cam[.]mitcad not read: two setups or operations have the same id'
+# This session's own autosave written, the earlier one's files removed:
+# after Cancel, the next run recovers this session.
+expect-ever 'Recovered session [^ ]+ removed' 30
+
+# An agent's save over the file: refused, nothing asked, nothing written.
+mark
+mcp-tool document_save '{}' refused 'was written by a newer MitCad and its CAM could not be read'
+expect-log '^MCP refused: '
+expect-log '^Save drops unknown fields: .*/cam[.]mitcad: cam, future_notes$'
+expect-no-log '^Saved '
+expect-document-modified yes
+
+# Save asks first; the runner's answer.
+mark
+command file.save
+focus-dialog '^MitCad$|was written by a newer MitCad and its CAM could not be read'
+expect-log '^Save drops unknown fields: .*/cam[.]mitcad: cam, future_notes$'
+button '^${MITCAD_TEST_ANSWER}$'
+focus-main
+expect-log '^Save drops unknown fields: ${MITCAD_TEST_ANSWERED}$'
+wait-idle
+kill

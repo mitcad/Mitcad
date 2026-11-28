@@ -19,7 +19,7 @@
 #      bulb off; shown, light bulb on), is seen from the default view, and
 #      no new design's framing is logged for it.
 #   4. New Design (Ctrl+N, in the current window) after an opened design
-#      turned to Top (on F9 here) opens from the default view again, with
+#      turned to Top (on F12 here) opens from the default view again, with
 #      the origin shown.
 # The other UI tests keep the start they were written for
 # (MITCAD_NEW_DESIGN_VIEW=0, Ui-StartApp: the exact isometric view, the
@@ -35,7 +35,7 @@ param(
 
 # New replaces the window's design (no second window to follow).
 # View > Front and View > Top on keys of their own.
-Ui-Init $App $Out $QtBin @{ 'sketch.create' = 'F7'; 'view.front' = 'F8'; 'view.top' = 'F9';
+Ui-Init $App $Out $QtBin @{ 'sketch.create' = 'F7'; 'view.front' = 'F8'; 'view.top' = 'F12';
   'documents/openInCurrentWindow' = 'true' } -StepPause 0
 $env:MITCAD_NEW_DESIGN_VIEW = '1'
 
@@ -173,7 +173,7 @@ Ui-StartApp 'new-design-start-shown' @($shownFile)
 Expect-Origin $shownOn "the opened design's origin stays shown, its light bulb on"
 Expect-NoNewDesignFraming 'the design saved with its origin shown'
 Ui-Mark
-Ui-Step 'top view (F9)'                  { Ui-Key 'F9' }
+Ui-Step 'top view (F12)'                  { Ui-Key 'F12' }
 Ui-ExpectNew 'Camera direction 0 0 -1' 'the opened design seen from the top' | Out-Null
 Ui-Mark
 Ui-Step 'new design (Ctrl+N)'            { Ui-Key 'ctrl+n' }

@@ -136,7 +136,8 @@ fn every_dialect_is_listed_once_by_its_id() {
             "mach4",
             "linuxcnc",
             "carvera",
-            "carvera_air"
+            "carvera_air",
+            "estlcam"
         ]
     );
     assert!(dialect("fanuc").is_none());
@@ -838,6 +839,10 @@ fn golden(id: &str) -> (&'static str, &'static str) {
             include_str!("golden/carvera_air-inch.cnc"),
             include_str!("golden/carvera_air-peck.cnc"),
         ),
+        "estlcam" => (
+            include_str!("golden/estlcam-inch.nc"),
+            include_str!("golden/estlcam-peck.nc"),
+        ),
         _ => panic!("no golden files for {id}"),
     }
 }
@@ -1153,8 +1158,13 @@ fn an_arc_whose_end_rounds_to_its_start_is_no_whole_turn() {
                 assert!(arcs_in_place(&g).is_empty(), "{} {units:?}", d.id());
                 continue;
             }
-            // Only the helix turn ends where it starts, and it goes down.
             let whole = arcs_in_place(&g);
+            if !d.full_circles() {
+                // The helix turn is two half turns.
+                assert!(whole.is_empty(), "{} {units:?}: {whole:?}\n{g}", d.id());
+                continue;
+            }
+            // Only the helix turn ends where it starts, and it goes down.
             assert_eq!(whole.len(), 1, "{} {units:?}: {whole:?}\n{g}", d.id());
             assert!(whole[0].contains(" Z"), "{} {units:?}: {whole:?}", d.id());
         }
@@ -1169,5 +1179,205 @@ fn an_arc_whose_end_rounds_to_its_start_is_no_whole_turn() {
             .collect::<Vec<_>>(),
         vec!["G3 X0.3937 Y0 Z-0.0787 I-0.3937 J0 F39.37"],
         "{inch}"
+    );
+}
+
+#[test]
+fn estlcam_writes_only_the_codes_its_controller_reads() {
+    let expected = format!(
+        "\
+{NOTICE}
+(Bracket)
+(T1 6 mm flat end mill, D6 mm)
+(T2 3 mm flat end mill, D3 mm)
+(Units: millimeters, feeds in mm per minute.)
+(Set Estlcam to these units before running it.)
+G21
+G0 Z15
+(Contour 1)
+(Tool 1: 6 mm flat end mill)
+G0 Z15
+M03 S18000
+{CIRCLE}
+(Drill)
+M05
+(Change to tool 2: 3 mm flat end mill)
+M06
+G0 Z15
+M03 S10000
+M08
+{HOLE}
+M05
+M09
+"
+    );
+    let g = run("estlcam");
+    assert_eq!(g, expected);
+    assert_eq!(dialect("estlcam").unwrap().extension(), "nc");
+    // Estlcam reads one G code and one M code a line, the motion on every
+    // move line, and nothing of work offsets or machine coordinates.
+    for l in g.lines().filter(|l| !l.starts_with('(')) {
+        let words: Vec<&str> = l.split_whitespace().collect();
+        assert!(
+            words.iter().filter(|w| w.starts_with('G')).count() <= 1,
+            "{l}"
+        );
+        assert!(
+            words.iter().filter(|w| w.starts_with('M')).count() <= 1,
+            "{l}"
+        );
+        if words.iter().any(|w| w.starts_with(['X', 'Y', 'Z'])) {
+            assert!(words[0].starts_with('G'), "{l}");
+        }
+    }
+    // The units stay said when comments are off.
+    let quiet = PostSettings {
+        comments: false,
+        ..PostSettings::default()
+    };
+    let q = post(&program(), &Estlcam, &quiet, None).unwrap();
+    assert!(
+        q.contains(&format!(
+            "{NOTICE}\n(Units: millimeters, feeds in mm per minute.)\n(Set Estlcam to these units before running it.)\nG21\nG0 Z15\nG0 Z15\nM03 S18000\n"
+        )),
+        "{q}"
+    );
+}
+
+#[test]
+fn estlcam_changes_tools_with_m06_and_leaves_the_waits_to_its_controller() {
+    // The controller's changer: M06 for the first tool too; M06 measures
+    // the tool, so no length offset even when asked; the spindle's start
+    // delay is the controller's, so no dwell.
+    let mut m = machine(ToolChanger::Controller);
+    m.park = None;
+    let settings = PostSettings {
+        tool_length_offset: Some(true),
+        ..PostSettings::default()
+    };
+    let g = post(&program(), &Estlcam, &settings, Some(&m)).unwrap();
+    assert!(
+        g.contains(
+            "\nG0 Z15\n(Contour 1)\n(Change to tool 1: 6 mm flat end mill)\nM06\nG0 Z15\nM03 S18000\nG0 X10 Y0\n"
+        ),
+        "{g}"
+    );
+    assert!(
+        g.contains("\n(Change to tool 2: 3 mm flat end mill)\nM06\nG0 Z15\nM03 S10000\nM08\n"),
+        "{g}"
+    );
+    for code in ["G4", "G53", "G54", "M30", " T"] {
+        assert!(!g.contains(code), "{code}: {g}");
+    }
+    // A tool a program-driven changer has no slot for: M00 waits for the
+    // operator.
+    let mut m = machine(ToolChanger::Macro(MacroChanger {
+        slots: vec![RackSlot {
+            tool: 1,
+            position: [20.0, 780.0, -90.0],
+        }],
+        safe_z: -5.0,
+        unload: vec![],
+        load: vec!["(clamp {name})".into()],
+    }));
+    m.park = None;
+    let g = post(&program(), &Estlcam, &PostSettings::default(), Some(&m)).unwrap();
+    assert!(
+        g.contains("\n(Contour 1)\n(clamp 6 mm flat end mill)\nG0 Z15\n"),
+        "{g}"
+    );
+    assert!(
+        g.contains("\n(Drill)\nM05\n(Change to tool 2: 3 mm flat end mill)\nM00\nG0 Z15\n"),
+        "{g}"
+    );
+}
+
+#[test]
+fn estlcam_refuses_what_its_controller_has_no_command_for() {
+    let settings = PostSettings::default();
+    let refused =
+        |p: &Program, m: Option<&Machine>| post(p, &Estlcam, &settings, m).unwrap_err().message;
+    // A counter-clockwise spindle: there is no M04.
+    let mut p = program();
+    p.operations[0].spindle = SpindleDirection::Ccw;
+    assert_eq!(
+        refused(&p, None),
+        "Estlcam has no command for a counter-clockwise spindle."
+    );
+    // Mist and air: M08 and M09 switch its one coolant output.
+    for c in [Coolant::Mist, Coolant::Air] {
+        let mut p = program();
+        p.operations[1].coolant = c;
+        assert_eq!(
+            refused(&p, None),
+            "Estlcam switches only one output for coolant; use flood coolant."
+        );
+    }
+    // Work offsets: there is one work zero.
+    let mut p = program();
+    p.work_offset = 2;
+    assert_eq!(
+        refused(&p, None),
+        "Estlcam has one work zero, set in its controller; choose G54 as the setup's work offset."
+    );
+    // A park position is in machine coordinates, which Estlcam has not:
+    // the program ends at the safe height and says so.
+    let g = post(
+        &program(),
+        &Estlcam,
+        &settings,
+        Some(&machine(ToolChanger::Manual)),
+    )
+    .unwrap();
+    assert!(
+        g.ends_with(
+            "\nM05\nM09\n(The machine's park position is not written: Estlcam has no machine coordinates.)\n"
+        ),
+        "{g}"
+    );
+    assert!(!g.contains("G53"), "{g}");
+}
+
+#[test]
+fn estlcam_cuts_a_whole_turn_as_two_half_turns() {
+    // Estlcam takes no arc that ends where it starts: the helix turn of
+    // the short arcs goes halfway round and down, then the rest.
+    let mm = post(&short_arcs(), &Estlcam, &PostSettings::default(), None).unwrap();
+    assert!(
+        mm.contains(
+            "\nG3 X10 Y0.001 I-10 J0 F1000\nG3 X-10 Y-0.001 Z-1.5 I-10 J-0.001\nG3 X10 Y0.001 Z-2 I10 J0.001\nG1 X20\n"
+        ),
+        "{mm}"
+    );
+    let inch = post(&short_arcs(), &Estlcam, &inches(), None).unwrap();
+    assert_eq!(
+        inch.lines()
+            .filter(|l| l.starts_with("G2 ") || l.starts_with("G3 "))
+            .collect::<Vec<_>>(),
+        vec![
+            "G3 X-0.3937 Y0 Z-0.0591 I-0.3937 J0 F39.37",
+            "G3 X0.3937 Y0 Z-0.0787 I0.3937 J0"
+        ],
+        "{inch}"
+    );
+    // A whole turn without Z, clockwise.
+    let mut p = program();
+    p.operations[0].toolpath.moves[2] = Move::Arc {
+        to: [10.0, 0.0, -2.0],
+        center: [0.0, 0.0],
+        ccw: false,
+        feed: 1000.0,
+    };
+    p.operations[0].toolpath.moves.remove(3);
+    let g = post(&p, &Estlcam, &PostSettings::default(), None).unwrap();
+    assert!(
+        g.contains("\nG1 Z-2 F300\nG2 X-10 Y0 I-10 J0 F1000\nG2 X10 Y0 I10 J0\nG1 X20\n"),
+        "{g}"
+    );
+    // The other controllers keep it one arc.
+    let l = post(&p, &LinuxCnc, &PostSettings::default(), None).unwrap();
+    assert!(
+        l.contains("\nG1 Z-2 F300\nG2 X10 Y0 I-10 J0 F1000\nG1 X20\n"),
+        "{l}"
     );
 }

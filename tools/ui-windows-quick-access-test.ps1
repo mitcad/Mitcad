@@ -29,7 +29,7 @@
 #      again.
 #   7. Redo removed by its right-click while it is disabled (or, when the
 #      window folded it, the last default item in sight); a drawing opened
-#      (Create Drawing, F9 here): Print shows in the group.
+#      (Create Drawing, F12 here): Print shows in the group.
 #   8. A restart: the removed item stays removed.
 #   9. A profile with an earlier version's quickAccess/commands: those
 #      commands after the defaults, once, Preferences left out.
@@ -47,7 +47,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-Ui-Init $App $Out $QtBin @{ 'tools.preferences.display' = 'Shift+F8'; 'file.create_drawing' = 'F9' } -StepPause 0
+Ui-Init $App $Out $QtBin @{ 'tools.preferences.display' = 'Shift+F8'; 'file.create_drawing' = 'F12' } -StepPause 0
 if (-not $Cli) {
   $Cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
     ForEach-Object { Join-Path (Split-Path $script:UiApp) $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
@@ -354,7 +354,7 @@ function Layout-Steps([string]$Layout) {
   Remove-QuickItem $removed
   Expect-Group "${Layout}: without $removed" $withoutRedo
   Ui-Mark
-  Ui-Step 'Create Drawing (F9)'             { Ui-Key 'F9' }
+  Ui-Step 'Create Drawing (F12)'             { Ui-Key 'F12' }
   Ui-ExpectNew 'Create Drawing dialog opened' "${Layout}: its dialog"
   Ui-Step 'OK'                              { Ui-FocusDialog '^Create Drawing$'; Ui-Key 'Return'; Ui-FocusMain }
   Ui-ExpectNew 'Drawing opened: ' "${Layout}: a drawing open"

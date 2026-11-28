@@ -62,7 +62,8 @@ private:
 
 // The demonstration's layer (mitcad#2366): over the whole window,
 // transparent for the mouse, the page's picture of the frame shown where
-// the frame is.
+// the frame is, cut to the step's target and a margin around it
+// (mitcad#2615, GuideDemonstration::allowedArea).
 class GuideDemonstrationLayer : public QWidget {
 public:
   explicit GuideDemonstrationLayer(QWidget* window) : QWidget(window) {
@@ -71,33 +72,37 @@ public:
     setAttribute(Qt::WA_NoSystemBackground, true);
     setFocusPolicy(Qt::NoFocus);
   }
-  void setFrame(const QImage& image, const QRectF& rect) {
-    const QRect before = m_rect.toAlignedRect();
+  void setFrame(const QImage& image, const QRectF& rect, const QRectF& clip) {
+    const QRect before = m_rect.intersected(m_clip).toAlignedRect();
     m_image = image;
     m_rect = rect;
-    update(before.united(rect.toAlignedRect()).adjusted(-1, -1, 1, 1));
+    m_clip = clip;
+    update(before.united(rect.intersected(clip).toAlignedRect()).adjusted(-1, -1, 1, 1));
   }
   void clear() {
     if (!m_image.isNull()) {
-      update(m_rect.toAlignedRect().adjusted(-1, -1, 1, 1));
+      update(m_rect.intersected(m_clip).toAlignedRect().adjusted(-1, -1, 1, 1));
     }
     m_image = QImage();
     m_rect = QRectF();
+    m_clip = QRectF();
   }
 
 protected:
   void paintEvent(QPaintEvent*) override {
-    if (m_image.isNull()) {
+    if (m_image.isNull() || m_clip.isEmpty()) {
       return;
     }
     QPainter painter(this);
     painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    painter.setClipRect(m_clip);
     painter.drawImage(m_rect, m_image);
   }
 
 private:
   QImage m_image;
   QRectF m_rect;
+  QRectF m_clip;
 };
 
 namespace {
@@ -625,7 +630,8 @@ void TutorialGuide::demonstrationTick() {
     return;
   }
   m_demonstrationLayer->setFrame(m_demonstration.frames.at(pose.frame).image,
-                                 m_demonstration.frameRect(pose.frame, pose.point));
+                                 m_demonstration.frameRect(pose.frame, pose.point),
+                                 GuideDemonstration::allowedArea(area));
   if (pose.frame != m_demonstrationFrame) {
     m_demonstrationFrame = pose.frame;
     // The frame's own place (where a gliding frame arrives).

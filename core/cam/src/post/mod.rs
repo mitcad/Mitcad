@@ -13,6 +13,7 @@
 //! also leaves out words that have not changed (modal values).
 
 mod carvera;
+mod estlcam;
 mod grbl;
 mod linuxcnc;
 mod mach;
@@ -33,6 +34,7 @@ use crate::tool::Tool;
 use crate::toolpath::{CycleKind, DrillCycle, Move, P3, arc_sweep, move_points};
 
 pub use carvera::{Carvera, CarveraAir};
+pub use estlcam::Estlcam;
 pub use grbl::{Grbl, GrblHal};
 pub use linuxcnc::LinuxCnc;
 pub use mach::{Mach3, Mach4};
@@ -166,6 +168,11 @@ pub trait PostProcessor {
     fn supports_arcs(&self) -> bool {
         true
     }
+    /// Whether an arc may end where it starts (a whole turn); without, a
+    /// whole turn is written as two half turns.
+    fn full_circles(&self) -> bool {
+        true
+    }
     /// Whether a tool length offset follows a tool change unless the
     /// settings say otherwise.
     fn tool_length_offset(&self) -> bool {
@@ -258,6 +265,8 @@ pub fn dialects() -> Vec<Box<dyn PostProcessor>> {
         // Makera's desktop machines (mitcad#2349).
         Box::new(Carvera),
         Box::new(CarveraAir),
+        // Estlcam's CNC controller (mitcad#2625).
+        Box::new(Estlcam),
     ]
 }
 
@@ -290,6 +299,8 @@ pub struct Output {
     comments: bool,
     style: CommentStyle,
     stream_commands: &'static str,
+    /// Whether a whole turn may be one arc ([`PostProcessor::full_circles`]).
+    full_circles: bool,
     next_number: u32,
     words: [Option<String>; 3],
     feed: Option<String>,
@@ -315,6 +326,7 @@ impl Output {
             comments: settings.comments,
             style,
             stream_commands: "",
+            full_circles: true,
             next_number: 10,
             words: [None, None, None],
             feed: None,
@@ -346,6 +358,12 @@ impl Output {
     /// (see [`PostProcessor::stream_commands`]) out of comments and names.
     pub fn set_stream_commands(&mut self, chars: &'static str) {
         self.stream_commands = chars;
+    }
+
+    /// Whether a whole turn may be one arc; without, it is written as two
+    /// half turns (see [`PostProcessor::full_circles`]).
+    pub fn set_full_circles(&mut self, allowed: bool) {
+        self.full_circles = allowed;
     }
 
     /// Text the controller reads as it is, for a comment or a name in a
@@ -505,18 +523,36 @@ impl Output {
         // its ends stands for it, or nothing when Z stays too.
         let lands_on_start =
             (0..2).all(|k| self.words[k].as_deref() == Some(self.len(to[k]).as_str()));
-        if lands_on_start && arc_sweep([x, y], [to[0], to[1]], center, ccw).abs() < PI {
+        let sweep = arc_sweep([x, y], [to[0], to[1]], center, ccw);
+        if lands_on_start && sweep.abs() < PI {
             self.linear(to, feed);
             return Ok(());
         }
-        let i = self.len(center[0] - x);
-        let j = self.len(center[1] - y);
+        if lands_on_start && !self.full_circles {
+            // A whole turn the controller does not take as one arc: the
+            // first half to the point halfway round (halfway down a helix),
+            // then the second.
+            let r = (x - center[0]).hypot(y - center[1]);
+            let a = (y - center[1]).atan2(x - center[0]) + sweep / 2.0;
+            let z = self.at[2].map_or(to[2], |z0| (z0 + to[2]) / 2.0);
+            let half = [center[0] + r * a.cos(), center[1] + r * a.sin(), z];
+            self.arc_line([x, y], half, center, ccw, feed);
+            self.arc_line([half[0], half[1]], to, center, ccw, feed);
+            return Ok(());
+        }
+        self.arc_line([x, y], to, center, ccw, feed);
+        Ok(())
+    }
+
+    /// One G2 or G3 line from `from` to `to`, I and J from the start.
+    fn arc_line(&mut self, from: [f64; 2], to: P3, center: [f64; 2], ccw: bool, feed: f64) {
+        let i = self.len(center[0] - from[0]);
+        let j = self.len(center[1] - from[1]);
         let g = if ccw { "G3" } else { "G2" };
         let mut w = self.axis_words(to, [true, true, false], true);
         w.push_str(&self.axis_words(to, [false, false, true], false));
         let f = self.feed_word(feed);
         self.line(format!("{g}{w} I{i} J{j}{f}"));
-        Ok(())
     }
 
     /// The next moves are written as these lines instead, one list per
@@ -842,6 +878,7 @@ fn write(
     let spin_up = machine.map(|m| m.spindle.spin_up_seconds).unwrap_or(0.0);
     let mut out = Output::new(settings, dialect.comment_style());
     out.set_stream_commands(dialect.stream_commands());
+    out.set_full_circles(dialect.full_circles());
     dialect.start(&mut out);
     for line in EXPERIMENTAL_NOTICE {
         out.notice(line);

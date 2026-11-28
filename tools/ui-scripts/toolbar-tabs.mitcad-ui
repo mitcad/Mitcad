@@ -14,28 +14,28 @@ expect-ever 'View area' 30
 wait-idle
 expect-ever '^Ribbon tab SURFACE at ' 30
 expect-ever '^Ribbon tabs button at ' 30
-expect-ribbon-labels Start Solid Surface 'Sheet Metal' Build '3D Print' Laser CNC Manage
+expect-ribbon-labels Start Solid Surface 'Sheet Parts' Build '3D Print' Laser CNC Manage
 wait-idle
 
 # 1. Surface hidden from the SOLID tab's right-click menu.
 mark
 context-menu-logged '^Ribbon tab SOLID at ' Surface
-wait-log '^Ribbon tabs menu SOLID: Solid \| Surface \| Sheet Metal \| Build \| 3D Print \| Laser \| CNC \| Manage \| - \| Customize Toolbar'
+wait-log '^Ribbon tabs menu SOLID: Solid \| Surface \| Sheet Parts \| Build \| 3D Print \| Laser \| CNC \| Manage \| - \| Customize Toolbar'
 wait-log '^Ribbon tab SURFACE hidden$'
-wait-log '^Ribbon tabs: START, SOLID, SHEET METAL, BUILD, MAKE_PRINT, MAKE_LASER, MAKE_CNC, MANAGE [(]shown SOLID[)]$'
+wait-log '^Ribbon tabs: START, SOLID, SHEET PARTS, BUILD, MAKE_PRINT, MAKE_LASER, MAKE_CNC, MANAGE [(]shown SOLID[)]$'
 wait-idle
-expect-ribbon-labels Start Solid 'Sheet Metal' Build '3D Print' Laser CNC Manage
+expect-ribbon-labels Start Solid 'Sheet Parts' Build '3D Print' Laser CNC Manage
 
 # 2. Surface shown again from the + after the last tab.
 sleep 300
 mark
 click-logged '^Ribbon tabs button at '
-wait-log '^Ribbon tabs menu shown: SOLID, SHEET METAL, BUILD, MAKE_PRINT, MAKE_LASER, MAKE_CNC, MANAGE$'
+wait-log '^Ribbon tabs menu shown: SOLID, SHEET PARTS, BUILD, MAKE_PRINT, MAKE_LASER, MAKE_CNC, MANAGE$'
 popup Surface
 wait-log '^Ribbon tab SURFACE shown$'
-wait-log '^Ribbon tabs: START, SOLID, SURFACE, SHEET METAL, BUILD, MAKE_PRINT, MAKE_LASER, MAKE_CNC, MANAGE [(]shown SOLID[)]$'
+wait-log '^Ribbon tabs: START, SOLID, SURFACE, SHEET PARTS, BUILD, MAKE_PRINT, MAKE_LASER, MAKE_CNC, MANAGE [(]shown SOLID[)]$'
 wait-idle
-expect-ribbon-labels Start Solid Surface 'Sheet Metal' Build '3D Print' Laser CNC Manage
+expect-ribbon-labels Start Solid Surface 'Sheet Parts' Build '3D Print' Laser CNC Manage
 
 # 3. Customize Toolbar…: Sweep gets a button in Create.
 sleep 300

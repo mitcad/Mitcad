@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# check-all sources: app/tutorials app/webbrowser core/vcs/src/library tools/cli
+# check-all sources: app/tutorials app/webbrowser core/vcs/src/library tools/cli docs/examples/tutorials
 # check-all sources: app/MainWindowStart.cpp app/WindowManager.cpp app/files/StartPage.cpp
 # check-all sources: core/model-api/src/tutorial_bridge.rs
 # check-all sources: app/framework/PaneMotion.cpp app/framework/FloatingLayout.cpp
@@ -15,8 +15,10 @@ naming a command MitCad does not have is refused; Escape with no command open
 ends the step and the input is free, and the page shows it again; another
 command is refused and logged, and the page hears of it; opening the intended command and
 typing the intended value complete the steps and the page gets the events;
-a page outside the tutorial's folder gets no bridge; Leave Tutorial ends the
-step and closes the pane, and the input is free again.
+a page outside the tutorial's folder is not shown, and a link to the web
+the user clicks is only offered to the system's browser after a question
+naming its site (mitcad#2615); Leave Tutorial ends the step and closes the
+pane, and the input is free again.
 
 Then the example tutorials repository (docs/examples/tutorials, the seed of
 the public tutorials repository, mitcad#2078) as the only source, in a run of
@@ -83,7 +85,19 @@ at once with reduced motion; Leave Tutorial visible in every place; the
 page never loaded again (its count of moves goes on); Leave Tutorial puts
 the pane back at the left, hidden.
 
+With resume (mitcad#2610, GitHub mitcad/Mitcad#758, a test of its own): the
+example's tutorial left after its sketch, and in a second run left during
+its Extrude (the panel then closed by the learner); each time Help >
+Tutorials... shows its card in progress (step 3, step 4 of 5), its Continue
+goes on in the design it was left in (no new design), the page offers the
+step that design is ready for (Extrude, never the distance of a closed
+panel), and the part is finished from there. After the first run's end,
+the page's Back to Tutorials leaves the tutorial and shows the list, where
+the card says Done; Start Again starts it at its first step in a design of
+its own, with no offer to continue.
+
 Usage: ui-tutorials-test.py <app> <cli> <output folder> [<Qt's bin> [<the built web browser component> [<example>]]]
+       ui-tutorials-test.py resume <app> <cli> <output folder> [<Qt's bin> [<component> [<example>]]]
        ui-tutorials-test.py hold <app> <cli> <output folder> [<Qt's bin> [<component>]]
        ui-tutorials-test.py start-page <app> <cli> <output folder> [<Qt's bin> [<component> [<example>]]]
        ui-tutorials-test.py quit <app> <cli> <output folder> [<Qt's bin> [<component> [<example>]]]
@@ -134,6 +148,7 @@ PAGE = """<!doctype html>
 <h1>Two steps</h1>
 <p>An extrude, step by step.</p>
 <p><a href="%(outside)s">Outside page</a></p>
+<p><a href="https://example.invalid/lesson">Web page</a></p>
 <script>
 function say(text) { console.log('mitcad:tutorial:' + text); }
 if (!window.mitcad) {
@@ -695,12 +710,29 @@ def workflow(source):
         "expect-log '^Guide: step distance done: 20 mm typed into distance$' 20",
         "expect-log '^Tutorial page says: done distance \\{\"input\":\"distance\",\"value\":\"20 mm\"\\}$' 20",
         "expect-log '^Guide: step finish started: ' 20",
-        # A page outside the tutorial's folder: no bridge.
+        # A page outside the tutorial's folder is not shown (mitcad#2615):
+        # the page stays in its folder, with its bridge.
         "mark",
         "invoke-widget tutorialPage clickLink 'Outside page'",
-        "expect-log '^Tutorial page loaded: file:.*/outside/outside\\.html \\(bridge: no\\)$' 60",
-        "expect-log '^Tutorial page says: outside bridge=undefined query=undefined$' 30",
+        "expect-log '^Tutorial page: refused a page outside the tutorial.s folder: file:.*/outside/outside\\.html$' 60",
+        "sleep 1",
+        "expect-no-log '^Tutorial page loaded: file:.*/outside/'",
+        "expect-no-log '^Tutorial page says: outside '",
         "expect-no-log '^Tutorial bridge: '",
+        # A link to the web the user clicked: not followed in the pane, the
+        # system's browser offered after a question naming the site; No
+        # opens nothing.
+        "mark",
+        "invoke-widget tutorialPage clickLink 'Web page'",
+        "expect-log '^Tutorial page: a link to the web, example\\.invalid$' 60",
+        "expect-log '^Tutorial: asks to open a page of example\\.invalid in the web browser$' 20",
+        # Match the question text too, since macOS message boxes have no title.
+        "focus-dialog '^Tutorials$|^The tutorial links to a page on example\\.invalid, "
+        "outside MitCad\\. Open it in your web browser\\?$' 20",
+        "button '^No$'",
+        "expect-log '^Tutorial: the page of example\\.invalid was not opened$' 20",
+        "focus-main",
+        "expect-no-log '^Tutorial page loaded: https:'",
         # Leave Tutorial: the step ends, the pane closes, the input is free.
         "mark",
         "command help.leave_tutorial",
@@ -786,6 +818,18 @@ def example_first_step():
 def example_steps():
     """Each step of the example's tutorial done as its text asks, to the
     page's end and Leave Tutorial (after example_first_step)."""
+    return example_sketch_steps() + example_extrude_steps() + [
+        # Leave Tutorial closes the pane.
+        "mark",
+        "command help.leave_tutorial",
+        "expect-log '^Tutorial: pane closed$' 20",
+        "wait-idle",
+    ]
+
+
+def example_sketch_steps():
+    """The example's steps 1 and 2 done (after example_first_step): the
+    sketch on the XY plane with its rectangle, finished."""
     return [
         "expect-widget-property guideCallout visible true",
         # The origin's planes keep their size on the screen; zooming out
@@ -829,6 +873,13 @@ def example_steps():
         "expect-log '^Sketch finished' 20",
         "expect-log '^Guide: step rectangle done: the mode is idle$' 20",
         "expect-log '^Tutorial page says: done rectangle$' 20",
+    ]
+
+
+def example_extrude_steps():
+    """The example's steps 3 to 5 done, from its Extrude step shown (since
+    the mark) to the page's end: the block made and the progress done."""
+    return [
         # 3. Extrude, which starts with the sketch's profile.
         "expect-log '^Guide: step extrude started: target command solid\\.extrude, navigation free$' 20",
         "mark",
@@ -852,11 +903,6 @@ def example_steps():
         "expect-log '^Tutorial: progress %s: done$' 20" % EXAMPLE_TUTORIAL,
         "expect-no-log '^Guide: command'",
         "expect-model-bodies 1 12000",
-        # Leave Tutorial closes the pane.
-        "mark",
-        "command help.leave_tutorial",
-        "expect-log '^Tutorial: pane closed$' 20",
-        "wait-idle",
     ]
 
 
@@ -1838,6 +1884,155 @@ def run_hints(app, cli, directory, qt_bin=None, component=None):
           "the orbit step's demonstration of Alt + left until Leave Tutorial")
 
 
+# The resume runs (mitcad#2610, GitHub mitcad/Mitcad#758): the example's
+# tutorial left after its sketch and left during its Extrude, each continued
+# from its card, in a run of its own.
+RESUME_RUNS = ("resume-sketch", "resume-extrude")
+
+
+def example_continue(manifest, left, offered):
+    """Help > Tutorials... after the example was left at step `left`: its
+    card in progress, its Continue goes on in the design it was left in
+    (no new design), and its page offers the step that design is ready for
+    (`offered`: the page's words, a regular expression), whose button is
+    pressed (the mark before it)."""
+    return [
+        "mark",
+        "command help.tutorials",
+        "expect-log '^Start page section: tutorials$' 20",
+        "expect-log %s 30" % example_listed(manifest, "in progress \\(step %d of 5\\)" % left),
+        "wait-idle",
+        "button '^Continue$' tutorialStart_%s" % EXAMPLE_TUTORIAL,
+        "expect-log '^Tutorials: chosen %s \\(continue\\)$' 20" % EXAMPLE_TUTORIAL,
+        "expect-log '^Tutorial: continues in the design it was left in$' 30",
+        "expect-log '^Tutorial: opened %s ' 30" % re_text(manifest["title"]),
+        "expect-log '^Start page hidden$' 10",
+        "expect-no-log '^Tutorial: starts in '",
+        "expect-document-windows 1",
+        "focus-main",
+        "expect-log '^Tutorial page loaded: file:.*/%s/index\\.html \\(bridge: yes\\)$' 90" % EXAMPLE_TUTORIAL,
+        "expect-log '^Tutorial page says: offered to continue at %s$' 30" % offered,
+        # No step until the learner chooses.
+        "expect-no-log '^Guide: step [a-z]+ started: '",
+        "wait-idle",
+        "mark",
+        "invoke-widget tutorialPage clickLink 'Continue at step 3'",
+    ]
+
+
+def example_back_and_again(manifest):
+    """After the example's end: Back to Tutorials leaves it and shows the
+    tutorials list, where its card says Done; Start Again starts it from
+    the beginning in a design of its own (the one under the page has the
+    block), at its first step, with no offer to continue."""
+    title = manifest["title"]
+    return [
+        "mark",
+        "invoke-widget tutorialPage clickLink 'Back to Tutorials'",
+        "expect-log '^Tutorial page says: back to the tutorials$' 20",
+        "expect-log '^Tutorial bridge: show_tutorials$' 20",
+        "expect-log '^Tutorial: pane closed$' 20",
+        "expect-log '^Start page section: tutorials$' 20",
+        "expect-log %s 30" % example_listed(manifest, "done"),
+        "wait-idle",
+        "mark",
+        "button '^Start Again$' tutorialStart_%s" % EXAMPLE_TUTORIAL,
+        "expect-log '^Tutorials: chosen %s \\(start again\\)$' 20" % EXAMPLE_TUTORIAL,
+        "expect-log '^Tutorial: starts in a new design$' 30",
+        "expect-no-log '^Tutorial: continues '",
+        "expect-log '^Tutorial: opened %s ' 30" % re_text(title),
+        "focus-main",
+        "expect-log '^Tutorial page loaded: file:.*/%s/index\\.html \\(bridge: yes\\)$' 90" % EXAMPLE_TUTORIAL,
+    ] + example_first_step() + [
+        "expect-no-log '^Tutorial page says: offered to continue '",
+        "expect-no-log '^Tutorial page says: finished before$'",
+    ]
+
+
+def resume_workflow(run, source, manifest):
+    """The driver's steps of a resume run:
+      resume-sketch: left after the sketch, at step 3 (Extrude); Continue
+        goes on in that design at Extrude, and the part is finished; then
+        Back to Tutorials, the card Done, and Start Again from step 1.
+      resume-extrude: left during Extrude, at step 4 with its panel open,
+        which the learner then closes; Continue goes on at Extrude again
+        (the panel closed), and the part is finished."""
+    lines = ["wait-idle"] + example_open(source, manifest) + example_first_step() + example_sketch_steps()
+    lines.append("expect-log '^Guide: step extrude started: target command solid\\.extrude, navigation free$' 20")
+    if run == "resume-sketch":
+        lines += [
+            "expect-log '^Tutorial: progress %s: in progress \\(step 3 of 5\\)$' 20" % EXAMPLE_TUTORIAL,
+            "mark",
+            "command help.leave_tutorial",
+            "expect-log '^Guide: step extrude left \\(leave\\)$' 20",
+            "expect-log '^Tutorial: pane closed$' 20",
+            "wait-idle",
+        ]
+        lines += example_continue(manifest, 3, "3, left at 3 \\(rectangle\\)")
+        lines += example_extrude_steps()
+        lines += example_back_and_again(manifest)
+    elif run == "resume-extrude":
+        lines += [
+            "mark",
+            "command solid.extrude",
+            "expect-log '^Command Extrude started' 20",
+            "expect-log '^Guide: step extrude done: the panel of solid\\.extrude opened$' 20",
+            "expect-log '^Guide: step distance started: target input distance, navigation free$' 20",
+            "expect-log '^Tutorial: progress %s: in progress \\(step 4 of 5\\)$' 20" % EXAMPLE_TUTORIAL,
+            "mark",
+            "command help.leave_tutorial",
+            "expect-log '^Guide: step distance left \\(leave\\)$' 20",
+            "expect-log '^Tutorial: pane closed$' 20",
+            "expect-widget-property guideCallout visible false",
+            # The learner closes the panel the lesson left open.
+            "key Escape",
+            "expect-log '^Command Extrude cancelled' 20",
+            "wait-idle",
+            "expect-model-bodies 0 0",
+        ]
+        lines += example_continue(manifest, 4, "3, left at 4 \\(rectangle\\)")
+        lines += example_extrude_steps()
+        lines += [
+            "mark",
+            "command help.leave_tutorial",
+            "expect-log '^Tutorial: pane closed$' 20",
+            "wait-idle",
+        ]
+    else:
+        raise RuntimeError("no resume run " + run)
+    return "\n".join(lines + ["quit"]) + "\n"
+
+
+def prepare_resume(directory, example=None):
+    """The resume runs (mitcad#2610): the example's repository as the
+    source (source/), the driver's steps of each run (<run>.mitcad-ui) and a
+    folder of its own for each, after what an earlier run left is removed."""
+    directory = Path(directory).resolve()
+    directory.mkdir(parents=True, exist_ok=True)
+    for name in ["source"] + [run for run in RESUME_RUNS] + [run + ".mitcad-ui" for run in RESUME_RUNS]:
+        remove(directory / name)
+    prepare_example(directory / "source", example)
+    manifest = json.loads((directory / "source" / "course" / "tutorials" / EXAMPLE_TUTORIAL / "tutorial.json")
+                          .read_text(encoding="utf-8"))
+    source = (directory / "source" / "source.git").as_posix()
+    for run in RESUME_RUNS:
+        (directory / (run + ".mitcad-ui")).write_text(resume_workflow(run, source, manifest), encoding="utf-8")
+        (directory / run).mkdir()
+    return directory
+
+
+def run_resume(app, cli, directory, qt_bin=None, component=None, example=None):
+    """The example's tutorial left and continued (mitcad#2610), each case
+    in a run of its own."""
+    del cli  # the same arguments as the other UI tests; nothing to build here
+    directory = prepare_resume(directory, example)
+    for run in RESUME_RUNS:
+        run_app(app, directory / run, run, qt_bin, component, script=directory / (run + ".mitcad-ui"))
+    print("PASS: Tutorials continued: the example left after its sketch and during its Extrude, each continued "
+          "from its card in the design it was left in at Extrude and finished; Back to Tutorials shows its card "
+          "Done, and Start Again starts it from its first step in a design of its own")
+
+
 if __name__ == "__main__":
     if sys.argv[1] == "prepare":
         prepare(*sys.argv[2:4])
@@ -1857,5 +2052,7 @@ if __name__ == "__main__":
         run_placement(*sys.argv[2:])
     elif sys.argv[1] == "hints":
         run_hints(*sys.argv[2:])
+    elif sys.argv[1] == "resume":
+        run_resume(*sys.argv[2:])
     else:
         run(*sys.argv[1:])

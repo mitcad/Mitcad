@@ -7,7 +7,7 @@
 # (App, Out, QtBin) with $TimberTest set to the test's name; it
 #   - initialises the test (tools/ui-windows-lib.ps1's Ui-Init) with the
 #     TIMBER group's shortcuts: F3 Profile, F4 Timber, F5 Floor / Roof,
-#     F7 Wall, F8 Connector, F9 Cut List, F11 Spacing Set, F12 Timber Frame;
+#     F7 Wall, F8 Connector, Shift+F12 Cut List, F11 Spacing Set, F12 Timber Frame;
 #     the steps without the pause after the sync key (as the Linux tests'
 #     steps: Ui-Init -StepPause 0, mitcad#834);
 #   - makes a library of small synthetic parts (mitcad-cli; a slot profile,
@@ -37,7 +37,7 @@ function Run-Cli([string]$What, [string[]]$Arguments) {
 
 function Timber-Init {
   Ui-Init $App $Out $QtBin @{ 'build.profile' = 'F3'; 'build.timber' = 'F4'; 'build.wall' = 'F7';
-                              'build.connector' = 'F8'; 'build.cut_list' = 'F9'; 'build.spacing' = 'F11';
+                              'build.connector' = 'F8'; 'build.cut_list' = 'Shift+F12'; 'build.spacing' = 'F11';
                               'build.floor_roof' = 'F5'; 'build.frame' = 'F12' } -StepPause 0
   # The orientation cube's places logged: the views from a side (a click on
   # the cube).

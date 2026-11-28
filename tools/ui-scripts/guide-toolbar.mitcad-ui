@@ -21,13 +21,14 @@
 #      Down and Return choose Make and complete it. Then Design chosen back
 #      the same way.
 #   5. The Surface tab outlined (the wrapper checks its place); a click on
-#      it completes the step.
+#      it completes the step. A tab named by its earlier name (Sheet Metal)
+#      is the Sheet Parts tab (mitcad#2602).
 #   6. The timeline outlined, a step without done; the page (here the
 #      driver's guide-end) ends it.
 expect-ever 'View area' 30
 window-resize 1280 800
 wait-idle
-expect-ever '^Ribbon workspace: DESIGN [(]tabs SOLID, SURFACE, SHEET METAL, BUILD, MANAGE[)]$' 30
+expect-ever '^Ribbon workspace: DESIGN [(]tabs SOLID, SURFACE, SHEET PARTS, BUILD, MANAGE[)]$' 30
 expect-ever '^Ribbon workspace at ' 30
 expect-ever '^Ribbon tab SURFACE at ' 30
 wait-idle
@@ -115,6 +116,16 @@ expect-no-log '^Guide: step surface done'
 click-logged '^Ribbon tab SURFACE at '
 wait-log '^Ribbon tab shown: SURFACE$'
 wait-log '^Guide: step surface done: the tab SURFACE activated$'
+wait-idle
+
+# 5b. A tutorial written before the rename (mitcad#2602) names the Sheet
+# Parts tab by its earlier name, Sheet Metal: the step takes it as the
+# Sheet Parts tab; the page ends it.
+mark
+guide-step '{"id": "sheet", "text": "Open the Sheet Parts tab.", "target": {"tab": "Sheet Metal"}, "done": {"activated": "sheet_parts"}}'
+wait-log '^Guide: step sheet started: target tab SHEET PARTS, navigation free$'
+guide-end
+wait-log '^Guide: step sheet left [(]ended[)]$'
 wait-idle
 
 # 6. The timeline: outlined until the page ends the step.

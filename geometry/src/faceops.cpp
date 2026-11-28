@@ -50,6 +50,8 @@
 #include <Geom_BSplineSurface.hxx>
 #include <Geom_Curve.hxx>
 #include <Geom_Line.hxx>
+#include <Geom_OffsetSurface.hxx>
+#include <Geom_RectangularTrimmedSurface.hxx>
 #include <Geom_Surface.hxx>
 #include <NCollection_Array1.hxx>
 #include <NCollection_IndexedDataMap.hxx>
@@ -744,8 +746,10 @@ void cut_end_slivers(const TopoDS_Shape& shape) {
 // often as their degree, such as rational arcs. Each piece offsets on its
 // own, which gives the same wall (mitcad#158). `removed` (faces of the body)
 // becomes the pieces of those faces, and so do the faces of `own` (offsets
-// of their own, mitcad#2443), each piece with its face's offset.
-ShapePtr split_at_creases(const Shape& body, std::set<int>& removed, FaceOffsets* own = nullptr) {
+// of their own, mitcad#2443), each piece with its face's offset. `failure`
+// heads the error where the split itself raises one.
+ShapePtr split_at_creases(const Shape& body, std::set<int>& removed, FaceOffsets* own = nullptr,
+                          const char* failure = "shell failed while splitting faces at their creases") {
   bool creased = false;
   for (int i = 0; i < body.face_count() && !creased; ++i) {
     const occ::handle<Geom_Surface> surface = BRep_Tool::Surface(body.face(i));
@@ -756,7 +760,7 @@ ShapePtr split_at_creases(const Shape& body, std::set<int>& removed, FaceOffsets
   }
   ShapeUpgrade_ShapeDivideContinuity divide(body.occt());
   divide.SetSurfaceCriterion(GeomAbs_C1);
-  step("shell failed while splitting faces at their creases", [&] { divide.Perform(); });
+  step(failure, [&] { divide.Perform(); });
   const TopoDS_Shape split = divide.Result();
   if (split.IsNull()) {
     return nullptr;
@@ -1843,18 +1847,77 @@ std::string creased_faces_error(const Shape& body) {
       places);
 }
 
+// True when the body has a face whose surface is only C0 continuous and
+// every such face lies on the offset of a surface that is continuous at
+// least in its first derivative (Geom_OffsetSurface counts its continuity
+// one order below its basis's, so such an offset is C0 to the kernel,
+// though tangent-continuous; mitcad#2546).
+bool offset_creases_only(const Shape& body) {
+  bool any = false;
+  for (int i = 0; i < body.face_count(); ++i) {
+    occ::handle<Geom_Surface> surface = BRep_Tool::Surface(body.face(i));
+    if (surface.IsNull() || surface->Continuity() != GeomAbs_C0) {
+      continue;
+    }
+    if (const occ::handle<Geom_RectangularTrimmedSurface> trimmed =
+            occ::down_cast<Geom_RectangularTrimmedSurface>(surface)) {
+      surface = trimmed->BasisSurface();
+    }
+    const occ::handle<Geom_OffsetSurface> offset = occ::down_cast<Geom_OffsetSurface>(surface);
+    if (offset.IsNull() || offset->BasisSurface().IsNull() || offset->BasisSurface()->Continuity() == GeomAbs_C0) {
+      return false;
+    }
+    any = true;
+  }
+  return any;
+}
+
 // Moves each face by its own offset; the other faces stay on their surfaces.
 // `except` are faces not to carry the names of.
-detail::FaceNamer move_faces(const Shape& input, const std::vector<std::pair<int, double>>& moves,
-                             const std::vector<int>& except, NCollection_List<TopoDS_Shape>& moved) {
+detail::FaceNamer move_faces(const Shape& input, const std::vector<std::pair<int, double>>& given,
+                             const std::vector<int>& given_except, NCollection_List<TopoDS_Shape>& moved) {
   // OCCT's offset widens the tolerances of its input's sub-shapes.
   const ShapePtr copy = detail::working_copy(input);
-  const Shape& body = *copy;
-  for (const auto& move : moves) {
-    straight_seams_as_lines(body.face(move.first));
+  for (const auto& move : given) {
+    straight_seams_as_lines(copy->face(move.first));
   }
   // The kernel checks every face of the body, not only the moved ones.
-  lower_false_creases(body.occt());
+  lower_false_creases(copy->occt());
+  // (mitcad#2546, GitHub mitcad/Mitcad#723) Faces on the offset of a
+  // surface continuous only in its first derivative are split at their
+  // creases into C1 pieces that keep their names, as Shell splits its input
+  // (mitcad#158): the kernel counts such an offset as only C0, though it is
+  // tangent-continuous, and its offset refuses the whole body for one such
+  // face (BRepOffset_C0Geometry in its check of its input), moved or not.
+  // The inner wall of a shelled loft whose sections were merged into one
+  // smooth edge each is the offset of the loft's side, which is continuous
+  // only in its first derivative along the sections' former joins (a slot's
+  // lines and arcs), so moving the outer wall of such a hollow loft failed
+  // with "the neighbouring faces cannot follow the moved faces". Each piece
+  // is moved by its face's offset, or stays; the pieces of a face that
+  // stays lie on its surface and its edges (the wall comes out in those
+  // pieces, "#k", which a reference to the face still finds together). Only
+  // where every face still C0 is such an offset: a B-spline face whose
+  // knots leave it continuous only in position (a crease by its knots that
+  // lower_false_creases could not take out) still refuses in words
+  // (creased_faces_error, mitcad#2509); split, the kernel left gaps beside
+  // its pieces.
+  FaceOffsets offsets;
+  for (const auto& [face, distance] : given) {
+    offsets[face] = distance;
+  }
+  std::set<int> kept_unnamed(given_except.begin(), given_except.end());
+  const ShapePtr pieces =
+      offset_creases_only(*copy)
+          ? split_at_creases(*copy, kept_unnamed, &offsets, "the faces could not be split where their surfaces crease")
+          : nullptr;
+  const Shape& body = pieces ? *pieces : *copy;
+  std::vector<std::pair<int, double>> moves = given;
+  std::vector<int> except = given_except;
+  if (pieces) {
+    moves.assign(offsets.begin(), offsets.end());
+    except.assign(kept_unnamed.begin(), kept_unnamed.end());
+  }
   BRepOffset_MakeOffset maker;
   maker.Initialize(offset_input(body.occt()), 0.0, kTolerance, BRepOffset_Skin, false, false,
                    GeomAbs_Intersection, false, false);
