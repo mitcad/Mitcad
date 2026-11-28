@@ -1,7 +1,7 @@
 # Interface languages
 
 MitCad's interface is written in English, the source language of every
-text, and can show another language: Finnish today, more later
+text, and can show another language: Finnish and Polish today, more later
 (mitcad#1284, mitcad#1460). This page is for those who build, translate or
 add a language. Users choose the language in Preferences › General ›
 Language ([user guide](user-guide.md#language)).
@@ -386,7 +386,8 @@ below is the reference for its translators too.
 ## Glossary
 
 One term per concept; a column per language. Finnish follows established
-Finnish CAD and engineering usage.
+Finnish CAD and engineering usage, Polish the usage of Polish CAD
+applications (feature: operacja, face: ściana, constraint: wiązanie).
 
 Finnish style (mitcad#1475): a "Click to …" text (and "Double-click to",
 "Press … to", "Drag … to", "Hold … to") says the result first and the
@@ -395,213 +396,221 @@ to close" is "sulje napsauttamalla ensimmäistä pistettä". What *napsauta*
 clicks is in the partitive: "napsauta keskipistettä", "napsauta toista
 päätä", never "napsauta keskipiste".
 
-| English | Finnish (fi) | Note |
-|---|---|---|
-| design | malli | the document; a new design: uusi malli |
-| project | projekti | |
-| Cloud project, Local project | pilviprojekti, paikallinen projekti | |
-| version | versio | record a version: kirjata versio; Version History: Versiohistoria |
-| repository | repositorio | remote: etärepositorio |
-| sync | synkronoida | Sync: Synkronoi; a sync: synkronointi |
-| edit lock | muokkauslukko | read-only: vain luku |
-| live updates | reaaliaikapäivitykset | broker: välityspalvelin |
-| component | komponentti | |
-| occurrence | esiintymä | |
-| body | kappale | solid body: solidi; surface body: pintakappale; mesh body: verkkokappale |
-| mesh | verkko | never verkkomalli (malli is a design); Convert Mesh: Muunna verkko; Save as Mesh: Tallenna verkkona |
-| feature | piirre | |
-| sketch | luonnos | Create Sketch: Luo luonnos; Finish Sketch: Lopeta luonnos |
-| through the bodies (drawn) | kappaleiden läpi | Sketches Through Bodies: Luonnokset kappaleiden läpi; Selection Through Bodies: Valinta kappaleiden läpi; Show All Sketches, Hide All Sketches: Näytä kaikki luonnokset, Piilota kaikki luonnokset |
-| 3D sketch | 3D-luonnos | Create 3D Sketch: Luo 3D-luonnos; Convert to 3D Sketch: Muunna 3D-luonnokseksi; 3D Sketch Palette: 3D-luonnospaletti; route (a 3D sketch's path): reitti |
-| text (sketch) | teksti | anchor (a text's): ankkuri; Position X, Y: Sijainti X, Y; a text on a path: polulla oleva teksti; QR code: QR-koodi |
-| Flex (the tool and what it lays) | Flex | the item: taipuisa osa (osa after the first mention); node: solmu; end of a pipe: putken pää; twist: kierto; bend radius on edge: taivutussäde syrjän yli; flat side: lape; hose: letku; wire: johdin; strip: nauha |
-| relation (3D sketch) | suhde | a 3D sketch's constraint; Relations: Suhteet; In plane: Tasossa; in-plane relation, Fix, dimension: tasosuhde, tasokiinnitys, tasomitta; Align X: Suuntaa X; Keep Axis, Keep Plane: Pidä akselilla, Pidä tasossa |
-| On Sketch Plane | Luonnostasolla | the relation; Release from Plane: Vapauta tasosta; Release Plane: Vapauta taso |
-| attach, detach (3D sketch) | linkittää, irrottaa | Attach: Linkitä; Detach: Irrota; linked reference: linkitetty viittaus; source: lähde; Replace Reference: Korvaa viittaus; reference curve: viitekäyrä; On Face (a point on a face): Tahkolla |
-| handle (3D sketch) | kahva | tangent handle: tangenttikahva; anchor: ankkuri; Pick Normal: Poimi normaali; seen edge-on: näkyy syrjittäin |
-| wall (grown from sketch curves) | seinämä | thin walls, ribs, webs; sketch plane: luonnostaso; Thin Extrude: Ohut pursotus |
-| profile | profiili | |
-| curve | käyrä | |
-| line | viiva | |
-| arc | kaari | |
-| circle | ympyrä | |
-| rectangle | suorakulmio | |
-| slot | ura | |
-| spline | splini | |
-| point | piste | |
-| vertex | kärkipiste | |
-| edge | särmä | |
-| face | tahko | a body's face |
-| surface | pinta | the surface of a face; Surface group: Pinta |
-| plane | taso | construction plane: aputaso |
-| axis | akseli | construction axis: apuakseli |
-| construction geometry | apugeometria | Construct group: Apugeometria |
-| constraint | rajoite | |
-| dimension | mitta | Sketch Dimension: Luonnosmitta |
-| parameter | parametri | user parameter: käyttäjäparametri |
-| configuration | konfiguraatio | option: vaihtoehto; row: rivi; rule: sääntö; binding: sidonta (a configuration's only; input bindings are näppäinmääritykset) |
-| table | taulukko | key column: avainsarake; parameter column: parametrisarake |
-| extrude | pursotus (pursottaa) | |
-| revolve | pyöräytys (pyöräyttää) | |
-| sweep | pyyhkäisy | |
-| loft | siirtymäpiirre | |
-| fillet | pyöristys (pyöristää) | |
-| chamfer | viiste (viistää) | |
-| shell | kuorinta | |
-| draft | päästö | taper angle: päästökulma |
-| hole | reikä | clearance hole: välysreikä; tapped: kierteitetty; press fit: puristussovite |
-| thread | kierre | |
-| pattern | kuvio | rectangular: suorakulmainen kuvio; circular: ympyräkuvio |
-| mirror | peilaus | |
-| offset | siirtymä | Offset Face: Siirrä tahkoa |
-| split | jako (jakaa) | |
-| combine | yhdistä | join: liitä; cut: leikkaa |
-| assembly | kokoonpano | Assemble group: Kokoonpano |
-| joint | liitos | |
-| ground, unground (an occurrence) | kiinnittää, vapauttaa kiinnitys | Ground: Kiinnitä; Unground: Vapauta kiinnitys; grounded: kiinnitetty; never maadoittaa (electrical earthing); the render environment's ground: maa |
-| flexible (an occurrence, a subassembly) | joustava | Flexible: Joustava; its own joints move in its parent; rigid there: jäykkä |
-| sheet metal | ohutlevy | flat pattern: levitys; bend: taivutus |
-| drawing | piirustus | |
-| view (a drawing's) | kuvanto | base view: peruskuvanto; Flat Pattern View: levityskuvanto (mitcad#2446); projected: projektiokuvanto; section: leikkauskuvanto; detail: detaljikuvanto; break: katkaisu; parent view: emokuvanto; the 3D view: näkymä |
-| orientation cube | suuntakuutio | its faces, in capitals: ETU, TAKA, VASEN, OIKEA, YLÄ, ALA (FRONT, BACK, LEFT, RIGHT, TOP, BOTTOM) |
-| standard view | näkymä + direction | Front View: Näkymä edestä; Back View: Näkymä takaa; Left View, Right View: Näkymä vasemmalta, Näkymä oikealta; Top View, Bottom View: Näkymä ylhäältä, Näkymä alhaalta; Isometric View: Isometrinen näkymä; each a whole text, never a name put into "%1 View" (mitcad#1687) |
-| sheet (a drawing's) | arkki | template: pohja; title block: nimiö; scale: mittakaava; first/third angle: ensimmäinen/kolmas kulma |
-| drawing symbols | symbolit | balloon: osanumero; center mark: keskiömerkki; centerline: keskiviiva; datum label: perustemerkki; feature control frame: toleranssikehys; surface finish: pinnanlaatu; hatching: viivoitus; hole table: reikätaulukko |
-| drawing dimensions | mitoitus | ordinate: koordinaattimitoitus; baseline: rinnakkaismitoitus; chain: ketjumitoitus; aligned: suuntainen |
-| annotation | merkintä | |
-| note | huomautus | |
-| geometric tolerance | geometrinen toleranssi | straightness: suoruus; flatness: tasomaisuus; circularity: ympyrämäisyys; cylindricity: lieriömäisyys; profile of a line, of a surface: viivan muoto, pinnan muoto; parallelism: yhdensuuntaisuus; perpendicularity: kohtisuoruus; angularity: kaltevuus; concentricity: samankeskisyys; runout: heitto; datum: peruste; fit: sovite; deviation: poikkeama; leader: viiteviiva; characteristic (GD&T): toleranssityyppi |
-| comment | kommentti | open: avoin; addressed (by an agent): käsitelty; resolved: ratkaistu; resolution: ratkaisu; retarget: siirtää; pin: nasta |
-| bill of materials | osaluettelo | |
-| cut list | leikkuuluettelo | cut sheet: leikkuuarkki |
-| stock (cut list) | aihio | stock length: aihion pituus; offcut: hukkapala; kerf: sahausrako; running meters: juoksumetrit; grade (timber): lujuusluokka; finish: pintakäsittely; part number: osanumero |
-| opening (Build) | aukko | sill: alareuna; partition: väliseinä; rough opening: karkea aukko; top plate, bottom plate: yläjuoksu, alajuoksu |
-| material | materiaali | classes: Metal: metalli; Resin: hartsi; Wood: puu |
-| material properties | materiaaliominaisuudet | material dataset: materiaaliaineisto; Young's modulus: kimmokerroin; Poisson's ratio: Poissonin luku; yield strength: myötöraja; a material's variant: muunnelma |
-| built-in materials (their names) | sisäänrakennetut materiaalit | Steel: Teräs; Stainless Steel: Ruostumaton teräs; Cast Iron: Valurauta; Aluminum: Alumiini; Copper: Kupari; Brass: Messinki; Titanium: Titaani; ABS Plastic: ABS-muovi; PLA Plastic: PLA-muovi; Nylon: Nailon; Polycarbonate: Polykarbonaatti; Glass: Lasi; Water: Vesi; Resin - Standard: Hartsi - vakio; the base library's PA (Nylon): PA (nailon); ABS, ASA, PETG, PLA and TPU as they are; shown translated, stored in English (mitcad#1689) |
-| appearance | ulkoasu | |
-| texture | tekstuuri | base color: perusväri; roughness: karheus; opacity: peittävyys; emission: hehku |
-| property set | ominaisuusjoukko | property type: ominaisuustyyppi |
-| design policy | mallin käytäntö | violation: rikkomus; sketch attachment: luonnosten kiinnitys |
-| timeline | aikajana | |
-| Browser | Selain | the panel |
-| Preferences | Asetukset | |
-| command | komento | |
-| command panel | komentopaneeli | float the panel: irrota paneeli; dock it: telakoi paneeli |
-| AI assistant | tekoälyavustaja | AI Assistants (Preferences page): Tekoälyavustajat |
-| agent | agentti | custom agent: oma agentti; custom command: oma komento |
-| chat, conversation | keskustelu | New Conversation: Uusi keskustelu; chat history: keskusteluhistoria |
-| model (an AI's) | kielimalli | never malli, which is a design |
-| sign in | kirjautua | sign-in: kirjautuminen; signed in: kirjautunut |
-| API key | API-avain | |
-| configuration (an assistant's) | määritys | a design's configuration: konfiguraatio |
-| extension (an assistant's) | laajennus | |
-| listener | kuuntelija | MitCad's listener for assistants |
-| cache | välimuisti | memory cache: muistivälimuisti; disk cache: levyvälimuisti |
-| formula | kaava | Formula Editor: Kaavaeditori; formula template: kaavapohja (malli is a design) |
-| expression | lauseke | |
-| parent (component) | yläkomponentti | |
-| body transfer | kappalesiirto | |
-| hybrid assembly | hybridikokoonpano | |
-| snap | kohdistaa | snapped: kohdistettu |
-| preview | esikatselu | |
-| pick | poimia | |
-| select | valita | selection: valinta |
-| navigation | navigointi | pan: panorointi; orbit: kierto; zoom: zoomaus; left, middle, right drag: vasen veto, keskiveto, oikea veto; middle button: keskipainike; trackpad: ohjauslevy; snapshot: tilannekuva |
-| input bindings | näppäinmääritykset | navigation bindings: navigoinnin näppäinmääritykset; modifier keys: muokkausnäppäimet; a configuration's binding: sidonta |
-| typed (a value) | syötetty | a typed value: syötetty arvo; the verb stays: type the radius: kirjoita säde |
-| exit code, exit status | paluukoodi | |
-| web viewer (a project's) | verkkokatselin | Update Web Viewer: Päivitä verkkokatselin |
-| layer (DXF, DWG, 3D print) | kerros | never taso, which is a plane; layer height: kerroskorkeus |
-| view cube, orientation cube | suuntakuutio | its faces: ETU, TAKA, VASEN, OIKEA, YLÄ, ALA |
-| root component | pääkomponentti | the root's default name, Root: Juuri |
-| render environment | renderöintiympäristö | light: valo; point, spot, area light: pistevalo, kohdevalo, pintavalo; sun: aurinko; ground: maa; exposure: valotus; samples: näytteet; denoise: kohinanpoisto; scene: kohtaus; render worker: renderöintiprosessi |
-| motion study | liiketutkimus | key: avainkohta; step: askel |
-| update | päivitys | release: julkaisu; pre-release: esijulkaisu; release notes: julkaisutiedot; channel: kanava |
-| report (to the developers) | raportti | feedback: palaute; bug report: virheraportti; the report kinds Bug, Tweak, Feature: Virhe, Muutos, Uusi toiminto; issue form: ilmoituslomake; debug log: vianetsintäloki |
-| render | renderöidä | |
-| print (3D) | 3D-tulostus | slicer: viipaloija; print bed: tulostusalusta |
-| printer, process (3D print) | tulostin, prosessi | plate: alusta; print value: tulostusarvo; nozzle: suutin; filament: filamentti; purge volumes: huuhtelutilavuudet |
-| preset (a slicer's) | esiasetus | filament preset: filamenttiasetus; variant: muunnelma; built-in: sisäänrakennettu; My library: Oma kirjasto |
-| print (paper) | tulostaa | page: sivu; fit to page: sovita sivulle; portrait/landscape: pysty/vaaka |
-| tolerance | toleranssi | |
-| export | viedä | Export…: Vie…; import: tuoda |
-| stored bodies | tallennetut kappaleet | an imported file's; base feature: peruspiirre; replay: toistaa |
-| recover | palauttaa | autosave: automaattinen tallennus; discard: hylätä |
-| library | kirjasto | library component: kirjastokomponentti; supplier: toimittaja |
-| Start, Solid, Build, Make | Aloitus, Solidi, Rakenna, Valmistus | the tabs |
-| 3D Print, Laser, CNC | 3D-tulostus, Laser, CNC | the Make workspace's tabs; its groups Slice: Viipalointi, Printers: Tulostimet, Prepare: Valmistele, Setup: Kiinnitys, 2D Milling: 2D-jyrsintä, 3D Milling: 3D-jyrsintä, Turning: Sorvaus, Toolpath: Työstörata |
-| Create, Modify, Inspect, Insert, Select | Luo, Muokkaa, Tarkastele, Lisää, Valitse | the groups |
-| Auto | Auto | an input's automatic value: Auto (%1) |
-| Cancel | Peruuta | every Cancel button, Qt's own dialogs too (Qt's catalogue says Peru) |
-| member (Build) | rakenneosa | timber: puutavara; stud: pylväs; plate: juoksu; joist: palkki; rafter: kattokannattaja; header: ylityspalkki; trimmer: pielipylväs |
-| connector | liitin | junction: liitoskohta |
-| fastener | kiinnike | wood screw: puuruuvi; nail: naula; set screw: pidätysruuvi |
-| miter | jiiri | butt: puskuliitos |
-| frame (coordinates) | kehys | mount frame: kiinnityskehys |
-| joint motion | kierto, liuku | Turn Z: Kierto Z; Slide Z: Liuku Z; rest: lepoarvo |
-| driver, follower | käyttävä, seuraaja | |
-| Machine Elements | Koneenosat | the Create menu's group of gears, pulleys and bearings; plainer than koneenelimet (mitcad#1687) |
-| gear | hammaspyörä | module: moduuli; pressure angle: ryntökulma; mesh (gears): ryntö; backlash: hammasvälys; profile shift: profiilinsiirto |
-| pulley | hihnapyörä | belt: hihna; travel: liikevara |
-| bearing | laakeri | rolling element: vierintäelin |
-| bore, hub, keyway | akselireikä, napa, kiilaura | |
-| mortise and tenon | kolo ja tappi | the command: Tappiliitos |
-| equal spacing | tasajako | |
-| rail | kisko | guide rail: ohjauskisko |
-| section (loft) | poikkileikkaus | |
-| relief (sheet metal) | vapautusleikkaus | bend relief: taivutuksen vapautusleikkaus |
-| hem | reunataitos | |
-| K-factor | K-kerroin | |
-| stitch, unstitch | ompele, pura ompelu | |
-| patch | paikkaus | |
-| thicken | paksunna | |
-| boss, rib (plastic) | torni, ripa | |
-| Anaglyph 3D | Anaglyfi-3D | stereo depth: stereosyvyys; convergence: konvergenssi |
-| suppressed (a feature) | vaimennettu | |
-| pattern instance | kopio | not esiintymä, an occurrence |
-| helix, coil | kierukka | |
-| replay (an import's history) | toisto | translated (an imported item): muunnettu; not translated: ei muunneta; decoded: purettu |
-| counterbore, countersink, counterdrill | lieriöupotus, kartioupotus, porausupotus | |
-| heat-set insert | lämpöupotettava kierreholkki | its hole: holkin reikä |
-| nut pocket | mutteritasku | width across flats: avainväli |
-| print bridging (of a hole) | tulostussiltaus | bridged: siltattu |
-| stair run, riser, tread | syöksy, nousu, askelma | landing: tasanne |
-| prime tower (3D print) | esitäyttötorni | brim: reunus; skirt: helma; raft: lautta; ironing: silitys; retraction: takaisinveto |
-| key names | Shift, Ctrl, Alt, Enter | as on the keyboard, never translated (not Vaihto) |
-| navigation bar, toolbar | navigointipalkki, työkalurivi | Pin to Navigation Bar: Kiinnitä navigointipalkkiin; Unpin from Navigation Bar: Irrota navigointipalkista; Pin to Toolbar: Kiinnitä työkaluriville |
-| node, twist (a flexible item laid through the model) | solmu, kierto | Delete Node: Poista solmu; Set Twist: Aseta kierto; Reset Twist: Nollaa kierto; tightest bend: jyrkin taivutus; to route: reitittää; an end (of a pipe or an item): pää |
-| gravity, let hang, keep shape (a hanging cable) | painovoima, anna roikkua, pidä muoto | Let It Hang: Anna roikkua (its panel's Gravity: Painovoima; Direction From: Suunta kohteesta; Clear Gravity: Poista painovoima; Damping: Vaimennus; Ends: Päät; Start pinned: Alku kiinnitetty; End pinned: Loppu kiinnitetty); keep the shape: pidä muoto; pinned: kiinnitetty (pin: kiinnitä); let go (a node): vapauta; hangs free: roikkuu vapaana; settle, rest: asettua, levossa; pulled tight: kireällä; fixed length: kiinteä pituus; slack: löysä |
-| setup (CAM) | kiinnitys | New Setup: Uusi kiinnitys; never asetus, which is a setting |
-| operation (CAM) | työstövaihe | Facing: Tasaus; Contour: Ääriviiva; Pocket: Tasku; Drill: Poraus; Adaptive Clearing: Mukautuva rouhinta; Rest Machining: Jäännöstyöstö; contour (the operation) in a sentence: ääriviivatyöstö |
-| toolpath | työstörata | Generate: Laske; Simulate: Simuloi; Post Process…: Jälkikäsittele…; the program: ohjelma |
-| stock (CAM) | aihio | stock body: aihiokappale; margin: vara; stock to leave: jätettävä työvara |
-| work zero, work offset | nollapiste, työkoordinaatisto | probe the work zero: mittaa nollapiste anturilla; G54–G59 as they are |
-| machine (CNC) | kone | controller: ohjain; travel: liikealue; tool changer: työkalunvaihtaja; router: jyrsinkone; rapid: pikaliike; machine library: konekirjasto |
-| tool (CAM) | työkalu | flat end mill: varsijyrsin; ball end mill: pallopääjyrsin; bull nose end mill: nurkkapyöristetty varsijyrsin; drill: pora; chamfer mill: viistejyrsin; engraving cutter: kaiverrusterä; cutter: terä; tool library: työkalukirjasto |
-| flute length | leikkuupituus | flutes: terät; stick-out: ulkonema; corner radius: nurkkasäde; point angle: kärkikulma; shank: varsi; holder: pidin; collet: kiristysholkki; collet nut: kiristysmutteri |
-| spindle | kara | spindle speed: karan nopeus; coolant: jäähdytys; flood: tulvajäähdytys; mist: sumu; air blast: ilmapuhallus |
-| feed | syöttö | plunge feed: pistosyöttö; feeds and speeds: syötöt ja nopeudet; climb, conventional: myötäjyrsintä, vastajyrsintä |
-| heights, depths (CAM) | korkeudet, syvyydet | clearance height: siirtokorkeus; retract height: vetäytymiskorkeus; safe height: turvakorkeus; step down: askelsyvyys; stepover: sivuaskel |
-| entry (CAM) | sisääntulo | plunge: pisto; ramp: ramppi; helix: heliksi (a helix curve is kierukka); lead in and out: sisään- ja ulosajokaaret; engagement: kosketuskulma |
-| holding tab | pidike | peck drilling: askelporaus; canned cycle: ohjaimen porauskierto |
-| acknowledge (a warning) | kuitata | Acknowledge Warning: Kuittaa varoitus; Acknowledge All Warnings: Kuittaa kaikki varoitukset; acknowledged: kuitattu; Show Again: Näytä uudelleen (mitcad#1935) |
-| toolbar labels | työkalurivin tekstit | Icons only: Vain kuvakkeet; Labels under icons: Tekstit kuvakkeiden alla; the buttons' short labels (the context `RibbonLabel`): Sketch: Luonnos; Section: Leikkaus |
-| Fill Hole, Bridge (Form) | Täytä aukko, Silta | an opening of the cage: aukko; quads: nelikulmiot; segments: segmentit; whole openings: kokonaiset aukot (mitcad#1941) |
-| shared miter | yhteinen jiiri | Miter Shared (the choice): jiirin valinta Jaettu; the component an end meets: kohdattava komponentti; Meets end %1 of %2: Kohtaa kohteen %2 pään %1; Leans: Kallistus (mitcad#1940) |
-| rip (sheet metal) | repäisy (repäistä) | Rip Edges: Repäisysärmät; Bend Edges: Taivutussärmät; corner gap: nurkan rako; Convert to Sheet Metal: Muunna ohutlevyksi (mitcad#1949) |
-| layout (toolbars and menus) | asettelu | default layout: oletusasettelu; Restore Default Layout: Palauta oletusasettelu; Move to Group: Siirrä ryhmään; Also Show in Group: Näytä myös ryhmässä (mitcad#1951) |
-| along sketch lines (Build) | luonnoksen viivoja pitkin | Chain: Ketju; Place along sketch lines: Sijoita luonnoksen viivoja pitkin; edge frame: särmäkehys; left square: jätetään suoriksi (mitcad#1965) |
-| second direction (sketch pattern) | toinen suunta | Direction 2: Suunta 2; At Right Angles: Kohtisuoraan; As Stored: Tallennettu (mitcad#1969) |
-| Manage (the tab), other new tabs and groups | Hallinta | Parameters: Parametrit; Configurations: Konfiguraatiot; Rules: Säännöt; Design: Malli; Curves: Käyrät; Joinery: Puuliitokset; Project / Include: Projisoi / sisällytä; Customize Toolbar…: Mukauta työkaluriviä…; Reset Toolbar: Palauta työkalurivi; Recompute All: Laske kaikki uudelleen (mitcad#1975) |
-| sheet process | levyprosessi | Metal: Metalli; Board: Kartonki (cardboard, corrugated board, fluted plastic sheet: kartonki, aaltopahvi, kennomuovilevy; folding carton: taivekartonki; corrugated polypropylene: PP-kennolevy); Laser Sheet: Laserlevy; plate (laser-cut): levy |
-| bend allowance, bend deduction | taivutuslisä, taivutusvähennys | Allowance (how the flat length is worked out): Levityslaskenta; per 90°: 90°:lle |
-| crease (board) | nuutti | to crease: nuutata; creasing, crease line: nuuttaus, nuuttausviiva; Crease Table: Nuuttaustaulukko; Crease Deduction: Nuutin vähennys; flute (corrugated board): aalto, aaltotyyppi; along/across the flutes: aaltojen suuntaisesti/poikki; blank: aihio |
-| kerf (laser) | leikkausrako | kerf bend (living hinge): viiltotaivutus (elävä sarana); slit: viilto; Slit Lattice: Viiltokuvio; Row Pitch: Rivijako |
-| finger joint | sormiliitos | finger: sormi; End Margin: Päätyvara; T-nut slot: T-mutteriura; Mating Plate: Vastinlevy; Flat Pack: Tasopakkaus |
-| glue flap | liimaläppä | Taper: Kavennus; End Inset: Päädyn sisennys; Standard Box: Vakiolaatikko |
-| die line | stanssikuva | Export Die Line…: Vie stanssikuva…; cut and crease lines: leikkaus- ja nuuttausviivat; engrave: kaiverrus; score: urotus; nest (parts on a sheet): sijoitella |
-| block (sketch) | lohko | block instance: lohkon ilmentymä (not esiintymä, an occurrence; not kopio, a pattern instance); base point: peruspiste; Create Block: Luo lohko; Insert Block: Lisää lohko; Explode Block: Pura lohko; Edit Block: Muokkaa lohkoa; Finish Block: Lopeta lohko; Cancel Block: Peruuta lohko; Sketch Blocks: Luonnoslohkot |
-| Break, Split at Point, Blend Curve (sketch) | Pilko, Jaa pisteessä, Liitoskäyrä | Trim stays Katkaise; break (the drawing view's) stays katkaisu |
-| Extend to Meet (sketch) | Jatka kohtaamaan | Extend stays Jatka; not Liitä, which is the body Join (mitcad#2178) |
-| Sheet Parts (the tab) | Levyosat | the tab of sheet metal, board and laser-cut sheet (mitcad#2602, the Sheet Metal tab before); sheet metal itself stays ohutlevy, Convert to Sheet Metal stays Muunna ohutlevyksi |
+Polish style: commands, buttons and tips are in the imperative singular
+("Kliknij", "Zaznacz"), and a "Click … to …" text is "Kliknij …, aby …".
+Only the first word of a command or title takes a capital ("Utwórz
+szkic"). Quotation marks are „…”. A count inserted with `%1` rather than
+`%n` stands after a colon or in brackets ("krawędzie: %1"), so that the
+noun never needs a case for the number. A message with `%n` has three
+forms (1, 2–4, 5 and more: "%n ściana", "%n ściany", "%n ścian").
+
+| English | Finnish (fi) | Polish (pl) | Note |
+|---|---|---|---|
+| design | malli | model | the document; a new design: uusi malli |
+| project | projekti | projekt | |
+| Cloud project, Local project | pilviprojekti, paikallinen projekti | projekt w chmurze, projekt lokalny | |
+| version | versio | wersja | record a version: kirjata versio; Version History: Versiohistoria |
+| repository | repositorio | repozytorium | remote: etärepositorio |
+| sync | synkronoida | synchronizować | Sync: Synkronoi; a sync: synkronointi |
+| edit lock | muokkauslukko | blokada edycji | read-only: vain luku |
+| live updates | reaaliaikapäivitykset | aktualizacje na żywo | broker: välityspalvelin |
+| component | komponentti | komponent | |
+| occurrence | esiintymä | wystąpienie | |
+| body | kappale | bryła | solid body: solidi; surface body: pintakappale; mesh body: verkkokappale |
+| mesh | verkko | siatka | never verkkomalli (malli is a design); Convert Mesh: Muunna verkko; Save as Mesh: Tallenna verkkona |
+| feature | piirre | operacja | |
+| sketch | luonnos | szkic | Create Sketch: Luo luonnos; Finish Sketch: Lopeta luonnos |
+| through the bodies (drawn) | kappaleiden läpi | przez bryły | Sketches Through Bodies: Luonnokset kappaleiden läpi; Selection Through Bodies: Valinta kappaleiden läpi; Show All Sketches, Hide All Sketches: Näytä kaikki luonnokset, Piilota kaikki luonnokset |
+| 3D sketch | 3D-luonnos | szkic 3D | Create 3D Sketch: Luo 3D-luonnos; Convert to 3D Sketch: Muunna 3D-luonnokseksi; 3D Sketch Palette: 3D-luonnospaletti; route (a 3D sketch's path): reitti |
+| text (sketch) | teksti | tekst | anchor (a text's): ankkuri; Position X, Y: Sijainti X, Y; a text on a path: polulla oleva teksti; QR code: QR-koodi |
+| Flex (the tool and what it lays) | Flex | Flex | the item: taipuisa osa (osa after the first mention); node: solmu; end of a pipe: putken pää; twist: kierto; bend radius on edge: taivutussäde syrjän yli; flat side: lape; hose: letku; wire: johdin; strip: nauha |
+| relation (3D sketch) | suhde | relacja | a 3D sketch's constraint; Relations: Suhteet; In plane: Tasossa; in-plane relation, Fix, dimension: tasosuhde, tasokiinnitys, tasomitta; Align X: Suuntaa X; Keep Axis, Keep Plane: Pidä akselilla, Pidä tasossa |
+| On Sketch Plane | Luonnostasolla | Na płaszczyźnie szkicu | the relation; Release from Plane: Vapauta tasosta; Release Plane: Vapauta taso |
+| attach, detach (3D sketch) | linkittää, irrottaa | dołączyć, odłączyć | Attach: Linkitä; Detach: Irrota; linked reference: linkitetty viittaus; source: lähde; Replace Reference: Korvaa viittaus; reference curve: viitekäyrä; On Face (a point on a face): Tahkolla |
+| handle (3D sketch) | kahva | uchwyt | tangent handle: tangenttikahva; anchor: ankkuri; Pick Normal: Poimi normaali; seen edge-on: näkyy syrjittäin |
+| wall (grown from sketch curves) | seinämä | ścianka (budynku: ściana) | thin walls, ribs, webs; sketch plane: luonnostaso; Thin Extrude: Ohut pursotus |
+| profile | profiili | profil | |
+| curve | käyrä | krzywa | |
+| line | viiva | linia | |
+| arc | kaari | łuk | |
+| circle | ympyrä | okrąg | |
+| rectangle | suorakulmio | prostokąt | |
+| slot | ura | rowek | |
+| spline | splini | splajn | |
+| point | piste | punkt | |
+| vertex | kärkipiste | wierzchołek | |
+| edge | särmä | krawędź | |
+| face | tahko | ściana | a body's face |
+| surface | pinta | powierzchnia | the surface of a face; Surface group: Pinta |
+| plane | taso | płaszczyzna | construction plane: aputaso |
+| axis | akseli | oś | construction axis: apuakseli |
+| construction geometry | apugeometria | geometria konstrukcyjna | Construct group: Apugeometria |
+| constraint | rajoite | wiązanie | |
+| dimension | mitta | wymiar | Sketch Dimension: Luonnosmitta |
+| parameter | parametri | parametr | user parameter: käyttäjäparametri |
+| configuration | konfiguraatio | konfiguracja | option: vaihtoehto; row: rivi; rule: sääntö; binding: sidonta (a configuration's only; input bindings are näppäinmääritykset) |
+| table | taulukko | tabela | key column: avainsarake; parameter column: parametrisarake |
+| extrude | pursotus (pursottaa) | wyciągnięcie | |
+| revolve | pyöräytys (pyöräyttää) | obrót | |
+| sweep | pyyhkäisy | przeciągnięcie | |
+| loft | siirtymäpiirre | wyciągnięcie złożone | |
+| fillet | pyöristys (pyöristää) | zaokrąglenie | |
+| chamfer | viiste (viistää) | faza, fazowanie | |
+| shell | kuorinta | skorupa | |
+| draft | päästö | pochylenie | taper angle: päästökulma |
+| hole | reikä | otwór | clearance hole: välysreikä; tapped: kierteitetty; press fit: puristussovite |
+| thread | kierre | gwint | |
+| pattern | kuvio | szyk | rectangular: suorakulmainen kuvio; circular: ympyräkuvio |
+| mirror | peilaus | lustro | |
+| offset | siirtymä | odsunięcie | Offset Face: Siirrä tahkoa |
+| split | jako (jakaa) | podział | |
+| combine | yhdistä | połącz | join: liitä; cut: leikkaa |
+| assembly | kokoonpano | złożenie | Assemble group: Kokoonpano |
+| joint | liitos | połączenie | |
+| ground, unground (an occurrence) | kiinnittää, vapauttaa kiinnitys | unieruchomić, zwolnić | Ground: Kiinnitä; Unground: Vapauta kiinnitys; grounded: kiinnitetty; never maadoittaa (electrical earthing); the render environment's ground: maa |
+| flexible (an occurrence, a subassembly) | joustava | elastyczny | Flexible: Joustava; its own joints move in its parent; rigid there: jäykkä |
+| sheet metal | ohutlevy | blacha | flat pattern: levitys; bend: taivutus |
+| drawing | piirustus | rysunek | |
+| view (a drawing's) | kuvanto | widok | base view: peruskuvanto; Flat Pattern View: levityskuvanto (mitcad#2446); projected: projektiokuvanto; section: leikkauskuvanto; detail: detaljikuvanto; break: katkaisu; parent view: emokuvanto; the 3D view: näkymä |
+| orientation cube | suuntakuutio | kostka orientacji | its faces, in capitals: ETU, TAKA, VASEN, OIKEA, YLÄ, ALA (FRONT, BACK, LEFT, RIGHT, TOP, BOTTOM) |
+| standard view | näkymä + direction | Widok z przodu, z tyłu, z lewej, z prawej, z góry, z dołu | Front View: Näkymä edestä; Back View: Näkymä takaa; Left View, Right View: Näkymä vasemmalta, Näkymä oikealta; Top View, Bottom View: Näkymä ylhäältä, Näkymä alhaalta; Isometric View: Isometrinen näkymä; each a whole text, never a name put into "%1 View" (mitcad#1687) |
+| sheet (a drawing's) | arkki | arkusz | template: pohja; title block: nimiö; scale: mittakaava; first/third angle: ensimmäinen/kolmas kulma |
+| drawing symbols | symbolit | symbole | balloon: osanumero; center mark: keskiömerkki; centerline: keskiviiva; datum label: perustemerkki; feature control frame: toleranssikehys; surface finish: pinnanlaatu; hatching: viivoitus; hole table: reikätaulukko |
+| drawing dimensions | mitoitus | wymiarowanie | ordinate: koordinaattimitoitus; baseline: rinnakkaismitoitus; chain: ketjumitoitus; aligned: suuntainen |
+| annotation | merkintä | adnotacja | |
+| note | huomautus | notatka | |
+| geometric tolerance | geometrinen toleranssi | tolerancja geometryczna | straightness: suoruus; flatness: tasomaisuus; circularity: ympyrämäisyys; cylindricity: lieriömäisyys; profile of a line, of a surface: viivan muoto, pinnan muoto; parallelism: yhdensuuntaisuus; perpendicularity: kohtisuoruus; angularity: kaltevuus; concentricity: samankeskisyys; runout: heitto; datum: peruste; fit: sovite; deviation: poikkeama; leader: viiteviiva; characteristic (GD&T): toleranssityyppi |
+| comment | kommentti | komentarz | open: avoin; addressed (by an agent): käsitelty; resolved: ratkaistu; resolution: ratkaisu; retarget: siirtää; pin: nasta |
+| bill of materials | osaluettelo | zestawienie materiałów | |
+| cut list | leikkuuluettelo | lista cięć | cut sheet: leikkuuarkki |
+| stock (cut list) | aihio | półfabrykat | stock length: aihion pituus; offcut: hukkapala; kerf: sahausrako; running meters: juoksumetrit; grade (timber): lujuusluokka; finish: pintakäsittely; part number: osanumero |
+| opening (Build) | aukko | otwór | sill: alareuna; partition: väliseinä; rough opening: karkea aukko; top plate, bottom plate: yläjuoksu, alajuoksu |
+| material | materiaali | materiał | classes: Metal: metalli; Resin: hartsi; Wood: puu |
+| material properties | materiaaliominaisuudet | właściwości materiału | material dataset: materiaaliaineisto; Young's modulus: kimmokerroin; Poisson's ratio: Poissonin luku; yield strength: myötöraja; a material's variant: muunnelma |
+| built-in materials (their names) | sisäänrakennetut materiaalit | wbudowane materiały | Steel: Teräs; Stainless Steel: Ruostumaton teräs; Cast Iron: Valurauta; Aluminum: Alumiini; Copper: Kupari; Brass: Messinki; Titanium: Titaani; ABS Plastic: ABS-muovi; PLA Plastic: PLA-muovi; Nylon: Nailon; Polycarbonate: Polykarbonaatti; Glass: Lasi; Water: Vesi; Resin - Standard: Hartsi - vakio; the base library's PA (Nylon): PA (nailon); ABS, ASA, PETG, PLA and TPU as they are; shown translated, stored in English (mitcad#1689) |
+| appearance | ulkoasu | wygląd | |
+| texture | tekstuuri | tekstura | base color: perusväri; roughness: karheus; opacity: peittävyys; emission: hehku |
+| property set | ominaisuusjoukko | zestaw właściwości | property type: ominaisuustyyppi |
+| design policy | mallin käytäntö | zasady modelu | violation: rikkomus; sketch attachment: luonnosten kiinnitys |
+| timeline | aikajana | oś czasu | |
+| Browser | Selain | Przeglądarka | the panel |
+| Preferences | Asetukset | Preferencje | |
+| command | komento | polecenie | |
+| command panel | komentopaneeli | panel polecenia | float the panel: irrota paneeli; dock it: telakoi paneeli |
+| AI assistant | tekoälyavustaja | asystent AI | AI Assistants (Preferences page): Tekoälyavustajat |
+| agent | agentti | agent | custom agent: oma agentti; custom command: oma komento |
+| chat, conversation | keskustelu | rozmowa | New Conversation: Uusi keskustelu; chat history: keskusteluhistoria |
+| model (an AI's) | kielimalli | model językowy | never malli, which is a design |
+| sign in | kirjautua | zalogować się | sign-in: kirjautuminen; signed in: kirjautunut |
+| API key | API-avain | klucz API | |
+| configuration (an assistant's) | määritys | ustawienia | a design's configuration: konfiguraatio |
+| extension (an assistant's) | laajennus | rozszerzenie | |
+| listener | kuuntelija | usługa nasłuchująca | MitCad's listener for assistants |
+| cache | välimuisti | pamięć podręczna | memory cache: muistivälimuisti; disk cache: levyvälimuisti |
+| formula | kaava | formuła | Formula Editor: Kaavaeditori; formula template: kaavapohja (malli is a design) |
+| expression | lauseke | wyrażenie | |
+| parent (component) | yläkomponentti | komponent nadrzędny | |
+| body transfer | kappalesiirto | przeniesienie brył | |
+| hybrid assembly | hybridikokoonpano | złożenie hybrydowe | |
+| snap | kohdistaa | przyciągać | snapped: kohdistettu |
+| preview | esikatselu | podgląd | |
+| pick | poimia | wskazać | |
+| select | valita | zaznaczyć | selection: valinta |
+| navigation | navigointi | nawigacja | pan: panorointi; orbit: kierto; zoom: zoomaus; left, middle, right drag: vasen veto, keskiveto, oikea veto; middle button: keskipainike; trackpad: ohjauslevy; snapshot: tilannekuva |
+| input bindings | näppäinmääritykset | przypisania klawiszy | navigation bindings: navigoinnin näppäinmääritykset; modifier keys: muokkausnäppäimet; a configuration's binding: sidonta |
+| typed (a value) | syötetty | wpisany | a typed value: syötetty arvo; the verb stays: type the radius: kirjoita säde |
+| exit code, exit status | paluukoodi | kod wyjścia | |
+| web viewer (a project's) | verkkokatselin | podgląd WWW | Update Web Viewer: Päivitä verkkokatselin |
+| layer (DXF, DWG, 3D print) | kerros | warstwa | never taso, which is a plane; layer height: kerroskorkeus |
+| view cube, orientation cube | suuntakuutio | kostka orientacji | its faces: ETU, TAKA, VASEN, OIKEA, YLÄ, ALA |
+| root component | pääkomponentti | komponent główny | the root's default name, Root: Juuri |
+| render environment | renderöintiympäristö | środowisko renderowania | light: valo; point, spot, area light: pistevalo, kohdevalo, pintavalo; sun: aurinko; ground: maa; exposure: valotus; samples: näytteet; denoise: kohinanpoisto; scene: kohtaus; render worker: renderöintiprosessi |
+| motion study | liiketutkimus | badanie ruchu | key: avainkohta; step: askel |
+| update | päivitys | aktualizacja | release: julkaisu; pre-release: esijulkaisu; release notes: julkaisutiedot; channel: kanava |
+| report (to the developers) | raportti | raport | feedback: palaute; bug report: virheraportti; the report kinds Bug, Tweak, Feature: Virhe, Muutos, Uusi toiminto; issue form: ilmoituslomake; debug log: vianetsintäloki |
+| render | renderöidä | renderować | |
+| print (3D) | 3D-tulostus | druk 3D | slicer: viipaloija; print bed: tulostusalusta |
+| printer, process (3D print) | tulostin, prosessi | drukarka, proces | plate: alusta; print value: tulostusarvo; nozzle: suutin; filament: filamentti; purge volumes: huuhtelutilavuudet |
+| preset (a slicer's) | esiasetus | ustawienie wstępne | filament preset: filamenttiasetus; variant: muunnelma; built-in: sisäänrakennettu; My library: Oma kirjasto |
+| print (paper) | tulostaa | drukować | page: sivu; fit to page: sovita sivulle; portrait/landscape: pysty/vaaka |
+| tolerance | toleranssi | tolerancja | |
+| export | viedä | eksportować | Export…: Vie…; import: tuoda |
+| stored bodies | tallennetut kappaleet | zapisane bryły | an imported file's; base feature: peruspiirre; replay: toistaa |
+| recover | palauttaa | odzyskać | autosave: automaattinen tallennus; discard: hylätä |
+| library | kirjasto | biblioteka | library component: kirjastokomponentti; supplier: toimittaja |
+| Start, Solid, Build, Make | Aloitus, Solidi, Rakenna, Valmistus | Start, Bryła, Budowa, Wytwarzanie | the tabs |
+| 3D Print, Laser, CNC | 3D-tulostus, Laser, CNC | Druk 3D, Laser, CNC | the Make workspace's tabs; its groups Slice: Viipalointi, Printers: Tulostimet, Prepare: Valmistele, Setup: Kiinnitys, 2D Milling: 2D-jyrsintä, 3D Milling: 3D-jyrsintä, Turning: Sorvaus, Toolpath: Työstörata |
+| Create, Modify, Inspect, Insert, Select | Luo, Muokkaa, Tarkastele, Lisää, Valitse | Utwórz, Modyfikuj, Sprawdź, Wstaw, Zaznacz | the groups |
+| Auto | Auto | Auto | an input's automatic value: Auto (%1) |
+| Cancel | Peruuta | Anuluj | every Cancel button, Qt's own dialogs too (Qt's catalogue says Peru) |
+| member (Build) | rakenneosa | element konstrukcyjny | timber: puutavara; stud: pylväs; plate: juoksu; joist: palkki; rafter: kattokannattaja; header: ylityspalkki; trimmer: pielipylväs |
+| connector | liitin | łącznik | junction: liitoskohta |
+| fastener | kiinnike | łącznik | wood screw: puuruuvi; nail: naula; set screw: pidätysruuvi |
+| miter | jiiri | ucios | butt: puskuliitos |
+| frame (coordinates) | kehys | układ | mount frame: kiinnityskehys |
+| joint motion | kierto, liuku | obrót, przesuw | Turn Z: Kierto Z; Slide Z: Liuku Z; rest: lepoarvo |
+| driver, follower | käyttävä, seuraaja | napędzające, napędzane | |
+| Machine Elements | Koneenosat | Elementy maszyn | the Create menu's group of gears, pulleys and bearings; plainer than koneenelimet (mitcad#1687) |
+| gear | hammaspyörä | koło zębate | module: moduuli; pressure angle: ryntökulma; mesh (gears): ryntö; backlash: hammasvälys; profile shift: profiilinsiirto |
+| pulley | hihnapyörä | koło pasowe | belt: hihna; travel: liikevara |
+| bearing | laakeri | łożysko | rolling element: vierintäelin |
+| bore, hub, keyway | akselireikä, napa, kiilaura | otwór, piasta, rowek wpustowy | |
+| mortise and tenon | kolo ja tappi | czop i gniazdo | the command: Tappiliitos |
+| equal spacing | tasajako | równy odstęp | |
+| rail | kisko | prowadnica | guide rail: ohjauskisko |
+| section (loft) | poikkileikkaus | przekrój | |
+| relief (sheet metal) | vapautusleikkaus | podcięcie | bend relief: taivutuksen vapautusleikkaus |
+| hem | reunataitos | zawinięcie | |
+| K-factor | K-kerroin | współczynnik K | |
+| stitch, unstitch | ompele, pura ompelu | zszyj, rozszyj | |
+| patch | paikkaus | łata | |
+| thicken | paksunna | pogrubienie | |
+| boss, rib (plastic) | torni, ripa | występ, żebro | |
+| Anaglyph 3D | Anaglyfi-3D | anaglif 3D | stereo depth: stereosyvyys; convergence: konvergenssi |
+| suppressed (a feature) | vaimennettu | wygaszony | |
+| pattern instance | kopio | kopia | not esiintymä, an occurrence |
+| helix, coil | kierukka | helisa, zwój | |
+| replay (an import's history) | toisto | odtworzenie | translated (an imported item): muunnettu; not translated: ei muunneta; decoded: purettu |
+| counterbore, countersink, counterdrill | lieriöupotus, kartioupotus, porausupotus | pogłębienie walcowe, pogłębienie stożkowe, wiercenie stopniowe | |
+| heat-set insert | lämpöupotettava kierreholkki | wkładka wtapiana | its hole: holkin reikä |
+| nut pocket | mutteritasku | gniazdo na nakrętkę | width across flats: avainväli |
+| print bridging (of a hole) | tulostussiltaus | mostkowanie | bridged: siltattu |
+| stair run, riser, tread | syöksy, nousu, askelma | bieg, podstopnica, stopnica | landing: tasanne |
+| prime tower (3D print) | esitäyttötorni | wieża czyszcząca | brim: reunus; skirt: helma; raft: lautta; ironing: silitys; retraction: takaisinveto |
+| key names | Shift, Ctrl, Alt, Enter | Shift, Ctrl, Alt, Enter | as on the keyboard, never translated (not Vaihto) |
+| navigation bar, toolbar | navigointipalkki, työkalurivi | pasek nawigacji, pasek narzędzi | Pin to Navigation Bar: Kiinnitä navigointipalkkiin; Unpin from Navigation Bar: Irrota navigointipalkista; Pin to Toolbar: Kiinnitä työkaluriville |
+| node, twist (a flexible item laid through the model) | solmu, kierto | węzeł, skręcenie | Delete Node: Poista solmu; Set Twist: Aseta kierto; Reset Twist: Nollaa kierto; tightest bend: jyrkin taivutus; to route: reitittää; an end (of a pipe or an item): pää |
+| gravity, let hang, keep shape (a hanging cable) | painovoima, anna roikkua, pidä muoto | grawitacja, swobodny zwis, zachowaj kształt | Let It Hang: Anna roikkua (its panel's Gravity: Painovoima; Direction From: Suunta kohteesta; Clear Gravity: Poista painovoima; Damping: Vaimennus; Ends: Päät; Start pinned: Alku kiinnitetty; End pinned: Loppu kiinnitetty); keep the shape: pidä muoto; pinned: kiinnitetty (pin: kiinnitä); let go (a node): vapauta; hangs free: roikkuu vapaana; settle, rest: asettua, levossa; pulled tight: kireällä; fixed length: kiinteä pituus; slack: löysä |
+| setup (CAM) | kiinnitys | zamocowanie | New Setup: Uusi kiinnitys; never asetus, which is a setting |
+| operation (CAM) | työstövaihe | zabieg | Facing: Tasaus; Contour: Ääriviiva; Pocket: Tasku; Drill: Poraus; Adaptive Clearing: Mukautuva rouhinta; Rest Machining: Jäännöstyöstö; contour (the operation) in a sentence: ääriviivatyöstö |
+| toolpath | työstörata | ścieżka narzędzia | Generate: Laske; Simulate: Simuloi; Post Process…: Jälkikäsittele…; the program: ohjelma |
+| stock (CAM) | aihio | półfabrykat | stock body: aihiokappale; margin: vara; stock to leave: jätettävä työvara |
+| work zero, work offset | nollapiste, työkoordinaatisto | punkt zerowy przedmiotu, układ przedmiotu | probe the work zero: mittaa nollapiste anturilla; G54–G59 as they are |
+| machine (CNC) | kone | maszyna | controller: ohjain; travel: liikealue; tool changer: työkalunvaihtaja; router: jyrsinkone; rapid: pikaliike; machine library: konekirjasto |
+| tool (CAM) | työkalu | narzędzie | flat end mill: varsijyrsin; ball end mill: pallopääjyrsin; bull nose end mill: nurkkapyöristetty varsijyrsin; drill: pora; chamfer mill: viistejyrsin; engraving cutter: kaiverrusterä; cutter: terä; tool library: työkalukirjasto |
+| flute length | leikkuupituus | długość ostrzy | flutes: terät; stick-out: ulkonema; corner radius: nurkkasäde; point angle: kärkikulma; shank: varsi; holder: pidin; collet: kiristysholkki; collet nut: kiristysmutteri |
+| spindle | kara | wrzeciono | spindle speed: karan nopeus; coolant: jäähdytys; flood: tulvajäähdytys; mist: sumu; air blast: ilmapuhallus |
+| feed | syöttö | posuw | plunge feed: pistosyöttö; feeds and speeds: syötöt ja nopeudet; climb, conventional: myötäjyrsintä, vastajyrsintä |
+| heights, depths (CAM) | korkeudet, syvyydet | wysokości, głębokości | clearance height: siirtokorkeus; retract height: vetäytymiskorkeus; safe height: turvakorkeus; step down: askelsyvyys; stepover: sivuaskel |
+| entry (CAM) | sisääntulo | wejście | plunge: pisto; ramp: ramppi; helix: heliksi (a helix curve is kierukka); lead in and out: sisään- ja ulosajokaaret; engagement: kosketuskulma |
+| holding tab | pidike | mostek mocujący | peck drilling: askelporaus; canned cycle: ohjaimen porauskierto |
+| acknowledge (a warning) | kuitata | potwierdzić | Acknowledge Warning: Kuittaa varoitus; Acknowledge All Warnings: Kuittaa kaikki varoitukset; acknowledged: kuitattu; Show Again: Näytä uudelleen (mitcad#1935) |
+| toolbar labels | työkalurivin tekstit | etykiety paska narzędzi | Icons only: Vain kuvakkeet; Labels under icons: Tekstit kuvakkeiden alla; the buttons' short labels (the context `RibbonLabel`): Sketch: Luonnos; Section: Leikkaus |
+| Fill Hole, Bridge (Form) | Täytä aukko, Silta | Wypełnij otwór, Mostek | an opening of the cage: aukko; quads: nelikulmiot; segments: segmentit; whole openings: kokonaiset aukot (mitcad#1941) |
+| shared miter | yhteinen jiiri | wspólny ucios | Miter Shared (the choice): jiirin valinta Jaettu; the component an end meets: kohdattava komponentti; Meets end %1 of %2: Kohtaa kohteen %2 pään %1; Leans: Kallistus (mitcad#1940) |
+| rip (sheet metal) | repäisy (repäistä) | rozcięcie | Rip Edges: Repäisysärmät; Bend Edges: Taivutussärmät; corner gap: nurkan rako; Convert to Sheet Metal: Muunna ohutlevyksi (mitcad#1949) |
+| layout (toolbars and menus) | asettelu | układ | default layout: oletusasettelu; Restore Default Layout: Palauta oletusasettelu; Move to Group: Siirrä ryhmään; Also Show in Group: Näytä myös ryhmässä (mitcad#1951) |
+| along sketch lines (Build) | luonnoksen viivoja pitkin | wzdłuż linii szkicu | Chain: Ketju; Place along sketch lines: Sijoita luonnoksen viivoja pitkin; edge frame: särmäkehys; left square: jätetään suoriksi (mitcad#1965) |
+| second direction (sketch pattern) | toinen suunta | drugi kierunek | Direction 2: Suunta 2; At Right Angles: Kohtisuoraan; As Stored: Tallennettu (mitcad#1969) |
+| Manage (the tab), other new tabs and groups | Hallinta | Zarządzaj | Parameters: Parametrit; Configurations: Konfiguraatiot; Rules: Säännöt; Design: Malli; Curves: Käyrät; Joinery: Puuliitokset; Project / Include: Projisoi / sisällytä; Customize Toolbar…: Mukauta työkaluriviä…; Reset Toolbar: Palauta työkalurivi; Recompute All: Laske kaikki uudelleen (mitcad#1975) |
+| sheet process | levyprosessi | proces arkuszowy | Metal: Metalli; Board: Kartonki (cardboard, corrugated board, fluted plastic sheet: kartonki, aaltopahvi, kennomuovilevy; folding carton: taivekartonki; corrugated polypropylene: PP-kennolevy); Laser Sheet: Laserlevy; plate (laser-cut): levy |
+| bend allowance, bend deduction | taivutuslisä, taivutusvähennys | naddatek na gięcie, odliczenie na gięcie | Allowance (how the flat length is worked out): Levityslaskenta; per 90°: 90°:lle |
+| crease (board) | nuutti | big (bigowanie) | to crease: nuutata; creasing, crease line: nuuttaus, nuuttausviiva; Crease Table: Nuuttaustaulukko; Crease Deduction: Nuutin vähennys; flute (corrugated board): aalto, aaltotyyppi; along/across the flutes: aaltojen suuntaisesti/poikki; blank: aihio |
+| kerf (laser) | leikkausrako | rzaz | kerf bend (living hinge): viiltotaivutus (elävä sarana); slit: viilto; Slit Lattice: Viiltokuvio; Row Pitch: Rivijako |
+| finger joint | sormiliitos | połączenie wczepowe | finger: sormi; End Margin: Päätyvara; T-nut slot: T-mutteriura; Mating Plate: Vastinlevy; Flat Pack: Tasopakkaus |
+| glue flap | liimaläppä | zakładka do klejenia | Taper: Kavennus; End Inset: Päädyn sisennys; Standard Box: Vakiolaatikko |
+| die line | stanssikuva | linia wykrojnika | Export Die Line…: Vie stanssikuva…; cut and crease lines: leikkaus- ja nuuttausviivat; engrave: kaiverrus; score: urotus; nest (parts on a sheet): sijoitella |
+| block (sketch) | lohko | blok | block instance: lohkon ilmentymä (not esiintymä, an occurrence; not kopio, a pattern instance); base point: peruspiste; Create Block: Luo lohko; Insert Block: Lisää lohko; Explode Block: Pura lohko; Edit Block: Muokkaa lohkoa; Finish Block: Lopeta lohko; Cancel Block: Peruuta lohko; Sketch Blocks: Luonnoslohkot |
+| Break, Split at Point, Blend Curve (sketch) | Pilko, Jaa pisteessä, Liitoskäyrä | Przerwij, Podziel w punkcie, Krzywa przejściowa | Trim stays Katkaise; break (the drawing view's) stays katkaisu |
+| Extend to Meet (sketch) | Jatka kohtaamaan | Wydłuż do przecięcia | Extend stays Jatka; not Liitä, which is the body Join (mitcad#2178) |
+| Sheet Parts (the tab) | Levyosat | Części arkuszowe | the tab of sheet metal, board and laser-cut sheet (mitcad#2602, the Sheet Metal tab before); sheet metal itself stays ohutlevy, Convert to Sheet Metal stays Muunna ohutlevyksi |

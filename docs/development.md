@@ -1509,7 +1509,7 @@ file's format and what is left: [tools/testrun/README.md](../tools/testrun/READM
 | `MITCAD_REMEMBER_PANEL_VALUES=0` | Command panels start from their definitions' defaults and keep nothing on OK: no remembered Fillet Radius or Chamfer Distance (mitcad#1028, [app/COMMANDS.md](../app/COMMANDS.md#remembered-values)), and no Thread starting from the last thread's settings on a face of its size (mitcad#1298); the UI test libraries set it, so that a value one step gives never changes where a later step's panel starts. |
 | `MITCAD_START_PAGE=0`, `MITCAD_START_PAGE=1` | `0`: MitCad never starts on the Start tab (mitcad#1258, [app/COMMANDS.md](../app/COMMANDS.md#the-start-tab)); the UI test libraries set it, so that every test starts on an empty design. `1`: the Start tab at launch by its *Show start page at launch*, also in a UI test script's run (`MITCAD_TEST_INPUT`), which without the variable starts without it. |
 | `MITCAD_NEW_DESIGN_VIEW=0` | A new design opens as before mitcad#1683, in the exact isometric view with its origin hidden, not looking at Top with the origin shown and centred, and a design opened at the start stays in that view instead of the default view of mitcad#1698 ([app/COMMANDS.md](../app/COMMANDS.md)); the UI test libraries and the Python UI tests set it, as their tests were written for; `tools/ui-new-design-start-test.sh` sets `1`. |
-| `MITCAD_LANGUAGE=en\|fi\|xx` | The interface language, over Preferences › General › Language; `--language` comes first (mitcad#1460, [translations.md](translations.md)). The UI test libraries and the Python UI tests set `en`, so that every test reads English texts whatever the machine's language; `xx` is a test build's pseudo-language. |
+| `MITCAD_LANGUAGE=en\|fi\|pl\|xx` | The interface language, over Preferences › General › Language; `--language` comes first (mitcad#1460, [translations.md](translations.md)). The UI test libraries and the Python UI tests set `en`, so that every test reads English texts whatever the machine's language; `xx` is a test build's pseudo-language. |
 | `MITCAD_LOG_UNTRANSLATED=1` | Every text no catalogue translated is logged once, `Untranslated: <context>: <text>`, and every text found only without its context, `Fallback: <context>: <text>` (in a language other than English; [translations.md](translations.md#the-pseudo-language)). |
 | `MITCAD_TEST_LOG_URLS=1` | Addresses the app would open in the browser (a report's issue form) are logged, not opened; the UI test library sets it. |
 | `MITCAD_LOG_TYPED_TEXT=1` | Text fields are logged as they change: `File dialog <title>: <text>` (Qt's file dialog's file name), `Dialog field <title>: <text>` and `Panel field <input>: <text>` (typed into another dialog's field or a command panel's input; never a password); the UI test libraries set it (`app/framework/TypedTextLog.hpp`). |
@@ -1529,7 +1529,7 @@ file's format and what is left: [tools/testrun/README.md](../tools/testrun/READM
 
 App options for tests: `--demo` (a ready block), `--screenshot <png>`,
 `--no-recovery`, `--no-native-dialogs` (Qt's file dialogs, so paths can
-be typed), `--open <file>`, `--set d3=35`, `--language en|fi|xx`.
+be typed), `--open <file>`, `--set d3=35`, `--language en|fi|pl|xx`.
 
 ### Linux UI tests
 

@@ -20016,7 +20016,8 @@ Assistant adds its folder too. Refer to [mcp.md](mcp.md).
 
 The **Language** setting of the General page selects the language of
 MitCad's menus, toolbar, panels and dialogs: **Automatic**, **English**,
-or a language MitCad has, listed by its own name (**Suomi** for Finnish).
+or a language MitCad has, listed by its own name (**Suomi** for Finnish,
+**Polski** for Polish).
 Automatic uses the system's language when it is the first language of the
 system and MitCad has it, else English. The language takes effect when
 MitCad starts again. A text that the language does not have yet shows in
@@ -20027,8 +20028,8 @@ Command search also finds a command by its English name. For example,
 parameter names, formulas and file formats stay as they are. The messages
 of the model, for example the errors of a feature, are in English.
 
-`--language en` or `--language fi` on the command line replaces the
-setting for one run.
+`--language en`, `--language fi` or `--language pl` on the command line
+replaces the setting for one run.
 
 ### Cache of computed results
 
